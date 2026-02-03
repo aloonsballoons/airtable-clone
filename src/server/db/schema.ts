@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
@@ -8,7 +8,7 @@ import {
 	timestamp,
 } from "drizzle-orm/pg-core";
 
-export const createTable = pgTableCreator((name) => `pg-drizzle_${name}`);
+export const createTable = pgTableCreator((name) => name);
 
 export const posts = createTable(
 	"post",
@@ -29,6 +29,94 @@ export const posts = createTable(
 		index("created_by_idx").on(t.createdById),
 		index("name_idx").on(t.name),
 	],
+);
+
+export const base = createTable(
+	"base",
+	(d) => ({
+		id: d.uuid("id").defaultRandom().primaryKey(),
+		name: d.text("name").notNull(),
+		ownerId: d
+			.text("owner_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		createdAt: d
+			.timestamp("created_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+		updatedAt: d
+			.timestamp("updated_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+	}),
+	(t) => [index("base_owner_idx").on(t.ownerId)],
+);
+
+export const baseTable = createTable(
+	"base_table",
+	(d) => ({
+		id: d.uuid("id").defaultRandom().primaryKey(),
+		baseId: d
+			.uuid("base_id")
+			.notNull()
+			.references(() => base.id, { onDelete: "cascade" }),
+		name: d.text("name").notNull(),
+		createdAt: d
+			.timestamp("created_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+		updatedAt: d
+			.timestamp("updated_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+	}),
+	(t) => [index("base_table_base_idx").on(t.baseId)],
+);
+
+export const tableColumn = createTable(
+	"table_column",
+	(d) => ({
+		id: d.uuid("id").defaultRandom().primaryKey(),
+		tableId: d
+			.uuid("table_id")
+			.notNull()
+			.references(() => baseTable.id, { onDelete: "cascade" }),
+		name: d.text("name").notNull(),
+		createdAt: d
+			.timestamp("created_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+		updatedAt: d
+			.timestamp("updated_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+	}),
+	(t) => [index("table_column_table_idx").on(t.tableId)],
+);
+
+export const tableRow = createTable(
+	"table_row",
+	(d) => ({
+		id: d.uuid("id").defaultRandom().primaryKey(),
+		tableId: d
+			.uuid("table_id")
+			.notNull()
+			.references(() => baseTable.id, { onDelete: "cascade" }),
+		data: d
+			.jsonb("data")
+			.$type<Record<string, string>>()
+			.notNull()
+			.default(sql`'{}'::jsonb`),
+		createdAt: d
+			.timestamp("created_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+		updatedAt: d
+			.timestamp("updated_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+	}),
+	(t) => [index("table_row_table_idx").on(t.tableId)],
 );
 
 export const user = pgTable("user", {
@@ -94,6 +182,7 @@ export const verification = pgTable("verification", {
 export const userRelations = relations(user, ({ many }) => ({
 	account: many(account),
 	session: many(session),
+	base: many(base),
 }));
 
 export const accountRelations = relations(account, ({ one }) => ({
@@ -102,4 +191,23 @@ export const accountRelations = relations(account, ({ one }) => ({
 
 export const sessionRelations = relations(session, ({ one }) => ({
 	user: one(user, { fields: [session.userId], references: [user.id] }),
+}));
+
+export const baseRelations = relations(base, ({ many, one }) => ({
+	owner: one(user, { fields: [base.ownerId], references: [user.id] }),
+	tables: many(baseTable),
+}));
+
+export const baseTableRelations = relations(baseTable, ({ many, one }) => ({
+	base: one(base, { fields: [baseTable.baseId], references: [base.id] }),
+	columns: many(tableColumn),
+	rows: many(tableRow),
+}));
+
+export const tableColumnRelations = relations(tableColumn, ({ one }) => ({
+	table: one(baseTable, { fields: [tableColumn.tableId], references: [baseTable.id] }),
+}));
+
+export const tableRowRelations = relations(tableRow, ({ one }) => ({
+	table: one(baseTable, { fields: [tableRow.tableId], references: [baseTable.id] }),
 }));
