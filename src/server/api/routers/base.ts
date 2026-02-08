@@ -560,9 +560,10 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
-			const sortDirection =
-				tableRecord.sortDirection === "desc" ? "desc" : "asc";
-			const sort =
+			const sortDirection = (tableRecord.sortDirection === "desc"
+				? "desc"
+				: "asc") as "asc" | "desc";
+			const sort: { columnId: string; direction: "asc" | "desc" } | null =
 				tableRecord.sortColumnId
 					? { columnId: tableRecord.sortColumnId, direction: sortDirection }
 					: null;
@@ -616,7 +617,9 @@ export const baseRouter = createTRPCRouter({
 			}
 
 			const providedSort = input.sort ?? null;
-			let effectiveSort =
+			let effectiveSort:
+				| { columnId: string; direction: "asc" | "desc" }
+				| null =
 				providedSort ??
 				(tableRecord.sortColumnId
 					? {
