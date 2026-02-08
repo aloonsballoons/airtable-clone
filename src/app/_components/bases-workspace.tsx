@@ -586,6 +586,14 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
                         handleOpenBase(baseItem.id);
                       }}
                       onKeyDown={(event) => {
+                        const target = event.target as HTMLElement;
+                        if (
+                          target instanceof HTMLInputElement ||
+                          target instanceof HTMLTextAreaElement ||
+                          target.isContentEditable
+                        ) {
+                          return;
+                        }
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
                           if (!isRenaming) {

@@ -15,7 +15,13 @@ body {
   --airtable-border-color: #dadada;
   --airtable-button-shadow: 0 0 6.5px rgba(0, 0, 0, 0.0578);
   --airtable-selection-shadow: 0 1px 6.5px rgba(199, 200, 201, 0.5);
-  --airtable-hover-bg: #f8f8f8;
+  --airtable-hover-bg: #f2f2f2;
+  --airtable-secondary-color: #616670;
+  --airtable-secondary-font-size: 13px;
+  --airtable-secondary-font-weight: 500;
+  --airtable-sort-active-bg: #ffdfcb;
+  --airtable-sort-column-bg: #fff3e9;
+  --airtable-sort-header-bg: #fffbf9;
 }
 
 .airtable-border {
@@ -47,6 +53,280 @@ body {
 
 .airtable-hover-bg {
   background: var(--airtable-hover-bg);
+}
+
+.airtable-secondary-font {
+  font-size: var(--airtable-secondary-font-size);
+  font-weight: var(--airtable-secondary-font-weight);
+  color: var(--airtable-secondary-color);
+  font-family: inherit;
+}
+
+.airtable-secondary-font-regular {
+  font-size: var(--airtable-secondary-font-size);
+  font-weight: 400;
+  color: var(--airtable-secondary-color);
+  font-family: inherit;
+}
+
+.airtable-table-feature-selection {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 62px;
+  height: 26px;
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.airtable-table-feature-selection::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: var(--airtable-hover-bg);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.airtable-table-feature-selection:not(.airtable-table-feature-selection--active):hover::before {
+  opacity: 1;
+}
+
+.airtable-table-feature-selection > * {
+  position: relative;
+  z-index: 1;
+}
+
+.airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active)
+  img {
+  mix-blend-mode: multiply;
+}
+
+.airtable-sort-arrow-overlay {
+  position: absolute;
+  inset: 0;
+  background-color: #1d1f24;
+  mask-image: url("../assets/sort-arrow-mask.png");
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("../assets/sort-arrow-mask.png");
+  -webkit-mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  pointer-events: none;
+}
+
+.airtable-sort-white-overlay {
+  position: absolute;
+  inset: 0;
+  mask-image: url("../assets/sort-white-mask.png");
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("../assets/sort-white-mask.png");
+  -webkit-mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.airtable-sort-white-overlay--hover {
+  background-color: var(--airtable-hover-bg);
+}
+
+.airtable-sort-white-overlay--active {
+  background-color: var(--airtable-sort-active-bg);
+}
+
+.airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active)
+  .airtable-sort-white-overlay--hover {
+  opacity: 1;
+}
+
+.airtable-table-feature-selection--active .airtable-sort-white-overlay--active {
+  opacity: 1;
+}
+
+.airtable-table-feature-selection--active {
+  background: var(--airtable-sort-active-bg);
+}
+
+.airtable-table-feature-selection--active::before {
+  opacity: 0;
+}
+
+.airtable-sort-dropdown {
+  border-radius: 3px;
+  border: 1px solid #dadada;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
+
+.airtable-sort-option {
+  position: absolute;
+  left: 12px;
+  width: 296px;
+  height: 26px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 9px;
+  cursor: pointer;
+  color: #1d1f24;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.airtable-sort-option:hover {
+  background: var(--airtable-hover-bg);
+}
+
+.airtable-sort-option:hover .airtable-sort-option-icon {
+  mix-blend-mode: multiply;
+}
+
+.airtable-sort-option-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  object-fit: contain;
+  display: inline-block;
+}
+
+.airtable-column-icon--sorted {
+  mix-blend-mode: multiply;
+}
+
+.airtable-sort-field,
+.airtable-sort-direction {
+  height: 28px;
+  border-radius: 3px;
+  border: 1px solid #e4e4e4;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 8px;
+  cursor: pointer;
+  color: #1d1f24;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.airtable-sort-field:hover,
+.airtable-sort-direction:hover {
+  background: var(--airtable-hover-bg);
+}
+
+.airtable-sort-field-menu {
+  position: absolute;
+  border-radius: 5px;
+  border: 2px solid #e5e5e5;
+  background: #ffffff;
+}
+
+.airtable-sort-field-menu-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 35px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 400;
+  color: #1d1f24;
+}
+
+.airtable-sort-field-menu-item:hover {
+  background: var(--airtable-hover-bg);
+}
+
+.airtable-sort-field-menu-item:hover .airtable-sort-field-menu-icon {
+  mix-blend-mode: multiply;
+}
+
+.airtable-sort-field-menu-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  object-fit: contain;
+  display: inline-block;
+}
+
+.airtable-sort-direction-menu {
+  border-radius: 3px;
+  border: 1px solid #dadada;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
+
+.airtable-sort-direction-option {
+  position: absolute;
+  left: 6px;
+  font-size: 13px;
+  color: #1d1f24;
+  cursor: pointer;
+}
+
+.airtable-sort-add {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #55565d;
+  cursor: pointer;
+}
+
+.airtable-sort-add .airtable-plus-icon {
+  color: #808084;
+}
+
+.airtable-sort-add:hover {
+  color: #1d1f24;
+}
+
+.airtable-sort-add:hover .airtable-plus-icon {
+  color: #616670;
+}
+
+.airtable-sort-footer {
+  background: #f3f4f8;
+}
+
+.airtable-help-icon,
+.airtable-search-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-block;
+  background-color: currentColor;
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+.airtable-help-icon {
+  mask-image: url("../assets/help.svg");
+  -webkit-mask-image: url("../assets/help.svg");
+}
+
+.airtable-search-icon {
+  mask-image: url("../assets/search.svg");
+  -webkit-mask-image: url("../assets/search.svg");
 }
 
 .airtable-open-data-frame {

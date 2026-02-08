@@ -216,7 +216,13 @@ export const baseRouter = createTRPCRouter({
 		}),
 
 	addColumn: protectedProcedure
-		.input(z.object({ tableId: z.string().uuid(), name: columnNameSchema.optional() }))
+		.input(
+			z.object({
+				tableId: z.string().uuid(),
+				name: columnNameSchema.optional(),
+				id: z.string().uuid().optional(),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
 			const tableRecord = await ctx.db.query.baseTable.findFirst({
 				where: eq(baseTable.id, input.tableId),
@@ -248,7 +254,7 @@ export const baseRouter = createTRPCRouter({
 			const [newColumn] = await ctx.db
 				.insert(tableColumn)
 				.values({
-					id: createId(),
+					id: input.id ?? createId(),
 					tableId: input.tableId,
 					name: columnName,
 				})
@@ -266,9 +272,23 @@ export const baseRouter = createTRPCRouter({
 			z.object({
 				tableId: z.string().uuid(),
 				count: z.number().int().min(1).max(MAX_BULK_ROWS),
+				ids: z.array(z.string().uuid()).optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			if (input.ids && input.ids.length !== input.count) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Row id list must match the requested count.",
+				});
+			}
+			if (input.ids && new Set(input.ids).size !== input.ids.length) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Row id list must be unique.",
+				});
+			}
+
 			const tableRecord = await ctx.db.query.baseTable.findFirst({
 				where: eq(baseTable.id, input.tableId),
 				with: {
@@ -295,11 +315,12 @@ export const baseRouter = createTRPCRouter({
 
 			const batchSize = 1000;
 			const batches = Math.ceil(input.count / batchSize);
+			let nextIndex = 0;
 			for (let batchIndex = 0; batchIndex < batches; batchIndex += 1) {
 				const remaining = input.count - batchIndex * batchSize;
 				const size = Math.min(batchSize, remaining);
 				const rows = Array.from({ length: size }, () => ({
-					id: createId(),
+					id: input.ids?.[nextIndex++] ?? createId(),
 					tableId: input.tableId,
 					data: {},
 				}));
@@ -383,7 +404,67 @@ export const baseRouter = createTRPCRouter({
 			await ctx.db
 				.delete(tableColumn)
 				.where(eq(tableColumn.id, input.columnId));
+
+			if (columnRecord.table.sortColumnId === input.columnId) {
+				await ctx.db
+					.update(baseTable)
+					.set({ sortColumnId: null, sortDirection: null })
+					.where(eq(baseTable.id, columnRecord.tableId));
+			}
 			return { success: true };
+		}),
+
+	setTableSort: protectedProcedure
+		.input(
+			z.object({
+				tableId: z.string().uuid(),
+				columnId: z.string().uuid().nullable(),
+				direction: z.enum(["asc", "desc"]).optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			if (input.columnId) {
+				if (!input.direction) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Sort direction is required when a column is selected.",
+					});
+				}
+				const columnRecord = await ctx.db.query.tableColumn.findFirst({
+					where: eq(tableColumn.id, input.columnId),
+				});
+				if (!columnRecord || columnRecord.tableId !== input.tableId) {
+					throw new TRPCError({ code: "NOT_FOUND" });
+				}
+
+				await ctx.db
+					.update(baseTable)
+					.set({
+						sortColumnId: input.columnId,
+						sortDirection: input.direction,
+					})
+					.where(eq(baseTable.id, input.tableId));
+
+				return { sort: { columnId: input.columnId, direction: input.direction } };
+			}
+
+			await ctx.db
+				.update(baseTable)
+				.set({ sortColumnId: null, sortDirection: null })
+				.where(eq(baseTable.id, input.tableId));
+
+			return { sort: null };
 		}),
 
 	deleteRow: protectedProcedure
@@ -479,6 +560,13 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
+			const sortDirection =
+				tableRecord.sortDirection === "desc" ? "desc" : "asc";
+			const sort =
+				tableRecord.sortColumnId
+					? { columnId: tableRecord.sortColumnId, direction: sortDirection }
+					: null;
+
 			const [columns, rowCount] = await Promise.all([
 				ctx.db.query.tableColumn.findMany({
 					where: eq(tableColumn.tableId, input.tableId),
@@ -497,6 +585,7 @@ export const baseRouter = createTRPCRouter({
 					name: column.name,
 				})),
 				rowCount: Number(rowCount[0]?.count ?? 0),
+				sort,
 			};
 		}),
 
@@ -506,6 +595,12 @@ export const baseRouter = createTRPCRouter({
 				tableId: z.string().uuid(),
 				limit: z.number().int().min(1).max(500).default(50),
 				cursor: z.number().int().min(0).optional(),
+				sort: z
+					.object({
+						columnId: z.string().uuid(),
+						direction: z.enum(["asc", "desc"]),
+					})
+					.optional(),
 			}),
 		)
 		.query(async ({ ctx, input }) => {
@@ -520,10 +615,45 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
+			const providedSort = input.sort ?? null;
+			let effectiveSort =
+				providedSort ??
+				(tableRecord.sortColumnId
+					? {
+							columnId: tableRecord.sortColumnId,
+							direction:
+								tableRecord.sortDirection === "desc" ? "desc" : "asc",
+						}
+					: null);
+
+			if (effectiveSort) {
+				const columnRecord = await ctx.db.query.tableColumn.findFirst({
+					where: eq(tableColumn.id, effectiveSort.columnId),
+				});
+				if (!columnRecord || columnRecord.tableId !== input.tableId) {
+					if (providedSort) {
+						throw new TRPCError({ code: "NOT_FOUND" });
+					}
+					effectiveSort = null;
+				}
+			}
+
 			const offset = input.cursor ?? 0;
+			const sortValue =
+				effectiveSort &&
+				sql<string>`coalesce(${tableRow.data} ->> ${effectiveSort.columnId}, '')`;
 			const rows = await ctx.db.query.tableRow.findMany({
 				where: eq(tableRow.tableId, input.tableId),
-				orderBy: (row, { asc }) => [asc(row.createdAt), asc(row.id)],
+				orderBy: (row, { asc, desc }) =>
+					sortValue
+						? [
+								effectiveSort?.direction === "desc"
+									? desc(sortValue)
+									: asc(sortValue),
+								asc(row.createdAt),
+								asc(row.id),
+							]
+						: [asc(row.createdAt), asc(row.id)],
 				limit: input.limit,
 				offset,
 			});

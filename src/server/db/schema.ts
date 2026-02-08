@@ -61,6 +61,8 @@ export const baseTable = createTable(
 			.notNull()
 			.references(() => base.id, { onDelete: "cascade" }),
 		name: d.text("name").notNull(),
+		sortColumnId: d.uuid("sort_column_id"),
+		sortDirection: d.text("sort_direction"),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())
