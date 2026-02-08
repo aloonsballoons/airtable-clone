@@ -1171,8 +1171,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       className="airtable-sort-field-menu-item"
                                       style={{ top: itemTop }}
                                       onClick={() => {
-                                        const next = sortConfig
-                                          ? { ...sortConfig, columnId: column.id }
+                                        const next: SortConfig = sortConfig
+                                          ? {
+                                              columnId: column.id,
+                                              direction: sortConfig.direction,
+                                            }
                                           : { columnId: column.id, direction: "asc" };
                                         applySort(next);
                                         setIsSortFieldOpen(false);
