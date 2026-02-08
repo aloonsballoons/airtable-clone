@@ -66,6 +66,7 @@ const imgEllipse3 =
   "https://www.figma.com/api/mcp/asset/42309589-dc81-48ef-80de-6483844e93cc";
 
 type TableRow = Record<string, string> & { id: string };
+type SortConfig = { columnId: string; direction: "asc" | "desc" };
 
 type TableWorkspaceProps = {
   baseId: string;
@@ -134,8 +135,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     { enabled: Boolean(activeTableId) }
   );
   const rawSortConfig = tableMetaQuery.data?.sort ?? null;
-  const sortConfig = rawSortConfig
-    ? { ...rawSortConfig, direction: normalizeSortDirection(rawSortConfig.direction) }
+  const sortConfig: SortConfig | null = rawSortConfig
+    ? {
+        columnId: rawSortConfig.columnId,
+        direction: normalizeSortDirection(rawSortConfig.direction),
+      }
     : null;
   const sortParam =
     sortConfig &&
@@ -492,7 +496,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       (contextMenu.type === "row" && canDeleteRow));
 
   const applySort = useCallback(
-    (next: { columnId: string; direction: "asc" | "desc" } | null) => {
+    (next: SortConfig | null) => {
       if (!activeTableId) return;
       setTableSort.mutate({
         tableId: activeTableId,
