@@ -421,8 +421,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (!isSortMenuOpen) return;
-    const handleClick = (event: MouseEvent) => {
-      const target = event.target as Node;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
       if (sortMenuRef.current?.contains(target)) return;
       if (sortButtonRef.current?.contains(target)) return;
       setIsSortMenuOpen(false);
