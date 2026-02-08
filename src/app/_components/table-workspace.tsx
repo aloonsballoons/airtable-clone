@@ -95,6 +95,9 @@ const formatUserInitial = (name: string) => {
   return /[a-zA-Z]/.test(first) ? first.toUpperCase() : first;
 };
 
+const normalizeSortDirection = (direction?: string | null): "asc" | "desc" =>
+  direction === "desc" ? "desc" : "asc";
+
 export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const router = useRouter();
   const utils = api.useUtils();
@@ -130,7 +133,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     { tableId: activeTableId ?? "" },
     { enabled: Boolean(activeTableId) }
   );
-  const sortConfig = tableMetaQuery.data?.sort ?? null;
+  const rawSortConfig = tableMetaQuery.data?.sort ?? null;
+  const sortConfig = rawSortConfig
+    ? { ...rawSortConfig, direction: normalizeSortDirection(rawSortConfig.direction) }
+    : null;
   const sortParam =
     sortConfig &&
     tableMetaQuery.data?.columns?.some(
