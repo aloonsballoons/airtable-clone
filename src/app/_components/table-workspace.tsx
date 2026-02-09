@@ -1980,7 +1980,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               )
                             }
                           >
-                            {getColumnIconSrc(nameColumn.name, nameColumn.fieldType) && (
+                            {nameColumn.type === "data" &&
+                              getColumnIconSrc(nameColumn.name, nameColumn.fieldType) && (
                               <img
                                 alt=""
                                 className={clsx(
@@ -2139,7 +2140,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 )
                               }
                             >
-                              {getColumnIconSrc(column.name, column.fieldType) && (
+                              {column.type === "data" &&
+                                getColumnIconSrc(column.name, column.fieldType) && (
                                 <img
                                   alt=""
                                   className={clsx(
@@ -2223,7 +2225,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               )
                             }
                           >
-                            {nameColumn && (
+                            {nameColumn && nameColumn.type === "data" && (
                               (() => {
                                 const nameOriginalValue = row[nameColumn.id] ?? "";
                                 const nameEditedValue =
@@ -2447,7 +2449,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 const originalValue = row[column.id] ?? "";
                                 const editedValue =
                                   cellEdits[row.id]?.[column.id] ?? originalValue;
-                                const isLongText = column.fieldType === "long_text";
+                                const isLongText =
+                                  column.type === "data" && column.fieldType === "long_text";
                                 const isExpanded =
                                   isLongText &&
                                   longTextEditingCell?.rowId === row.id &&
