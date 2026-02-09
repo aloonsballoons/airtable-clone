@@ -40,9 +40,7 @@ const normalizeNumberValue = (value: string) => {
 	let decimals = match[3] ?? "";
 	if (!integer && !decimals) return "";
 	if (!integer) integer = "0";
-	if (decimals.length > MAX_NUMBER_DECIMALS) {
-		decimals = decimals.slice(0, MAX_NUMBER_DECIMALS);
-	}
+	if (decimals.length > MAX_NUMBER_DECIMALS) return null;
 	return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
 };
 

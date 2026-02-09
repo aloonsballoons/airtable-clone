@@ -55,6 +55,7 @@ const ADD_COLUMN_WIDTH = 93;
 const LONG_TEXT_HEIGHT = 142;
 const ADD_COLUMN_MENU_WIDTH = 400;
 const ADD_COLUMN_OPTION_WIDTH = 380;
+const MAX_NUMBER_DECIMALS = 8;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
@@ -171,6 +172,29 @@ const formatUserInitial = (name: string) => {
 
 const normalizeSortDirection = (direction?: string | null): "asc" | "desc" =>
   direction === "desc" ? "desc" : "asc";
+
+const isValidNumberDraft = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const match = trimmed.match(/^-?\d*(?:\.(\d*))?$/);
+  if (!match) return false;
+  const decimals = match[1] ?? "";
+  return decimals.length <= MAX_NUMBER_DECIMALS;
+};
+
+const normalizeNumberInput = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/^(-?)(\d*)(?:\.(\d*))?$/);
+  if (!match) return null;
+  const sign = match[1] ?? "";
+  let integer = match[2] ?? "";
+  let decimals = match[3] ?? "";
+  if (!integer && !decimals) return "";
+  if (!integer) integer = "0";
+  if (decimals.length > MAX_NUMBER_DECIMALS) return null;
+  return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
+};
 
 export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const router = useRouter();
@@ -1112,6 +1136,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   };
 
   const handleCellChange = (rowId: string, columnId: string, value: string) => {
+    const columnType = coerceColumnType(columnById.get(columnId)?.type);
+    if (columnType === "number" && !isValidNumberDraft(value)) {
+      return;
+    }
     setCellEdits((prev) => ({
       ...prev,
       [rowId]: {
@@ -1127,6 +1155,48 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     value: string,
     originalValue: string
   ) => {
+    const columnType = coerceColumnType(columnById.get(columnId)?.type);
+    if (columnType === "number") {
+      const normalized = normalizeNumberInput(value);
+      if (normalized === null) {
+        setCellEdits((prev) => {
+          const rowEdits = prev[rowId];
+          if (!rowEdits || !(columnId in rowEdits)) return prev;
+          const { [columnId]: _removed, ...rest } = rowEdits;
+          if (Object.keys(rest).length === 0) {
+            const { [rowId]: _rowRemoved, ...next } = prev;
+            return next;
+          }
+          return { ...prev, [rowId]: rest };
+        });
+        return;
+      }
+      if (normalized !== value) {
+        setCellEdits((prev) => ({
+          ...prev,
+          [rowId]: {
+            ...prev[rowId],
+            [columnId]: normalized,
+          },
+        }));
+      }
+      if (normalized === originalValue) {
+        setCellEdits((prev) => {
+          const rowEdits = prev[rowId];
+          if (!rowEdits || !(columnId in rowEdits)) return prev;
+          const { [columnId]: _removed, ...rest } = rowEdits;
+          if (Object.keys(rest).length === 0) {
+            const { [rowId]: _rowRemoved, ...next } = prev;
+            return next;
+          }
+          return { ...prev, [rowId]: rest };
+        });
+        return;
+      }
+      updateCell.mutate({ rowId, columnId, value: normalized });
+      return;
+    }
+
     if (value === originalValue) {
       setCellEdits((prev) => {
         const rowEdits = prev[rowId];
@@ -2236,6 +2306,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   selectedCell?.columnId === nameColumn.id;
                                 const nameIsLongText =
                                   nameColumn.fieldType === "long_text";
+                                const nameIsNumber =
+                                  nameColumn.fieldType === "number";
                                 const nameExpanded =
                                   nameIsLongText &&
                                   longTextEditingCell?.rowId === row.id &&
@@ -2396,6 +2468,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           }
                                         }}
                                         className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
+                                        inputMode={nameIsNumber ? "decimal" : undefined}
+                                        pattern={
+                                          nameIsNumber
+                                            ? "^-?\\d*(?:\\.\\d{0,8})?$"
+                                            : undefined
+                                        }
                                         aria-label={`${nameColumn.name} cell`}
                                       />
                                     )}
@@ -2449,12 +2527,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 const originalValue = row[column.id] ?? "";
                                 const editedValue =
                                   cellEdits[row.id]?.[column.id] ?? originalValue;
-                                const isLongText =
-                                  column.type === "data" && column.fieldType === "long_text";
-                                const isExpanded =
-                                  isLongText &&
-                                  longTextEditingCell?.rowId === row.id &&
-                                  longTextEditingCell?.columnId === column.id;
+                              const isLongText =
+                                column.type === "data" && column.fieldType === "long_text";
+                              const isNumber =
+                                column.type === "data" && column.fieldType === "number";
+                              const isExpanded =
+                                isLongText &&
+                                longTextEditingCell?.rowId === row.id &&
+                                longTextEditingCell?.columnId === column.id;
 
                                 return (
                                 <div
@@ -2598,6 +2678,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           }
                                         }}
                                         className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
+                                        inputMode={isNumber ? "decimal" : undefined}
+                                        pattern={
+                                          isNumber
+                                            ? "^-?\\d*(?:\\.\\d{0,8})?$"
+                                            : undefined
+                                        }
                                         aria-label={`${column.name} cell`}
                                       />
                                     )}
