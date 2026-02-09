@@ -56,6 +56,9 @@ const LONG_TEXT_HEIGHT = 142;
 const ADD_COLUMN_MENU_WIDTH = 400;
 const ADD_COLUMN_OPTION_WIDTH = 380;
 const MAX_NUMBER_DECIMALS = 8;
+const STATUS_ICON_SCALE = 1.1;
+const STATUS_MENU_ICON_SIZE = 15 * STATUS_ICON_SCALE;
+const STATUS_HEADER_ICON_SIZE = 13 * STATUS_ICON_SCALE;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
@@ -89,7 +92,12 @@ const sortAddMenuIconSpecByName: Record<
   { src: string; width: number; height: number; left: number }
 > = {
   Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
-  Status: { src: statusIcon.src, width: 15, height: 15, left: 10 },
+  Status: {
+    src: statusIcon.src,
+    width: STATUS_MENU_ICON_SIZE,
+    height: STATUS_MENU_ICON_SIZE,
+    left: 10,
+  },
   Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
   Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
   Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
@@ -173,6 +181,25 @@ const formatUserInitial = (name: string) => {
 const normalizeSortDirection = (direction?: string | null): "asc" | "desc" =>
   direction === "desc" ? "desc" : "asc";
 
+const normalizeSortList = (
+  sort?: Array<{ columnId: string; direction?: string | null }> | null
+): SortConfig[] | null => {
+  if (!sort || sort.length === 0) return null;
+  return sort.map((item) => ({
+    columnId: item.columnId,
+    direction: normalizeSortDirection(item.direction),
+  }));
+};
+
+const areSortsEqual = (left: SortConfig[], right: SortConfig[]) => {
+  if (left.length !== right.length) return false;
+  return left.every(
+    (item, index) =>
+      item.columnId === right[index]?.columnId &&
+      item.direction === right[index]?.direction
+  );
+};
+
 const isValidNumberDraft = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) return true;
@@ -228,6 +255,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [sortOrderOverride, setSortOrderOverride] = useState<SortConfig[] | null>(
     null
   );
+  const [sortOverride, setSortOverride] = useState<SortConfig[] | null>(null);
   const [draggingSortId, setDraggingSortId] = useState<string | null>(null);
   const [draggingSortTop, setDraggingSortTop] = useState<number | null>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
@@ -261,14 +289,20 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeColumnIdSet = new Set(
     tableMetaQuery.data?.columns?.map((column) => column.id) ?? []
   );
-  const sortParam = sortConfigList.filter((sort) =>
+  const sortParamSource = sortOverride ?? sortConfigList;
+  const sortParam = sortParamSource.filter((sort) =>
     activeColumnIdSet.has(sort.columnId)
   );
   const hasSort = sortParam.length > 0;
-  const getRowsQueryKey = (tableId: string) =>
-    hasSort
-      ? { tableId, limit: PAGE_ROWS, sort: sortParam }
+  const getRowsQueryKeyForSort = (
+    tableId: string,
+    sort: SortConfig[] | null
+  ) =>
+    sort && sort.length > 0
+      ? { tableId, limit: PAGE_ROWS, sort }
       : { tableId, limit: PAGE_ROWS };
+  const getRowsQueryKey = (tableId: string) =>
+    getRowsQueryKeyForSort(tableId, hasSort ? sortParam : null);
   const rowsQuery = api.base.getRows.useInfiniteQuery(
     getRowsQueryKey(activeTableId ?? ""),
     {
@@ -415,6 +449,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     onMutate: async ({ tableId, sort }) => {
       await utils.base.getTableMeta.cancel({ tableId });
       const previous = utils.base.getTableMeta.getData({ tableId });
+      const previousSort = normalizeSortList(previous?.sort ?? null);
       const nextSort = sort ?? [];
       utils.base.getTableMeta.setData({ tableId }, (current) => {
         if (!current) return current;
@@ -423,7 +458,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
           sort: nextSort.length ? nextSort : null,
         };
       });
-      return { previous, tableId };
+      const nextKey = getRowsQueryKeyForSort(
+        tableId,
+        normalizeSortList(nextSort)
+      );
+      const prevKey = getRowsQueryKeyForSort(tableId, previousSort);
+      const keysMatch = JSON.stringify(nextKey) === JSON.stringify(prevKey);
+      await utils.base.getRows.invalidate(nextKey);
+      if (!keysMatch) {
+        await utils.base.getRows.invalidate(prevKey);
+      }
+      return { previous, previousSort, tableId };
     },
     onError: (_error, _variables, context) => {
       if (context?.previous) {
@@ -432,9 +477,19 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
           context.previous
         );
       }
+      setSortOverride(context?.previousSort ?? null);
     },
-    onSettled: async (_data, _error, variables) => {
+    onSettled: async (_data, _error, variables, context) => {
       await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+      const nextSort = normalizeSortList(variables.sort ?? null);
+      const previousSort = normalizeSortList(context?.previousSort ?? null);
+      const nextKey = getRowsQueryKeyForSort(variables.tableId, nextSort);
+      const prevKey = getRowsQueryKeyForSort(variables.tableId, previousSort);
+      const keysMatch = JSON.stringify(nextKey) === JSON.stringify(prevKey);
+      await utils.base.getRows.invalidate(nextKey);
+      if (!keysMatch) {
+        await utils.base.getRows.invalidate(prevKey);
+      }
     },
   });
 
@@ -510,6 +565,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setHoveredHeaderId(null);
     setSelectedCell(null);
     setLongTextEditingCell(null);
+    setSortOverride(null);
   }, [baseId]);
 
   useEffect(() => {
@@ -632,13 +688,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeTable = tableMetaQuery.data?.table ?? null;
   const activeColumns = tableMetaQuery.data?.columns ?? [];
   const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
-  const sortRows = sortOrderOverride ?? sortConfigList;
+  const sortRows = sortOrderOverride ?? sortOverride ?? sortConfigList;
   const sortedColumnIds = useMemo(
     () => new Set(sortRows.map((sort) => sort.columnId)),
     [sortRows]
-  );
-  const remainingSortColumns = activeColumns.filter(
-    (column) => !sortedColumnIds.has(column.id)
   );
   const sortListHeight = 97 + activeColumns.length * 32;
   const sortFieldTop = 52;
@@ -680,6 +733,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const sortAddMenuRowHeight = 26;
   const sortAddMenuRowStride = 32;
   const sortAddMenuBottomPadding = 10;
+  const orderedColumns = useMemo(() => {
+    const nameCol = activeColumns.find((column) => column.name === "Name");
+    if (!nameCol) return activeColumns;
+    return [
+      nameCol,
+      ...activeColumns.filter((column) => column.id !== nameCol.id),
+    ];
+  }, [activeColumns]);
+  const remainingSortColumns = orderedColumns.filter(
+    (column) => !sortedColumnIds.has(column.id)
+  );
   const sortAddMenuContentHeight =
     sortAddMenuFirstRowTop +
     (remainingSortColumns.length > 0
@@ -708,9 +772,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const applySorts = useCallback(
     (next: SortConfig[] | null) => {
       if (!activeTableId) return;
+      const normalizedNext = next && next.length > 0 ? next : null;
+      setSortOverride(next ?? []);
       setTableSort.mutate({
         tableId: activeTableId,
-        sort: next && next.length > 0 ? next : null,
+        sort: normalizedNext,
       });
     },
     [activeTableId, setTableSort]
@@ -743,6 +809,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     sortRowsRef.current = sortRows;
   }, [sortRows]);
+
+  useEffect(() => {
+    if (!sortOverride) return;
+    if (areSortsEqual(sortOverride, sortConfigList)) {
+      setSortOverride(null);
+    }
+  }, [sortConfigList, sortOverride]);
 
   useEffect(() => {
     if (!selectedCell) {
@@ -1054,15 +1127,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       startX: event.clientX,
       startWidth: columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTH,
     });
-  };
-
-  const areSortsEqual = (left: SortConfig[], right: SortConfig[]) => {
-    if (left.length !== right.length) return false;
-    return left.every(
-      (item, index) =>
-        item.columnId === right[index]?.columnId &&
-        item.direction === right[index]?.direction
-    );
   };
 
   const handleSortDragStart = (event: ReactMouseEvent, columnId: string) => {
@@ -1554,7 +1618,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               const isDragging = draggingSortId === sortItem.columnId;
                               const displayTop =
                                 isDragging && draggingSortTop !== null ? draggingSortTop : rowTop;
-                              const fieldMenuColumns = activeColumns.filter(
+                              const fieldMenuColumns = orderedColumns.filter(
                                 (column) =>
                                   column.id === sortItem.columnId ||
                                   !sortedColumnIds.has(column.id)
@@ -1633,6 +1697,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           column.name,
                                           column.type
                                         );
+                                        const isStatusColumn = column.name === "Status";
                                         return (
                                           <button
                                             key={column.id}
@@ -1667,6 +1732,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                               <img
                                                 alt=""
                                                 className="airtable-sort-field-menu-icon"
+                                                style={
+                                                  isStatusColumn
+                                                    ? {
+                                                        width: STATUS_MENU_ICON_SIZE,
+                                                        height: STATUS_MENU_ICON_SIZE,
+                                                      }
+                                                    : undefined
+                                                }
                                                 src={iconSrc}
                                               />
                                             ) : (
@@ -1913,12 +1986,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             <div className="absolute left-[48px] top-[57px] text-[13px] font-normal text-[#989AA1]">
                               Find a field
                             </div>
-                            {activeColumns.map((column, index) => {
+                            {orderedColumns.map((column, index) => {
                               const top = 57 + 32 * (index + 1);
                               const iconSrc = getColumnIconSrc(
                                 column.name,
                                 column.type
                               );
+                              const isStatusColumn = column.name === "Status";
                               return (
                                 <button
                                   key={column.id}
@@ -1938,6 +2012,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     <img
                                       alt=""
                                       className="airtable-sort-option-icon"
+                                      style={
+                                        isStatusColumn
+                                          ? {
+                                              width: STATUS_MENU_ICON_SIZE,
+                                              height: STATUS_MENU_ICON_SIZE,
+                                            }
+                                          : undefined
+                                      }
                                       src={iconSrc}
                                     />
                                   ) : (
@@ -2061,6 +2143,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   hoveredHeaderId === nameColumn.id &&
                                     "airtable-column-icon--hover"
                                 )}
+                                style={
+                                  nameColumn.name === "Status"
+                                    ? {
+                                        width: STATUS_HEADER_ICON_SIZE,
+                                        height: STATUS_HEADER_ICON_SIZE,
+                                      }
+                                    : undefined
+                                }
                                 src={getColumnIconSrc(
                                   nameColumn.name,
                                   nameColumn.fieldType
@@ -2220,6 +2310,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     hoveredHeaderId === column.id &&
                                       "airtable-column-icon--hover"
                                   )}
+                                  style={
+                                    column.name === "Status"
+                                      ? {
+                                          width: STATUS_HEADER_ICON_SIZE,
+                                          height: STATUS_HEADER_ICON_SIZE,
+                                        }
+                                      : undefined
+                                  }
                                   src={getColumnIconSrc(
                                     column.name,
                                     column.fieldType
