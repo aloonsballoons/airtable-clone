@@ -1651,7 +1651,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         onClick={() => {
                                           const nextSorts = sortRows.map((item) =>
                                             item.columnId === sortItem.columnId
-                                              ? { ...item, direction: "asc" }
+                                              ? { ...item, direction: "asc" as const }
                                               : item
                                           );
                                           applySorts(nextSorts);
@@ -1667,7 +1667,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         onClick={() => {
                                           const nextSorts = sortRows.map((item) =>
                                             item.columnId === sortItem.columnId
-                                              ? { ...item, direction: "desc" }
+                                              ? { ...item, direction: "desc" as const }
                                               : item
                                           );
                                           applySorts(nextSorts);
@@ -1779,7 +1779,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             onClick={() => {
                                               const nextSorts = [
                                                 ...sortRows,
-                                                { columnId: column.id, direction: "asc" },
+                                                { columnId: column.id, direction: "asc" as const },
                                               ];
                                               applySorts(nextSorts);
                                               setIsAddSortMenuOpen(false);
@@ -1857,7 +1857,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   style={{ top }}
                                   onClick={() => {
                                     applySorts([
-                                      { columnId: column.id, direction: "asc" },
+                                      { columnId: column.id, direction: "asc" as const },
                                     ]);
                                     setOpenSortDirectionId(null);
                                     setOpenSortFieldId(null);
