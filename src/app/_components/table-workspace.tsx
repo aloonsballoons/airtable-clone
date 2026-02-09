@@ -1613,7 +1613,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       ref={sortFieldMenuRef}
                                       style={{
                                         left: sortFieldLeft,
-                                        top: sortFieldHeight + 2,
+                                        top: sortFieldHeight + 1,
                                         width: sortFieldMenuWidth,
                                         height: fieldMenuHeight,
                                       }}
@@ -1709,7 +1709,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       className="airtable-sort-direction-menu absolute z-10"
                                       style={{
                                         left: sortDirectionLeft,
-                                        top: rowTop + sortFieldHeight + 4,
+                                        top: sortFieldHeight + 1,
                                         width: sortDirectionWidth,
                                         height: 73,
                                       }}
