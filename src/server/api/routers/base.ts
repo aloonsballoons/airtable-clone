@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
@@ -13,8 +13,38 @@ const MAX_BULK_ROWS = 100_000;
 const baseNameSchema = z.string().min(1).max(120);
 const tableNameSchema = z.string().min(1).max(120);
 const columnNameSchema = z.string().min(1).max(120);
+const columnTypeSchema = z.enum(["single_line_text", "long_text", "number"]);
+const sortItemSchema = z.object({
+	columnId: z.string().uuid(),
+	direction: z.enum(["asc", "desc"]),
+});
+const MAX_CELL_CHARS = 100_000;
+const MAX_NUMBER_DECIMALS = 8;
 
 const createId = () => crypto.randomUUID();
+
+const clampTextValue = (value: string) => value.slice(0, MAX_CELL_CHARS);
+
+const normalizeSingleLineValue = (value: string) =>
+	clampTextValue(value.replace(/\r?\n/g, " "));
+
+const normalizeLongTextValue = (value: string) => clampTextValue(value);
+
+const normalizeNumberValue = (value: string) => {
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	const match = trimmed.match(/^(-?)(\d*)(?:\.(\d*))?$/);
+	if (!match) return null;
+	const sign = match[1] ?? "";
+	let integer = match[2] ?? "";
+	let decimals = match[3] ?? "";
+	if (!integer && !decimals) return "";
+	if (!integer) integer = "0";
+	if (decimals.length > MAX_NUMBER_DECIMALS) {
+		decimals = decimals.slice(0, MAX_NUMBER_DECIMALS);
+	}
+	return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
+};
 
 export const baseRouter = createTRPCRouter({
 	list: protectedProcedure.query(async ({ ctx }) => {
@@ -104,11 +134,36 @@ export const baseRouter = createTRPCRouter({
 			const defaultColumns = await ctx.db
 				.insert(tableColumn)
 				.values([
-					{ id: createId(), tableId: newTable.id, name: "Name" },
-					{ id: createId(), tableId: newTable.id, name: "Notes" },
-					{ id: createId(), tableId: newTable.id, name: "Assignee" },
-					{ id: createId(), tableId: newTable.id, name: "Status" },
-					{ id: createId(), tableId: newTable.id, name: "Attachments" },
+					{
+						id: createId(),
+						tableId: newTable.id,
+						name: "Name",
+						type: "single_line_text",
+					},
+					{
+						id: createId(),
+						tableId: newTable.id,
+						name: "Notes",
+						type: "long_text",
+					},
+					{
+						id: createId(),
+						tableId: newTable.id,
+						name: "Assignee",
+						type: "single_line_text",
+					},
+					{
+						id: createId(),
+						tableId: newTable.id,
+						name: "Status",
+						type: "single_line_text",
+					},
+					{
+						id: createId(),
+						tableId: newTable.id,
+						name: "Attachments",
+						type: "single_line_text",
+					},
 				])
 				.returning({ id: tableColumn.id, name: tableColumn.name });
 			if (defaultColumns.length > 0) {
@@ -198,11 +253,36 @@ export const baseRouter = createTRPCRouter({
 			}
 
 			await ctx.db.insert(tableColumn).values([
-				{ id: createId(), tableId: newTable.id, name: "Name" },
-				{ id: createId(), tableId: newTable.id, name: "Notes" },
-				{ id: createId(), tableId: newTable.id, name: "Assignee" },
-				{ id: createId(), tableId: newTable.id, name: "Status" },
-				{ id: createId(), tableId: newTable.id, name: "Attachments" },
+				{
+					id: createId(),
+					tableId: newTable.id,
+					name: "Name",
+					type: "single_line_text",
+				},
+				{
+					id: createId(),
+					tableId: newTable.id,
+					name: "Notes",
+					type: "long_text",
+				},
+				{
+					id: createId(),
+					tableId: newTable.id,
+					name: "Assignee",
+					type: "single_line_text",
+				},
+				{
+					id: createId(),
+					tableId: newTable.id,
+					name: "Status",
+					type: "single_line_text",
+				},
+				{
+					id: createId(),
+					tableId: newTable.id,
+					name: "Attachments",
+					type: "single_line_text",
+				},
 			]);
 
 			const rows = Array.from({ length: 3 }, () => ({
@@ -221,6 +301,7 @@ export const baseRouter = createTRPCRouter({
 				tableId: z.string().uuid(),
 				name: columnNameSchema.optional(),
 				id: z.string().uuid().optional(),
+				type: columnTypeSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -250,6 +331,7 @@ export const baseRouter = createTRPCRouter({
 
 			const nextIndex = currentCount + 1;
 			const columnName = input.name ?? `Column ${nextIndex}`;
+			const columnType = input.type ?? "single_line_text";
 
 			const [newColumn] = await ctx.db
 				.insert(tableColumn)
@@ -257,6 +339,7 @@ export const baseRouter = createTRPCRouter({
 					id: input.id ?? createId(),
 					tableId: input.tableId,
 					name: columnName,
+					type: columnType,
 				})
 				.returning({ id: tableColumn.id, name: tableColumn.name });
 
@@ -405,10 +488,24 @@ export const baseRouter = createTRPCRouter({
 				.delete(tableColumn)
 				.where(eq(tableColumn.id, input.columnId));
 
-			if (columnRecord.table.sortColumnId === input.columnId) {
+			const currentSortConfig = Array.isArray(columnRecord.table.sortConfig)
+				? columnRecord.table.sortConfig
+				: [];
+			const nextSortConfig = currentSortConfig.filter(
+				(sort) => sort?.columnId !== input.columnId,
+			);
+			if (
+				nextSortConfig.length !== currentSortConfig.length ||
+				columnRecord.table.sortColumnId === input.columnId
+			) {
+				const nextPrimary = nextSortConfig[0] ?? null;
 				await ctx.db
 					.update(baseTable)
-					.set({ sortColumnId: null, sortDirection: null })
+					.set({
+						sortConfig: nextSortConfig,
+						sortColumnId: nextPrimary?.columnId ?? null,
+						sortDirection: nextPrimary?.direction ?? null,
+					})
 					.where(eq(baseTable.id, columnRecord.tableId));
 			}
 			return { success: true };
@@ -418,8 +515,7 @@ export const baseRouter = createTRPCRouter({
 		.input(
 			z.object({
 				tableId: z.string().uuid(),
-				columnId: z.string().uuid().nullable(),
-				direction: z.enum(["asc", "desc"]).optional(),
+				sort: z.array(sortItemSchema).nullable(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -434,37 +530,45 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
-			if (input.columnId) {
-				if (!input.direction) {
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "Sort direction is required when a column is selected.",
-					});
-				}
-				const columnRecord = await ctx.db.query.tableColumn.findFirst({
-					where: eq(tableColumn.id, input.columnId),
+			const providedSort = input.sort ?? [];
+			const uniqueSort: Array<{ columnId: string; direction: "asc" | "desc" }> = [];
+			const seenColumns = new Set<string>();
+			for (const item of providedSort) {
+				if (seenColumns.has(item.columnId)) continue;
+				seenColumns.add(item.columnId);
+				uniqueSort.push({
+					columnId: item.columnId,
+					direction: item.direction === "desc" ? "desc" : "asc",
 				});
-				if (!columnRecord || columnRecord.tableId !== input.tableId) {
+			}
+
+			if (uniqueSort.length > 0) {
+				const columnRecords = await ctx.db.query.tableColumn.findMany({
+					where: inArray(
+						tableColumn.id,
+						uniqueSort.map((sort) => sort.columnId),
+					),
+				});
+				if (
+					columnRecords.length !== uniqueSort.length ||
+					columnRecords.some((column) => column.tableId !== input.tableId)
+				) {
 					throw new TRPCError({ code: "NOT_FOUND" });
 				}
-
-				await ctx.db
-					.update(baseTable)
-					.set({
-						sortColumnId: input.columnId,
-						sortDirection: input.direction,
-					})
-					.where(eq(baseTable.id, input.tableId));
-
-				return { sort: { columnId: input.columnId, direction: input.direction } };
 			}
+
+			const primarySort = uniqueSort[0] ?? null;
 
 			await ctx.db
 				.update(baseTable)
-				.set({ sortColumnId: null, sortDirection: null })
+				.set({
+					sortConfig: uniqueSort,
+					sortColumnId: primarySort?.columnId ?? null,
+					sortDirection: primarySort?.direction ?? null,
+				})
 				.where(eq(baseTable.id, input.tableId));
 
-			return { sort: null };
+			return { sort: uniqueSort.length ? uniqueSort : null };
 		}),
 
 	deleteRow: protectedProcedure
@@ -533,9 +637,26 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
+			const columnType = columnRecord.type ?? "single_line_text";
+			let normalizedValue = input.value;
+			if (columnType === "long_text") {
+				normalizedValue = normalizeLongTextValue(input.value);
+			} else if (columnType === "number") {
+				const nextValue = normalizeNumberValue(input.value);
+				if (nextValue === null) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Invalid number format.",
+					});
+				}
+				normalizedValue = nextValue;
+			} else {
+				normalizedValue = normalizeSingleLineValue(input.value);
+			}
+
 			const nextData = {
 				...(rowRecord.data ?? {}),
-				[input.columnId]: input.value,
+				[input.columnId]: normalizedValue,
 			};
 
 			await ctx.db
@@ -560,13 +681,36 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
-			const sortDirection = (tableRecord.sortDirection === "desc"
-				? "desc"
-				: "asc") as "asc" | "desc";
-			const sort: { columnId: string; direction: "asc" | "desc" } | null =
+			const legacySort =
 				tableRecord.sortColumnId
-					? { columnId: tableRecord.sortColumnId, direction: sortDirection }
-					: null;
+					? [
+							{
+								columnId: tableRecord.sortColumnId,
+								direction:
+									tableRecord.sortDirection === "desc" ? "desc" : "asc",
+							},
+						]
+					: [];
+			const rawSortConfig = Array.isArray(tableRecord.sortConfig)
+				? tableRecord.sortConfig
+				: [];
+			const normalizedSortConfig = rawSortConfig
+				.filter(
+					(item) =>
+						item &&
+						typeof item.columnId === "string" &&
+						(item.direction === "asc" || item.direction === "desc"),
+				)
+				.map((item) => ({
+					columnId: item.columnId,
+					direction: item.direction === "desc" ? "desc" : "asc",
+				}));
+			const sort =
+				normalizedSortConfig.length > 0
+					? normalizedSortConfig
+					: legacySort.length > 0
+						? legacySort
+						: null;
 
 			const [columns, rowCount] = await Promise.all([
 				ctx.db.query.tableColumn.findMany({
@@ -584,6 +728,7 @@ export const baseRouter = createTRPCRouter({
 				columns: columns.map((column) => ({
 					id: column.id,
 					name: column.name,
+					type: column.type ?? "single_line_text",
 				})),
 				rowCount: Number(rowCount[0]?.count ?? 0),
 				sort,
@@ -597,10 +742,7 @@ export const baseRouter = createTRPCRouter({
 				limit: z.number().int().min(1).max(500).default(50),
 				cursor: z.number().int().min(0).optional(),
 				sort: z
-					.object({
-						columnId: z.string().uuid(),
-						direction: z.enum(["asc", "desc"]),
-					})
+					.array(sortItemSchema)
 					.optional(),
 			}),
 		)
@@ -617,42 +759,85 @@ export const baseRouter = createTRPCRouter({
 			}
 
 			const providedSort = input.sort ?? null;
-			let effectiveSort:
-				| { columnId: string; direction: "asc" | "desc" }
-				| null =
+			const legacySort =
+				tableRecord.sortColumnId
+					? [
+							{
+								columnId: tableRecord.sortColumnId,
+								direction:
+									tableRecord.sortDirection === "desc" ? "desc" : "asc",
+							},
+						]
+					: [];
+			const rawSortConfig = Array.isArray(tableRecord.sortConfig)
+				? tableRecord.sortConfig
+				: [];
+			let effectiveSorts =
 				providedSort ??
-				(tableRecord.sortColumnId
-					? {
-							columnId: tableRecord.sortColumnId,
-							direction:
-								tableRecord.sortDirection === "desc" ? "desc" : "asc",
-						}
-					: null);
+				(rawSortConfig.length > 0 ? rawSortConfig : legacySort);
 
-			if (effectiveSort) {
-				const columnRecord = await ctx.db.query.tableColumn.findFirst({
-					where: eq(tableColumn.id, effectiveSort.columnId),
+			const seenColumns = new Set<string>();
+			effectiveSorts = effectiveSorts.filter((sort) => {
+				if (!sort?.columnId) return false;
+				if (seenColumns.has(sort.columnId)) return false;
+				seenColumns.add(sort.columnId);
+				return true;
+			});
+
+			let sortColumnsById = new Map<
+				string,
+				{ id: string; tableId: string; type: string | null }
+			>();
+			if (effectiveSorts.length > 0) {
+				const sortColumnIds = effectiveSorts.map((sort) => sort.columnId);
+				const columnRecords = await ctx.db.query.tableColumn.findMany({
+					where: inArray(tableColumn.id, sortColumnIds),
 				});
-				if (!columnRecord || columnRecord.tableId !== input.tableId) {
+				sortColumnsById = new Map(
+					columnRecords.map((column) => [column.id, column]),
+				);
+
+				const missingColumn =
+					columnRecords.length !== sortColumnIds.length ||
+					columnRecords.some((column) => column.tableId !== input.tableId);
+				if (missingColumn) {
 					if (providedSort) {
 						throw new TRPCError({ code: "NOT_FOUND" });
 					}
-					effectiveSort = null;
+					effectiveSorts = effectiveSorts.filter((sort) => {
+						const column = sortColumnsById.get(sort.columnId);
+						return column?.tableId === input.tableId;
+					});
 				}
 			}
 
 			const offset = input.cursor ?? 0;
-			const sortValue =
-				effectiveSort &&
-				sql<string>`coalesce(${tableRow.data} ->> ${effectiveSort.columnId}, '')`;
 			const rows = await ctx.db.query.tableRow.findMany({
 				where: eq(tableRow.tableId, input.tableId),
 				orderBy: (row, { asc, desc }) =>
-					sortValue
+					effectiveSorts.length > 0
 						? [
-								effectiveSort?.direction === "desc"
-									? desc(sortValue)
-									: asc(sortValue),
+								...effectiveSorts.flatMap((sort) => {
+									const column = sortColumnsById.get(sort.columnId);
+									if (!column || column.tableId !== input.tableId) return [];
+									const columnType = column.type ?? "single_line_text";
+									if (columnType === "number") {
+										const numericValue =
+											sql<number>`nullif(${tableRow.data} ->> ${sort.columnId}, '')::numeric`;
+										return [
+											sort.direction === "desc"
+												? desc(numericValue)
+												: asc(numericValue),
+										];
+									}
+									const textValue =
+										sql<string>`coalesce(${tableRow.data} ->> ${sort.columnId}, '')`;
+									return [
+										sort.direction === "desc"
+											? desc(textValue)
+											: asc(textValue),
+									];
+								}),
 								asc(row.createdAt),
 								asc(row.id),
 							]
@@ -715,6 +900,7 @@ export const baseRouter = createTRPCRouter({
 				columns: columns.map((column) => ({
 					id: column.id,
 					name: column.name,
+					type: column.type ?? "single_line_text",
 				})),
 				rows: rows.map((row) => ({
 					id: row.id,

@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
+	jsonb,
 	pgTable,
 	pgTableCreator,
 	text,
@@ -63,6 +64,10 @@ export const baseTable = createTable(
 		name: d.text("name").notNull(),
 		sortColumnId: d.uuid("sort_column_id"),
 		sortDirection: d.text("sort_direction"),
+		sortConfig: jsonb("sort_config")
+			.$type<Array<{ columnId: string; direction: "asc" | "desc" }>>()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())
@@ -84,6 +89,7 @@ export const tableColumn = createTable(
 			.notNull()
 			.references(() => baseTable.id, { onDelete: "cascade" }),
 		name: d.text("name").notNull(),
+		type: d.text("type").notNull().default("single_line_text"),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())

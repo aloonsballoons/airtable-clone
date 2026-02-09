@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1770601599315,
+      "tag": "0000_abandoned_diamondback",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1770620659014,
+      "tag": "0001_sort_config",
+      "breakpoints": true
+    }
+  ]
+}

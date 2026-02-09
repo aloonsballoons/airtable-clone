@@ -10,7 +10,7 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import assigneeIcon from "~/assets/asignee.svg";
+import assigneeIcon from "~/assets/assignee.svg";
 import attachmentsIcon from "~/assets/attachments.svg";
 import bellIcon from "~/assets/bell.svg";
 import colourIcon from "~/assets/colour.svg";
@@ -20,11 +20,14 @@ import groupIcon from "~/assets/group.svg";
 import helpIcon from "~/assets/help.svg";
 import hideFieldsIcon from "~/assets/hide fields.svg";
 import launchIcon from "~/assets/launch.svg";
+import longLineSelectionIcon from "~/assets/long-line-selection.svg";
 import logoIcon from "~/assets/logo.svg";
 import nameIcon from "~/assets/name.svg";
 import notesIcon from "~/assets/notes.svg";
+import numberIcon from "~/assets/number.svg";
 import omniIcon from "~/assets/omni.svg";
 import refreshIcon from "~/assets/refresh.svg";
+import reorderIcon from "~/assets/reorder.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
 import shareSyncIcon from "~/assets/share-and-sync.svg";
 import sortIcon from "~/assets/sort.svg";
@@ -49,6 +52,9 @@ const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
 const MAX_COLUMN_WIDTH = 420;
 const ADD_COLUMN_WIDTH = 93;
+const LONG_TEXT_HEIGHT = 142;
+const ADD_COLUMN_MENU_WIDTH = 400;
+const ADD_COLUMN_OPTION_WIDTH = 380;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
@@ -58,7 +64,74 @@ const columnIconMap: Record<string, string> = {
   Assignee: assigneeIcon.src,
   Status: statusIcon.src,
   Attachments: attachmentsIcon.src,
+  Number: numberIcon.src,
 };
+
+type ColumnFieldType = "single_line_text" | "long_text" | "number";
+
+const columnTypeIconMap: Record<ColumnFieldType, string> = {
+  single_line_text: nameIcon.src,
+  long_text: notesIcon.src,
+  number: numberIcon.src,
+};
+
+const coerceColumnType = (value?: string | null): ColumnFieldType =>
+  value === "long_text" || value === "number" ? value : "single_line_text";
+
+const getColumnIconSrc = (name: string, type?: string | null) => {
+  const resolvedType = coerceColumnType(type);
+  return columnIconMap[name] ?? columnTypeIconMap[resolvedType];
+};
+
+const sortAddMenuIconSpecByName: Record<
+  string,
+  { src: string; width: number; height: number; left: number }
+> = {
+  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
+  Status: { src: statusIcon.src, width: 15, height: 15, left: 10 },
+  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
+  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
+  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
+  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+};
+
+const sortAddMenuIconSpecByType: Record<
+  ColumnFieldType,
+  { src: string; width: number; height: number; left: number }
+> = {
+  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
+  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
+  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+};
+
+const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
+  const resolvedType = coerceColumnType(type);
+  return (
+    sortAddMenuIconSpecByName[name] ?? sortAddMenuIconSpecByType[resolvedType]
+  );
+};
+
+const addColumnTypeOptions: Array<{
+  type: ColumnFieldType;
+  label: string;
+  icon: { src: string; width: number; height: number; gap: number; paddingLeft: number };
+}> = [
+  {
+    type: "single_line_text",
+    label: "Single line text",
+    icon: { src: nameIcon.src, width: 12, height: 12, gap: 10, paddingLeft: 8 },
+  },
+  {
+    type: "long_text",
+    label: "Long line text",
+    icon: { src: notesIcon.src, width: 15, height: 13, gap: 8, paddingLeft: 7 },
+  },
+  {
+    type: "number",
+    label: "Number",
+    icon: { src: numberIcon.src, width: 14, height: 14, gap: 9, paddingLeft: 7 },
+  },
+];
 
 const imgEllipse2 =
   "https://www.figma.com/api/mcp/asset/220c0b55-a141-4008-8b9e-393c5dcc820b";
@@ -118,13 +191,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     rowId: string;
     columnId: string;
   } | null>(null);
+  const [longTextEditingCell, setLongTextEditingCell] = useState<{
+    rowId: string;
+    columnId: string;
+  } | null>(null);
   const [addRowHover, setAddRowHover] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
-  const [isSortDirectionOpen, setIsSortDirectionOpen] = useState(false);
-  const [isSortFieldOpen, setIsSortFieldOpen] = useState(false);
+  const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
+  const [openSortDirectionId, setOpenSortDirectionId] = useState<string | null>(null);
+  const [openSortFieldId, setOpenSortFieldId] = useState<string | null>(null);
+  const [isAddSortMenuOpen, setIsAddSortMenuOpen] = useState(false);
+  const [sortOrderOverride, setSortOrderOverride] = useState<SortConfig[] | null>(
+    null
+  );
+  const [draggingSortId, setDraggingSortId] = useState<string | null>(null);
+  const [draggingSortTop, setDraggingSortTop] = useState<number | null>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
-  const cellRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
+  const sortFieldMenuRef = useRef<HTMLDivElement>(null);
+  const addColumnButtonRef = useRef<HTMLButtonElement>(null);
+  const addColumnMenuRef = useRef<HTMLDivElement>(null);
+  const sortAddMenuListRef = useRef<HTMLDivElement>(null);
+  const cellRefs = useRef<
+    Map<string, HTMLInputElement | HTMLTextAreaElement | null>
+  >(new Map());
+  const sortRowsRef = useRef<SortConfig[]>([]);
+  const dragOffsetRef = useRef(0);
+  const dragIndexRef = useRef(0);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
   useEffect(() => {
@@ -135,21 +228,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     { enabled: Boolean(activeTableId) }
   );
   const rawSortConfig = tableMetaQuery.data?.sort ?? null;
-  const sortConfig: SortConfig | null = rawSortConfig
-    ? {
-        columnId: rawSortConfig.columnId,
-        direction: normalizeSortDirection(rawSortConfig.direction),
-      }
-    : null;
-  const sortParam =
-    sortConfig &&
-    tableMetaQuery.data?.columns?.some(
-      (column) => column.id === sortConfig.columnId
-    )
-      ? { columnId: sortConfig.columnId, direction: sortConfig.direction }
-      : undefined;
+  const sortConfigList: SortConfig[] = Array.isArray(rawSortConfig)
+    ? rawSortConfig.map((item) => ({
+        columnId: item.columnId,
+        direction: normalizeSortDirection(item.direction),
+      }))
+    : [];
+  const activeColumnIdSet = new Set(
+    tableMetaQuery.data?.columns?.map((column) => column.id) ?? []
+  );
+  const sortParam = sortConfigList.filter((sort) =>
+    activeColumnIdSet.has(sort.columnId)
+  );
+  const hasSort = sortParam.length > 0;
   const getRowsQueryKey = (tableId: string) =>
-    sortParam
+    hasSort
       ? { tableId, limit: PAGE_ROWS, sort: sortParam }
       : { tableId, limit: PAGE_ROWS };
   const rowsQuery = api.base.getRows.useInfiniteQuery(
@@ -184,17 +277,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   });
 
   const addColumn = api.base.addColumn.useMutation({
-    onMutate: async ({ tableId, name, id }) => {
+    onMutate: async ({ tableId, name, id, type }) => {
       if (!activeTableId || tableId !== activeTableId || !id) {
         return { tableId, columnId: id ?? null, skipped: true };
       }
       await utils.base.getTableMeta.cancel({ tableId });
       const columnName = name ?? "Column";
+      const columnType = type ?? "single_line_text";
       utils.base.getTableMeta.setData({ tableId }, (current) => {
         if (!current) return current;
         return {
           ...current,
-          columns: [...current.columns, { id, name: columnName }],
+          columns: [
+            ...current.columns,
+            { id, name: columnName, type: columnType },
+          ],
         };
       });
       return { tableId, columnId: id, skipped: false };
@@ -234,7 +331,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             };
           }
           const pages = [...data.pages];
-          if (sortParam?.direction === "asc") {
+          if (sortParam[0]?.direction === "asc") {
             const firstPage = pages[0]!;
             pages[0] = {
               ...firstPage,
@@ -291,16 +388,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   });
 
   const setTableSort = api.base.setTableSort.useMutation({
-    onMutate: async ({ tableId, columnId, direction }) => {
+    onMutate: async ({ tableId, sort }) => {
       await utils.base.getTableMeta.cancel({ tableId });
       const previous = utils.base.getTableMeta.getData({ tableId });
+      const nextSort = sort ?? [];
       utils.base.getTableMeta.setData({ tableId }, (current) => {
         if (!current) return current;
         return {
           ...current,
-          sort: columnId
-            ? { columnId, direction: direction ?? "asc" }
-            : null,
+          sort: nextSort.length ? nextSort : null,
         };
       });
       return { previous, tableId };
@@ -374,9 +470,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         return { ...prev, [variables.rowId]: rest };
       });
       if (
-        sortConfig &&
+        sortConfigList.length > 0 &&
         activeTableId &&
-        variables.columnId === sortConfig.columnId
+        sortConfigList.some((sort) => sort.columnId === variables.columnId)
       ) {
         void utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
@@ -389,6 +485,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setHoveredRowId(null);
     setHoveredHeaderId(null);
     setSelectedCell(null);
+    setLongTextEditingCell(null);
   }, [baseId]);
 
   useEffect(() => {
@@ -436,14 +533,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       if (sortMenuRef.current?.contains(target)) return;
       if (sortButtonRef.current?.contains(target)) return;
       setIsSortMenuOpen(false);
-      setIsSortDirectionOpen(false);
-      setIsSortFieldOpen(false);
+      setOpenSortDirectionId(null);
+      setOpenSortFieldId(null);
+      setIsAddSortMenuOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsSortMenuOpen(false);
-        setIsSortDirectionOpen(false);
-        setIsSortFieldOpen(false);
+        setOpenSortDirectionId(null);
+        setOpenSortFieldId(null);
+        setIsAddSortMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClick);
@@ -456,36 +555,123 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     };
   }, [isSortMenuOpen]);
 
+  useEffect(() => {
+    if (!openSortFieldId) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (sortFieldMenuRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".airtable-sort-field")) {
+        return;
+      }
+      setOpenSortFieldId(null);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenSortFieldId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openSortFieldId]);
+
+  useEffect(() => {
+    if (!isAddColumnMenuOpen) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (addColumnMenuRef.current?.contains(target)) return;
+      if (addColumnButtonRef.current?.contains(target)) return;
+      setIsAddColumnMenuOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsAddColumnMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [isAddColumnMenuOpen]);
+
   const activeTables = baseDetailsQuery.data?.tables ?? [];
   const activeTable = tableMetaQuery.data?.table ?? null;
   const activeColumns = tableMetaQuery.data?.columns ?? [];
   const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
-  const sortedColumn = sortConfig
-    ? activeColumns.find((column) => column.id === sortConfig.columnId) ?? null
-    : null;
-  const sortListHeight = 97 + activeColumns.length * 32;
-  const sortFieldMenuColumns = activeColumns.filter(
-    (column) => column.id !== sortConfig?.columnId
+  const sortRows = sortOrderOverride ?? sortConfigList;
+  const sortedColumnIds = useMemo(
+    () => new Set(sortRows.map((sort) => sort.columnId)),
+    [sortRows]
   );
+  const remainingSortColumns = activeColumns.filter(
+    (column) => !sortedColumnIds.has(column.id)
+  );
+  const sortListHeight = 97 + activeColumns.length * 32;
   const sortFieldTop = 52;
   const sortFieldHeight = 28;
-  const sortAddTop = sortFieldTop + sortFieldHeight + 18;
-  const sortFooterTop = 139;
+  const sortRowGap = 8;
+  const sortRowStride = sortFieldHeight + sortRowGap;
+  const sortRowsHeight =
+    sortRows.length > 0
+      ? sortRows.length * sortFieldHeight + (sortRows.length - 1) * sortRowGap
+      : 0;
+  const sortAddTop = sortFieldTop + sortRowsHeight + 18;
+  const sortFooterTop = sortAddTop + 41;
   const sortFooterHeight = 42;
   const sortConfiguredHeight = sortFooterTop + sortFooterHeight;
+  const sortFieldLeft = 20;
+  const sortFieldWidth = 250;
+  const sortDirectionLeft = 282;
+  const sortDirectionWidth = 120;
+  const sortRemoveSize = 28;
+  const sortRemoveLeft = 422;
+  const sortReorderLeft = sortRemoveLeft + sortRemoveSize + 17;
+  const sortReorderWidth = 10;
+  const sortConfiguredWidth = sortReorderLeft + sortReorderWidth + 20;
+  const sortLineWidth = sortConfiguredWidth - 40;
   const sortFieldMenuWidth = 244;
   const sortFieldMenuPadding = 11.5;
-  const sortFieldMenuGap = 8;
-  const sortFieldMenuRowHeight = 35;
+  const sortFieldMenuHeaderGap = 15;
+  const sortFieldMenuGap = 6;
+  const sortFieldMenuRowHeight = 26;
   const sortFieldMenuFindHeight = 13;
   const sortFieldMenuFirstRowTop =
-    sortFieldMenuPadding + sortFieldMenuFindHeight + sortFieldMenuGap;
-  const sortFieldMenuHeight =
-    sortFieldMenuFirstRowTop +
-    Math.max(0, sortFieldMenuColumns.length - 1) *
-      (sortFieldMenuRowHeight + sortFieldMenuGap) +
-    sortFieldMenuRowHeight +
-    sortFieldMenuPadding;
+    sortFieldMenuPadding + sortFieldMenuFindHeight + sortFieldMenuHeaderGap;
+  const sortAddMenuWidth = 432;
+  const sortAddMenuHeaderTop = 10;
+  const sortAddMenuHeaderHeight = 13;
+  const sortAddMenuHeaderGap = 15;
+  const sortAddMenuFirstRowTop =
+    sortAddMenuHeaderTop + sortAddMenuHeaderHeight + sortAddMenuHeaderGap;
+  const sortAddMenuRowHeight = 26;
+  const sortAddMenuRowStride = 32;
+  const sortAddMenuBottomPadding = 10;
+  const sortAddMenuContentHeight =
+    sortAddMenuFirstRowTop +
+    (remainingSortColumns.length > 0
+      ? (remainingSortColumns.length - 1) * sortAddMenuRowStride +
+        sortAddMenuRowHeight
+      : 0) +
+    sortAddMenuBottomPadding;
+  const sortAddMenuHeight = Math.min(256, sortAddMenuContentHeight);
+  const sortAddMenuListHeight = Math.max(
+    0,
+    sortAddMenuHeight - sortAddMenuFirstRowTop - sortAddMenuBottomPadding
+  );
+  const columnById = useMemo(
+    () => new Map(activeColumns.map((column) => [column.id, column])),
+    [activeColumns]
+  );
   const canDeleteTable = activeTables.length > 1;
   const canDeleteColumn = activeColumns.length > 1;
   const canDeleteRow = activeRowCount > 1;
@@ -495,24 +681,74 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       (contextMenu.type === "column" && canDeleteColumn) ||
       (contextMenu.type === "row" && canDeleteRow));
 
-  const applySort = useCallback(
-    (next: SortConfig | null) => {
+  const applySorts = useCallback(
+    (next: SortConfig[] | null) => {
       if (!activeTableId) return;
       setTableSort.mutate({
         tableId: activeTableId,
-        columnId: next?.columnId ?? null,
-        direction: next?.direction,
+        sort: next && next.length > 0 ? next : null,
       });
     },
     [activeTableId, setTableSort]
   );
 
+  const getSortDirectionLabels = useCallback(
+    (columnId: string) => {
+      const column = columnById.get(columnId);
+      const columnType = coerceColumnType(column?.type);
+      const isNumber = columnType === "number";
+      return {
+        asc: isNumber ? "1 → 9" : "A → Z",
+        desc: isNumber ? "9 → 1" : "Z → A",
+      };
+    },
+    [columnById]
+  );
+
   useEffect(() => {
-    if (!sortConfig) return;
-    if (!activeColumns.some((column) => column.id === sortConfig.columnId)) {
-      applySort(null);
+    if (sortConfigList.length === 0) return;
+    const activeIds = new Set(activeColumns.map((column) => column.id));
+    const nextSorts = sortConfigList.filter((sort) =>
+      activeIds.has(sort.columnId)
+    );
+    if (nextSorts.length !== sortConfigList.length) {
+      applySorts(nextSorts.length ? nextSorts : null);
     }
-  }, [activeColumns, applySort, sortConfig]);
+  }, [activeColumns, applySorts, sortConfigList]);
+
+  useEffect(() => {
+    sortRowsRef.current = sortRows;
+  }, [sortRows]);
+
+  useEffect(() => {
+    if (!selectedCell) {
+      setLongTextEditingCell(null);
+      return;
+    }
+    const column = columnById.get(selectedCell.columnId);
+    if (!column) {
+      setLongTextEditingCell(null);
+      return;
+    }
+    if (coerceColumnType(column.type) !== "long_text") {
+      setLongTextEditingCell(null);
+      return;
+    }
+    setLongTextEditingCell(selectedCell);
+  }, [columnById, selectedCell]);
+
+  useEffect(() => {
+    if (!longTextEditingCell) return;
+    requestAnimationFrame(() => {
+      const key = `${longTextEditingCell.rowId}-${longTextEditingCell.columnId}`;
+      const node = cellRefs.current.get(key);
+      if (node && "setSelectionRange" in node) {
+        node.focus();
+        const length = node.value.length;
+        node.setSelectionRange(length, length);
+      }
+    });
+  }, [longTextEditingCell]);
 
   useEffect(() => {
     if (!activeColumns.length || !activeTableId) return;
@@ -621,6 +857,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       ...activeColumns.map((column) => ({
         id: column.id,
         name: column.name,
+        fieldType: coerceColumnType(column.type),
         width: columnWidths[column.id] ?? DEFAULT_COLUMN_WIDTH,
         type: "data" as const,
       })),
@@ -663,6 +900,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     overscan: 2,
     getItemKey: (index) => columnsWithAdd[index]?.id ?? index,
   });
+
+  const sortAddVirtualizer = useVirtualizer({
+    count: remainingSortColumns.length,
+    getScrollElement: () => sortAddMenuListRef.current,
+    estimateSize: () => sortAddMenuRowStride,
+    overscan: 4,
+  });
+
+  const sortAddVirtualItems = sortAddVirtualizer.getVirtualItems();
+  const sortAddVirtualizerSize = Math.max(
+    0,
+    sortAddVirtualizer.getTotalSize() -
+      (remainingSortColumns.length > 0
+        ? sortAddMenuRowStride - sortAddMenuRowHeight
+        : 0)
+  );
 
   const virtualColumns = columnVirtualizer.getVirtualItems();
   const nameColumnIndex = columnsWithAdd.findIndex(
@@ -719,14 +972,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setContextMenu(null);
   };
 
-  const handleAddColumn = () => {
+  const handleAddColumn = (type: ColumnFieldType = "single_line_text") => {
     if (!activeTableId) return;
     const nextIndex = activeColumns.length + 1;
     addColumn.mutate({
       tableId: activeTableId,
       name: `Column ${nextIndex}`,
       id: crypto.randomUUID(),
+      type,
     });
+    setIsAddColumnMenuOpen(false);
   };
 
   const handleAddRow = () => {
@@ -775,6 +1030,85 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       startX: event.clientX,
       startWidth: columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTH,
     });
+  };
+
+  const areSortsEqual = (left: SortConfig[], right: SortConfig[]) => {
+    if (left.length !== right.length) return false;
+    return left.every(
+      (item, index) =>
+        item.columnId === right[index]?.columnId &&
+        item.direction === right[index]?.direction
+    );
+  };
+
+  const handleSortDragStart = (event: ReactMouseEvent, columnId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const containerRect = sortMenuRef.current?.getBoundingClientRect();
+    if (!containerRect) return;
+    const currentOrder = sortRowsRef.current;
+    const startIndex = currentOrder.findIndex(
+      (sort) => sort.columnId === columnId
+    );
+    if (startIndex < 0) return;
+    const startTop = sortFieldTop + startIndex * sortRowStride;
+    dragOffsetRef.current = event.clientY - (containerRect.top + startTop);
+    dragIndexRef.current = startIndex;
+    setSortOrderOverride(currentOrder);
+    setDraggingSortId(columnId);
+    setDraggingSortTop(startTop);
+    setOpenSortDirectionId(null);
+    setOpenSortFieldId(null);
+    setIsAddSortMenuOpen(false);
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      const order = sortRowsRef.current;
+      if (order.length === 0) return;
+      const maxTop = sortFieldTop + sortRowStride * (order.length - 1);
+      const nextTop = Math.min(
+        maxTop,
+        Math.max(
+          sortFieldTop,
+          moveEvent.clientY - containerRect.top - dragOffsetRef.current
+        )
+      );
+      setDraggingSortTop(nextTop);
+      const targetIndex = Math.min(
+        order.length - 1,
+        Math.max(
+          0,
+          Math.floor((nextTop - sortFieldTop + sortFieldHeight / 2) / sortRowStride)
+        )
+      );
+      const fromIndex = dragIndexRef.current;
+      if (targetIndex === fromIndex) return;
+      const nextOrder = [...order];
+      const [moved] = nextOrder.splice(fromIndex, 1);
+      if (!moved) return;
+      nextOrder.splice(targetIndex, 0, moved);
+      sortRowsRef.current = nextOrder;
+      dragIndexRef.current = targetIndex;
+      setSortOrderOverride(nextOrder);
+    };
+
+    const handleUp = () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      const finalOrder = sortRowsRef.current;
+      if (!areSortsEqual(finalOrder, sortConfigList)) {
+        applySorts(finalOrder.length ? finalOrder : null);
+      }
+      setDraggingSortId(null);
+      setDraggingSortTop(null);
+      setSortOrderOverride(null);
+    };
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
   };
 
   const handleCellChange = (rowId: string, columnId: string, value: string) => {
@@ -830,7 +1164,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   };
 
   const handleCellKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
+    event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
     rowId: string,
     columnId: string
   ) => {
@@ -1076,14 +1410,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     type="button"
                     className={clsx(
                       "airtable-table-feature-selection gap-2 font-normal",
-                      sortConfig && "airtable-table-feature-selection--active text-[#1d1f24]"
+                      hasSort &&
+                        "airtable-table-feature-selection--active text-[#1d1f24]"
                     )}
                     onClick={() =>
                       setIsSortMenuOpen((prev) => {
                         const next = !prev;
                         if (!next) {
-                          setIsSortDirectionOpen(false);
-                          setIsSortFieldOpen(false);
+                          setOpenSortDirectionId(null);
+                          setOpenSortFieldId(null);
+                          setIsAddSortMenuOpen(false);
                         }
                         return next;
                       })
@@ -1092,12 +1428,19 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     aria-expanded={isSortMenuOpen}
                   >
                     <span className="relative inline-flex h-[14px] w-[14px]">
-                      <img alt="" className="h-[14px] w-[14px]" src={sortIcon.src} />
+                      <img
+                        alt=""
+                        className={clsx(
+                          "h-[14px] w-[14px]",
+                          hasSort && "airtable-sort-icon--active"
+                        )}
+                        src={sortIcon.src}
+                      />
                       <span
                         className="airtable-sort-white-overlay airtable-sort-white-overlay--hover"
                         aria-hidden="true"
                       />
-                      {sortConfig && (
+                      {hasSort && (
                         <>
                           <span
                             className="airtable-sort-white-overlay airtable-sort-white-overlay--active"
@@ -1107,15 +1450,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         </>
                       )}
                     </span>
-                    <span>{sortConfig ? "Sorted by 1 field" : "Sort"}</span>
+                    <span>
+                      {hasSort
+                        ? `Sorted by ${sortRows.length} ${
+                            sortRows.length === 1 ? "field" : "fields"
+                          }`
+                        : "Sort"}
+                    </span>
                   </button>
                   {isSortMenuOpen && (
                     <div
                       ref={sortMenuRef}
-                      className="airtable-sort-dropdown absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                      className="airtable-sort-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
                       style={{
-                        width: sortConfig ? 454 : 320,
-                        height: sortConfig ? sortConfiguredHeight : sortListHeight,
+                        width: hasSort ? sortConfiguredWidth : 320,
+                        height: hasSort ? sortConfiguredHeight : sortListHeight,
                       }}
                       onClick={(event) => event.stopPropagation()}
                     >
@@ -1126,158 +1475,340 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         </div>
                         <div
                           className="absolute left-[20px] top-[41px] h-px bg-[#E5E5E5]"
-                          style={{ width: sortConfig ? 411 : 280 }}
+                          style={{ width: hasSort ? sortLineWidth : 280 }}
                         />
-                        {sortConfig ? (
+                        {hasSort ? (
                           <>
-                            <button
-                              type="button"
-                              className="airtable-sort-field absolute left-[20px]"
-                              style={{ top: sortFieldTop, width: 250 }}
-                              onClick={() => {
-                                setIsSortFieldOpen((prev) => !prev);
-                                setIsSortDirectionOpen(false);
-                              }}
-                              aria-expanded={isSortFieldOpen}
-                            >
-                              <span>{sortedColumn?.name ?? "Select field"}</span>
-                              <span className="ml-auto airtable-nav-chevron rotate-90" />
-                            </button>
-                            {isSortFieldOpen && (
-                              <div
-                                className="airtable-sort-field-menu z-10"
-                                style={{
-                                  left: 20,
-                                  top: sortFieldTop + sortFieldHeight + 0.5,
-                                  width: sortFieldMenuWidth,
-                                  height: sortFieldMenuHeight,
-                                }}
-                              >
+                            {sortRows.map((sortItem, index) => {
+                              const rowTop = sortFieldTop + index * sortRowStride;
+                              const isDragging = draggingSortId === sortItem.columnId;
+                              const displayTop =
+                                isDragging && draggingSortTop !== null ? draggingSortTop : rowTop;
+                              const fieldMenuColumns = activeColumns.filter(
+                                (column) =>
+                                  column.id === sortItem.columnId ||
+                                  !sortedColumnIds.has(column.id)
+                              );
+                              const fieldMenuHeight =
+                                sortFieldMenuFirstRowTop +
+                                Math.max(0, fieldMenuColumns.length - 1) *
+                                  (sortFieldMenuRowHeight + sortFieldMenuGap) +
+                                (fieldMenuColumns.length > 0
+                                  ? sortFieldMenuRowHeight
+                                  : 0) +
+                                sortFieldMenuPadding;
+                              const directionLabels = getSortDirectionLabels(
+                                sortItem.columnId
+                              );
+                              const removeTop = (sortFieldHeight - sortRemoveSize) / 2;
+                              const reorderTop = (sortFieldHeight - 13) / 2;
+                              const isFieldMenuOpen =
+                                openSortFieldId === sortItem.columnId;
+                              const isDirectionMenuOpen =
+                                openSortDirectionId === sortItem.columnId;
+                              const shouldElevateRow =
+                                isDragging || isFieldMenuOpen || isDirectionMenuOpen;
+                              const columnLabel =
+                                columnById.get(sortItem.columnId)?.name ?? "Select field";
+                              return (
                                 <div
-                                  className="absolute text-[13px] font-normal text-[#757575]"
-                                  style={{ left: 9, top: sortFieldMenuPadding }}
+                                  key={sortItem.columnId}
+                                  className="airtable-sort-row absolute left-0 right-0"
+                                  style={{
+                                    top: displayTop,
+                                    height: sortFieldHeight,
+                                    zIndex: shouldElevateRow ? 30 : 0,
+                                    transition: isDragging ? "none" : "top 0.15s ease",
+                                  }}
                                 >
-                                  Find a field
-                                </div>
-                                {sortFieldMenuColumns.map((column, index) => {
-                                  const itemTop =
-                                    sortFieldMenuFirstRowTop +
-                                    index * (sortFieldMenuRowHeight + sortFieldMenuGap);
-                                  const iconSrc = columnIconMap[column.name];
-                                  return (
-                                    <button
-                                      key={column.id}
-                                      type="button"
-                                      className="airtable-sort-field-menu-item"
-                                      style={{ top: itemTop }}
-                                      onClick={() => {
-                                        const next: SortConfig = sortConfig
-                                          ? {
-                                              columnId: column.id,
-                                              direction: sortConfig.direction,
-                                            }
-                                          : { columnId: column.id, direction: "asc" };
-                                        applySort(next);
-                                        setIsSortFieldOpen(false);
+                                  <button
+                                    type="button"
+                                    className="airtable-sort-field absolute"
+                                    style={{ left: sortFieldLeft, width: sortFieldWidth }}
+                                    onClick={() => {
+                                      setOpenSortFieldId((prev) =>
+                                        prev === sortItem.columnId ? null : sortItem.columnId
+                                      );
+                                      setOpenSortDirectionId(null);
+                                      setIsAddSortMenuOpen(false);
+                                    }}
+                                    aria-expanded={isFieldMenuOpen}
+                                  >
+                                    <span>{columnLabel}</span>
+                                    <span className="ml-auto airtable-nav-chevron rotate-90" />
+                                  </button>
+                                  {isFieldMenuOpen && (
+                                    <div
+                                      className="airtable-sort-field-menu z-30"
+                                      ref={sortFieldMenuRef}
+                                      style={{
+                                        left: sortFieldLeft,
+                                        top: sortFieldHeight + 2,
+                                        width: sortFieldMenuWidth,
+                                        height: fieldMenuHeight,
                                       }}
                                     >
-                                      {iconSrc ? (
-                                        <img
-                                          alt=""
-                                          className="airtable-sort-field-menu-icon"
-                                          src={iconSrc}
-                                        />
-                                      ) : (
-                                        <span
-                                          className="airtable-sort-field-menu-icon"
-                                          aria-hidden="true"
-                                        />
-                                      )}
-                                      <span>{column.name}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
-                            <button
-                              type="button"
-                              className="airtable-sort-direction absolute"
-                              style={{ top: sortFieldTop, left: 282, width: 120 }}
-                              onClick={() => {
-                                setIsSortDirectionOpen((prev) => !prev);
-                                setIsSortFieldOpen(false);
-                              }}
-                              aria-expanded={isSortDirectionOpen}
-                            >
-                              <span>
-                                {sortConfig.direction === "asc" ? "A → Z" : "Z → A"}
-                              </span>
-                              <span className="ml-auto airtable-nav-chevron rotate-90" />
-                            </button>
-                            {isSortDirectionOpen && (
-                              <div
-                                className="airtable-sort-direction-menu absolute z-10"
-                                style={{
-                                  left: 282,
-                                  top: sortFieldTop + sortFieldHeight + 4,
-                                  width: 120,
-                                  height: 73,
+                                      <div
+                                        className="absolute text-[13px] font-normal text-[#757575]"
+                                        style={{ left: 9, top: sortFieldMenuPadding }}
+                                      >
+                                        Find a field
+                                      </div>
+                                      {fieldMenuColumns.map((column, itemIndex) => {
+                                        const itemTop =
+                                          sortFieldMenuFirstRowTop +
+                                          itemIndex *
+                                            (sortFieldMenuRowHeight + sortFieldMenuGap);
+                                        const iconSrc = getColumnIconSrc(
+                                          column.name,
+                                          column.type
+                                        );
+                                        return (
+                                          <button
+                                            key={column.id}
+                                            type="button"
+                                            className="airtable-sort-field-menu-item"
+                                            style={{ top: itemTop }}
+                                            onClick={() => {
+                                              const nextSorts = sortRows.map((item) => {
+                                                if (item.columnId !== sortItem.columnId) {
+                                                  return item;
+                                                }
+                                                const isSameColumn =
+                                                  column.id === sortItem.columnId;
+                                                const nextDirection = isSameColumn
+                                                  ? item.direction
+                                                  : coerceColumnType(column.type) === "number"
+                                                  ? "asc"
+                                                  : item.direction;
+                                                return {
+                                                  columnId: column.id,
+                                                  direction: nextDirection,
+                                                };
+                                              });
+                                              applySorts(nextSorts);
+                                              setOpenSortFieldId(null);
+                                            }}
+                                          >
+                                            {iconSrc ? (
+                                              <img
+                                                alt=""
+                                                className="airtable-sort-field-menu-icon"
+                                                src={iconSrc}
+                                              />
+                                            ) : (
+                                              <span
+                                                className="airtable-sort-field-menu-icon"
+                                                aria-hidden="true"
+                                              />
+                                            )}
+                                            <span>{column.name}</span>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="airtable-sort-direction absolute"
+                                    style={{
+                                      left: sortDirectionLeft,
+                                      width: sortDirectionWidth,
+                                    }}
+                                    onClick={() => {
+                                      setOpenSortDirectionId((prev) =>
+                                        prev === sortItem.columnId ? null : sortItem.columnId
+                                      );
+                                      setOpenSortFieldId(null);
+                                      setIsAddSortMenuOpen(false);
+                                    }}
+                                    aria-expanded={isDirectionMenuOpen}
+                                  >
+                                    <span>
+                                      {sortItem.direction === "asc"
+                                        ? directionLabels.asc
+                                        : directionLabels.desc}
+                                    </span>
+                                    <span className="ml-auto airtable-nav-chevron rotate-90" />
+                                  </button>
+                                  {isDirectionMenuOpen && (
+                                    <div
+                                      className="airtable-sort-direction-menu absolute z-10"
+                                      style={{
+                                        left: sortDirectionLeft,
+                                        top: rowTop + sortFieldHeight + 4,
+                                        width: sortDirectionWidth,
+                                        height: 73,
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        className="airtable-sort-direction-option"
+                                        style={{ top: 12 }}
+                                        onClick={() => {
+                                          const nextSorts = sortRows.map((item) =>
+                                            item.columnId === sortItem.columnId
+                                              ? { ...item, direction: "asc" }
+                                              : item
+                                          );
+                                          applySorts(nextSorts);
+                                          setOpenSortDirectionId(null);
+                                        }}
+                                      >
+                                        {directionLabels.asc}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="airtable-sort-direction-option"
+                                        style={{ top: 48 }}
+                                        onClick={() => {
+                                          const nextSorts = sortRows.map((item) =>
+                                            item.columnId === sortItem.columnId
+                                              ? { ...item, direction: "desc" }
+                                              : item
+                                          );
+                                          applySorts(nextSorts);
+                                          setOpenSortDirectionId(null);
+                                        }}
+                                      >
+                                        {directionLabels.desc}
+                                      </button>
+                                    </div>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="airtable-sort-remove absolute"
+                                    style={{ left: sortRemoveLeft, top: removeTop }}
+                                    onClick={() => {
+                                      const nextSorts = sortRows.filter(
+                                        (item) => item.columnId !== sortItem.columnId
+                                      );
+                                      applySorts(nextSorts.length ? nextSorts : null);
+                                      setOpenSortDirectionId(null);
+                                      setOpenSortFieldId(null);
+                                    }}
+                                    aria-label="Remove sort"
+                                  >
+                                    <img alt="" className="h-[12px] w-[12px]" src={xIcon.src} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="airtable-sort-reorder absolute"
+                                    style={{ left: sortReorderLeft, top: reorderTop }}
+                                    onMouseDown={(event) =>
+                                      handleSortDragStart(event, sortItem.columnId)
+                                    }
+                                    aria-label="Reorder sort"
+                                  >
+                                    <img
+                                      alt=""
+                                      style={{ width: sortReorderWidth, height: 13 }}
+                                      src={reorderIcon.src}
+                                    />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                            <div className="absolute" style={{ left: 23, top: sortAddTop }}>
+                              <button
+                                type="button"
+                                className="airtable-sort-add"
+                                disabled={remainingSortColumns.length === 0}
+                                onClick={() => {
+                                  if (!remainingSortColumns.length) return;
+                                  setIsAddSortMenuOpen((prev) => !prev);
+                                  setOpenSortDirectionId(null);
+                                  setOpenSortFieldId(null);
                                 }}
+                                aria-expanded={isAddSortMenuOpen}
                               >
-                                <button
-                                  type="button"
-                                  className="airtable-sort-direction-option"
-                                  style={{ top: 12 }}
-                                  onClick={() => {
-                                    if (sortConfig) {
-                                      applySort({ ...sortConfig, direction: "asc" });
-                                    }
-                                    setIsSortDirectionOpen(false);
+                                <span className="airtable-plus-icon" aria-hidden="true" />
+                                <span>Add another sort</span>
+                              </button>
+                              {isAddSortMenuOpen && remainingSortColumns.length > 0 && (
+                                <div
+                                  className="airtable-sort-add-menu absolute z-10"
+                                  style={{
+                                    top: "calc(100% + 7px)",
+                                    width: sortAddMenuWidth,
+                                    height: sortAddMenuHeight,
                                   }}
                                 >
-                                  A → Z
-                                </button>
-                                <button
-                                  type="button"
-                                  className="airtable-sort-direction-option"
-                                  style={{ top: 48 }}
-                                  onClick={() => {
-                                    if (sortConfig) {
-                                      applySort({ ...sortConfig, direction: "desc" });
-                                    }
-                                    setIsSortDirectionOpen(false);
-                                  }}
-                                >
-                                  Z → A
-                                </button>
-                              </div>
-                            )}
-                            <button
-                              type="button"
-                              className="absolute"
-                              style={{ left: 422, top: sortFieldTop + 8 }}
-                              onClick={() => {
-                                applySort(null);
-                                setIsSortDirectionOpen(false);
-                                setIsSortFieldOpen(false);
-                              }}
-                              aria-label="Clear sort"
-                            >
-                              <img alt="" className="h-[12px] w-[12px]" src={xIcon.src} />
-                            </button>
-                            <button
-                              type="button"
-                              className="airtable-sort-add"
-                              style={{ left: 23, top: sortAddTop }}
-                            >
-                              <span
-                                className="airtable-plus-icon"
-                                aria-hidden="true"
-                              />
-                              <span>Add another sort</span>
-                            </button>
+                                  <div
+                                    className="absolute text-[13px] font-normal text-[#757575]"
+                                    style={{ left: 10, top: 10 }}
+                                  >
+                                    Find a field
+                                  </div>
+                                  <div
+                                    ref={sortAddMenuListRef}
+                                    className="airtable-sort-add-menu-list absolute left-0 right-0"
+                                    style={{
+                                      top: sortAddMenuFirstRowTop,
+                                      height: sortAddMenuListHeight,
+                                      overflowY:
+                                        sortAddMenuContentHeight > sortAddMenuHeight
+                                          ? "auto"
+                                          : "hidden",
+                                    }}
+                                  >
+                                    <div
+                                      className="relative w-full"
+                                      style={{ height: sortAddVirtualizerSize }}
+                                    >
+                                      {sortAddVirtualItems.map((virtualRow) => {
+                                        const column =
+                                          remainingSortColumns[virtualRow.index];
+                                        if (!column) return null;
+                                        const iconSpec = getSortAddMenuIconSpec(
+                                          column.name,
+                                          column.type
+                                        );
+                                        return (
+                                          <button
+                                            key={column.id}
+                                            type="button"
+                                            className="airtable-sort-add-menu-item"
+                                            style={{
+                                              top: virtualRow.start,
+                                              height: sortAddMenuRowHeight,
+                                            }}
+                                            onClick={() => {
+                                              const nextSorts = [
+                                                ...sortRows,
+                                                { columnId: column.id, direction: "asc" },
+                                              ];
+                                              applySorts(nextSorts);
+                                              setIsAddSortMenuOpen(false);
+                                            }}
+                                          >
+                                            <img
+                                              alt=""
+                                              className="airtable-sort-add-menu-icon absolute top-1/2 -translate-y-1/2"
+                                              style={{
+                                                left: iconSpec.left,
+                                                width: iconSpec.width,
+                                                height: iconSpec.height,
+                                              }}
+                                              src={iconSpec.src}
+                                            />
+                                            <span
+                                              className="airtable-sort-add-menu-label absolute top-1/2 -translate-y-1/2"
+                                              style={{ left: 30 }}
+                                            >
+                                              {column.name}
+                                            </span>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                             <div
-                              className="absolute left-px right-px top-[138px] h-px bg-[#E4E4E4]"
+                              className="absolute left-px right-px h-px bg-[#E4E4E4]"
+                              style={{ top: sortFooterTop - 1 }}
                               aria-hidden="true"
                             />
                             <div
@@ -1311,7 +1842,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             </div>
                             {activeColumns.map((column, index) => {
                               const top = 57 + 32 * (index + 1);
-                              const iconSrc = columnIconMap[column.name];
+                              const iconSrc = getColumnIconSrc(
+                                column.name,
+                                column.type
+                              );
                               return (
                                 <button
                                   key={column.id}
@@ -1319,8 +1853,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   className="airtable-sort-option"
                                   style={{ top }}
                                   onClick={() => {
-                                    applySort({ columnId: column.id, direction: "asc" });
-                                    setIsSortDirectionOpen(false);
+                                    applySorts([
+                                      { columnId: column.id, direction: "asc" },
+                                    ]);
+                                    setOpenSortDirectionId(null);
+                                    setOpenSortFieldId(null);
+                                    setIsAddSortMenuOpen(false);
                                   }}
                                 >
                                   {iconSrc ? (
@@ -1419,7 +1957,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               maxWidth: nameColumnWidth,
                               flex: "0 0 auto",
                               backgroundColor:
-                                sortConfig?.columnId === nameColumn.id
+                                sortedColumnIds.has(nameColumn.id)
                                   ? "var(--airtable-sort-header-bg)"
                                   : hoveredHeaderId === nameColumn.id
                                   ? "var(--airtable-hover-bg)"
@@ -1439,15 +1977,20 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               )
                             }
                           >
-                            {columnIconMap[nameColumn.name] && (
+                            {getColumnIconSrc(nameColumn.name, nameColumn.fieldType) && (
                               <img
                                 alt=""
                                 className={clsx(
                                   "h-[13px] w-[13px]",
-                                  sortConfig?.columnId === nameColumn.id &&
-                                    "airtable-column-icon--sorted"
+                                  sortedColumnIds.has(nameColumn.id) &&
+                                    "airtable-column-icon--sorted",
+                                  hoveredHeaderId === nameColumn.id &&
+                                    "airtable-column-icon--hover"
                                 )}
-                                src={columnIconMap[nameColumn.name]}
+                                src={getColumnIconSrc(
+                                  nameColumn.name,
+                                  nameColumn.fieldType
+                                )}
                               />
                             )}
                             <span>{nameColumn.name}</span>
@@ -1469,7 +2012,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                           if (!column) return null;
                           const cellStyle = headerCellBorder(column, false);
                           const isSortedColumn =
-                            column.type === "data" && sortConfig?.columnId === column.id;
+                            column.type === "data" && sortedColumnIds.has(column.id);
                           const backgroundColor =
                             isSortedColumn
                               ? "var(--airtable-sort-header-bg)"
@@ -1479,26 +2022,96 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
                           if (column.type === "add") {
                             return (
-                              <button
+                              <div
                                 key={column.id}
-                                type="button"
-                                onClick={handleAddColumn}
+                                className="relative"
                                 onMouseEnter={() => setHoveredHeaderId(column.id)}
                                 onMouseLeave={() => setHoveredHeaderId(null)}
-                                disabled={
-                                  activeColumns.length >= MAX_COLUMNS
-                                }
-                                className="flex h-[33px] cursor-pointer items-center justify-center airtable-secondary-font transition-colors disabled:cursor-not-allowed"
                                 style={{
                                   ...cellStyle,
                                   width: virtualColumn.size,
                                   flex: "0 0 auto",
                                   backgroundColor,
                                 }}
-                                aria-label="Add column"
                               >
-                                <span className="airtable-plus-icon" aria-hidden="true" />
-                              </button>
+                                <button
+                                  ref={addColumnButtonRef}
+                                  type="button"
+                                  onClick={() => {
+                                    if (activeColumns.length >= MAX_COLUMNS) return;
+                                    setIsAddColumnMenuOpen((prev) => !prev);
+                                  }}
+                                  disabled={activeColumns.length >= MAX_COLUMNS}
+                                  className="flex h-[33px] w-full cursor-pointer items-center justify-center airtable-secondary-font transition-colors disabled:cursor-not-allowed"
+                                  aria-label="Add column"
+                                >
+                                  <span className="airtable-plus-icon" aria-hidden="true" />
+                                </button>
+                                {isAddColumnMenuOpen && (
+                                  <div
+                                    ref={addColumnMenuRef}
+                                    className="airtable-add-column-menu airtable-dropdown-surface absolute z-50"
+                                    style={{
+                                      width: ADD_COLUMN_MENU_WIDTH,
+                                      top: "calc(100% + 2px)",
+                                      right: 5,
+                                    }}
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    <div className="airtable-add-column-header">
+                                      <div className="airtable-add-column-search">
+                                        <span
+                                          className="airtable-search-icon text-[#156FE2]"
+                                          aria-hidden="true"
+                                        />
+                                        <span className="airtable-add-column-placeholder">
+                                          Find a field type
+                                        </span>
+                                      </div>
+                                      <img
+                                        alt=""
+                                        className="airtable-add-column-help"
+                                        src={helpIcon.src}
+                                      />
+                                    </div>
+                                    <div
+                                      className="airtable-dropdown-separator"
+                                      style={{ marginLeft: 6, marginTop: 6 }}
+                                      aria-hidden="true"
+                                    />
+                                    <div className="airtable-add-column-body">
+                                      <div className="airtable-dropdown-heading">
+                                        Standard fields
+                                      </div>
+                                      <div className="airtable-add-column-options">
+                                        {addColumnTypeOptions.map((option) => (
+                                          <button
+                                            key={option.type}
+                                            type="button"
+                                            className="airtable-add-column-option airtable-dropdown-body"
+                                            style={{
+                                              width: ADD_COLUMN_OPTION_WIDTH,
+                                              paddingLeft: option.icon.paddingLeft,
+                                              gap: option.icon.gap,
+                                            }}
+                                            onClick={() => handleAddColumn(option.type)}
+                                          >
+                                            <img
+                                              alt=""
+                                              style={{
+                                                width: option.icon.width,
+                                                height: option.icon.height,
+                                              }}
+                                              src={option.icon.src}
+                                            />
+                                            <span>{option.label}</span>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             );
                           }
 
@@ -1523,14 +2136,19 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 )
                               }
                             >
-                              {columnIconMap[column.name] && (
+                              {getColumnIconSrc(column.name, column.fieldType) && (
                                 <img
                                   alt=""
                                   className={clsx(
                                     "h-[13px] w-[13px]",
-                                    isSortedColumn && "airtable-column-icon--sorted"
+                                    isSortedColumn && "airtable-column-icon--sorted",
+                                    hoveredHeaderId === column.id &&
+                                      "airtable-column-icon--hover"
                                   )}
-                                  src={columnIconMap[column.name]}
+                                  src={getColumnIconSrc(
+                                    column.name,
+                                    column.fieldType
+                                  )}
                                 />
                               )}
                               <span>{column.name}</span>
@@ -1603,90 +2221,188 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             }
                           >
                             {nameColumn && (
-                              <div
-                                className="relative flex h-[33px] items-center px-2 overflow-visible"
-                                style={{
-                                  ...bodyCellBorder(nameColumn, true, isLastRow),
-                                  width: nameColumnWidth,
-                                  minWidth: nameColumnWidth,
-                                  maxWidth: nameColumnWidth,
-                                  flex: "0 0 auto",
-                                  backgroundColor:
-                                    sortConfig?.columnId === nameColumn.id
-                                      ? "var(--airtable-sort-column-bg)"
-                                      : selectedCell?.rowId === row.id &&
-                                        selectedCell?.columnId === nameColumn.id
-                                      ? "#ffffff"
-                                      : hoveredRowId === row.id
-                                      ? "var(--airtable-hover-bg)"
-                                      : selectedCell?.rowId === row.id
-                                      ? "var(--airtable-hover-bg)"
-                                      : "#ffffff",
-                                  position: "sticky",
-                                  left: 0,
-                                  zIndex: 25,
-                                }}
-                              >
-                                <input
-                                  value={
-                                    cellEdits[row.id]?.[nameColumn.id] ??
-                                    row[nameColumn.id] ??
-                                    ""
-                                  }
-                                  onChange={(event) =>
-                                    handleCellChange(
-                                      row.id,
-                                      nameColumn.id,
-                                      event.target.value
-                                    )
-                                  }
-                                  onBlur={() =>
-                                    handleCellCommit(
-                                      row.id,
-                                      nameColumn.id,
-                                      cellEdits[row.id]?.[nameColumn.id] ??
-                                        (row[nameColumn.id] ?? ""),
-                                      row[nameColumn.id] ?? ""
-                                    )
-                                  }
-                                  onFocus={() =>
-                                    setSelectedCell({
-                                      rowId: row.id,
-                                      columnId: nameColumn.id,
-                                    })
-                                  }
-                                  onClick={() =>
-                                    setSelectedCell({
-                                      rowId: row.id,
-                                      columnId: nameColumn.id,
-                                    })
-                                  }
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                      event.currentTarget.blur();
-                                      return;
+                              (() => {
+                                const nameOriginalValue = row[nameColumn.id] ?? "";
+                                const nameEditedValue =
+                                  cellEdits[row.id]?.[nameColumn.id] ??
+                                  nameOriginalValue;
+                                const nameIsSelected =
+                                  selectedCell?.rowId === row.id &&
+                                  selectedCell?.columnId === nameColumn.id;
+                                const nameIsLongText =
+                                  nameColumn.fieldType === "long_text";
+                                const nameExpanded =
+                                  nameIsLongText &&
+                                  longTextEditingCell?.rowId === row.id &&
+                                  longTextEditingCell?.columnId === nameColumn.id;
+                                return (
+                                  <div
+                                    className="relative flex overflow-visible px-2"
+                                    style={{
+                                      ...bodyCellBorder(nameColumn, true, isLastRow),
+                                      width: nameColumnWidth,
+                                      minWidth: nameColumnWidth,
+                                      maxWidth: nameColumnWidth,
+                                      flex: "0 0 auto",
+                                      height: nameExpanded ? LONG_TEXT_HEIGHT : 33,
+                                      alignItems: nameExpanded ? "flex-start" : "center",
+                                      backgroundColor:
+                                        sortedColumnIds.has(nameColumn.id)
+                                          ? "var(--airtable-sort-column-bg)"
+                                          : nameIsSelected
+                                          ? "#ffffff"
+                                          : hoveredRowId === row.id
+                                          ? "var(--airtable-hover-bg)"
+                                          : selectedCell?.rowId === row.id
+                                          ? "var(--airtable-hover-bg)"
+                                          : "#ffffff",
+                                      position: "sticky",
+                                      left: 0,
+                                      zIndex: nameExpanded ? 30 : 25,
+                                    }}
+                                    onClick={() =>
+                                      {
+                                        setSelectedCell({
+                                          rowId: row.id,
+                                          columnId: nameColumn.id,
+                                        });
+                                        if (nameIsLongText) {
+                                          setLongTextEditingCell({
+                                            rowId: row.id,
+                                            columnId: nameColumn.id,
+                                          });
+                                        }
+                                      }
                                     }
-                                    handleCellKeyDown(event, row.id, nameColumn.id);
-                                  }}
-                                  ref={(node) => {
-                                    const key = `${row.id}-${nameColumn.id}`;
-                                    if (node) {
-                                      cellRefs.current.set(key, node);
-                                    } else {
-                                      cellRefs.current.delete(key);
-                                    }
-                                  }}
-                                  className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
-                                  aria-label={`${nameColumn.name} cell`}
-                                />
-                                {selectedCell?.rowId === row.id &&
-                                  selectedCell?.columnId === nameColumn.id && (
-                                    <>
-                                      <div className="pointer-events-none absolute inset-0 z-10 rounded-[2px] border-2 border-[#156FE2]" />
-                                      <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
-                                    </>
-                                  )}
-                              </div>
+                                  >
+                                    {nameIsLongText ? (
+                                      <>
+                                        {!nameExpanded && (
+                                          <div className="airtable-long-text-preview">
+                                            {nameEditedValue}
+                                          </div>
+                                        )}
+                                        {nameExpanded && (
+                                          <>
+                                            <textarea
+                                              value={nameEditedValue}
+                                              onChange={(event) =>
+                                                handleCellChange(
+                                                  row.id,
+                                                  nameColumn.id,
+                                                  event.target.value
+                                                )
+                                              }
+                                              onBlur={() =>
+                                                {
+                                                  handleCellCommit(
+                                                    row.id,
+                                                    nameColumn.id,
+                                                    nameEditedValue,
+                                                    nameOriginalValue
+                                                  );
+                                                  setLongTextEditingCell(null);
+                                                }
+                                              }
+                                              onFocus={() =>
+                                                {
+                                                  setSelectedCell({
+                                                    rowId: row.id,
+                                                    columnId: nameColumn.id,
+                                                  });
+                                                  setLongTextEditingCell({
+                                                    rowId: row.id,
+                                                    columnId: nameColumn.id,
+                                                  });
+                                                }
+                                              }
+                                              onKeyDown={(event) => {
+                                                if (event.key === "Tab") {
+                                                  handleCellKeyDown(
+                                                    event,
+                                                    row.id,
+                                                    nameColumn.id
+                                                  );
+                                                }
+                                              }}
+                                              ref={(node) => {
+                                                const key = `${row.id}-${nameColumn.id}`;
+                                                if (node) {
+                                                  cellRefs.current.set(key, node);
+                                                } else {
+                                                  cellRefs.current.delete(key);
+                                                }
+                                              }}
+                                              className="airtable-long-text-input airtable-long-text-input--expanded"
+                                              style={{ height: LONG_TEXT_HEIGHT }}
+                                              aria-label={`${nameColumn.name} cell`}
+                                            />
+                                            <img
+                                              alt=""
+                                              className="airtable-long-text-selection"
+                                              src={longLineSelectionIcon.src}
+                                            />
+                                          </>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <input
+                                        value={nameEditedValue}
+                                        onChange={(event) =>
+                                          handleCellChange(
+                                            row.id,
+                                            nameColumn.id,
+                                            event.target.value
+                                          )
+                                        }
+                                        onBlur={() =>
+                                          handleCellCommit(
+                                            row.id,
+                                            nameColumn.id,
+                                            nameEditedValue,
+                                            nameOriginalValue
+                                          )
+                                        }
+                                        onFocus={() =>
+                                          setSelectedCell({
+                                            rowId: row.id,
+                                            columnId: nameColumn.id,
+                                          })
+                                        }
+                                        onClick={() =>
+                                          setSelectedCell({
+                                            rowId: row.id,
+                                            columnId: nameColumn.id,
+                                          })
+                                        }
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") {
+                                            event.currentTarget.blur();
+                                            return;
+                                          }
+                                          handleCellKeyDown(event, row.id, nameColumn.id);
+                                        }}
+                                        ref={(node) => {
+                                          const key = `${row.id}-${nameColumn.id}`;
+                                          if (node) {
+                                            cellRefs.current.set(key, node);
+                                          } else {
+                                            cellRefs.current.delete(key);
+                                          }
+                                        }}
+                                        className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
+                                        aria-label={`${nameColumn.name} cell`}
+                                      />
+                                    )}
+                                    {nameIsSelected && (
+                                      <>
+                                        <div className="pointer-events-none absolute inset-0 z-10 rounded-[2px] border-2 border-[#156FE2]" />
+                                        <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })()
                             )}
                             {scrollablePaddingLeft > 0 && (
                               <div style={{ width: scrollablePaddingLeft }} />
@@ -1700,7 +2416,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 selectedCell?.columnId === column.id;
                               const isSortedColumn =
                                 column.type === "data" &&
-                                sortConfig?.columnId === column.id;
+                                sortedColumnIds.has(column.id);
                               const isRowHovered = hoveredRowId === row.id;
                               const rowHasSelection = selectedCell?.rowId === row.id;
                               const cellBackground = isSortedColumn
@@ -1728,65 +2444,157 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 const originalValue = row[column.id] ?? "";
                                 const editedValue =
                                   cellEdits[row.id]?.[column.id] ?? originalValue;
+                                const isLongText = column.fieldType === "long_text";
+                                const isExpanded =
+                                  isLongText &&
+                                  longTextEditingCell?.rowId === row.id &&
+                                  longTextEditingCell?.columnId === column.id;
 
                                 return (
                                 <div
                                   key={`${row.id}-${column.id}`}
-                                  className="relative flex h-[33px] items-center px-2 overflow-visible"
+                                  className="relative flex overflow-visible px-2"
                                   style={{
                                     ...cellStyle,
                                     width: virtualColumn.size,
                                     flex: "0 0 auto",
+                                    height: isExpanded ? LONG_TEXT_HEIGHT : 33,
+                                    alignItems: isExpanded ? "flex-start" : "center",
                                     backgroundColor: cellBackground,
+                                    zIndex: isExpanded ? 20 : undefined,
                                     }}
+                                  onClick={() => {
+                                    setSelectedCell({
+                                      rowId: row.id,
+                                      columnId: column.id,
+                                    });
+                                    if (isLongText) {
+                                      setLongTextEditingCell({
+                                        rowId: row.id,
+                                        columnId: column.id,
+                                      });
+                                    }
+                                  }}
                                   >
-                                    <input
-                                      value={editedValue}
-                                      onChange={(event) =>
-                                        handleCellChange(
-                                          row.id,
-                                          column.id,
-                                          event.target.value
-                                        )
-                                      }
-                                      onBlur={() =>
-                                        handleCellCommit(
-                                          row.id,
-                                          column.id,
-                                          editedValue,
-                                          originalValue
-                                        )
-                                      }
-                                      onFocus={() =>
-                                        setSelectedCell({
-                                          rowId: row.id,
-                                          columnId: column.id,
-                                        })
-                                      }
-                                      onClick={() =>
-                                        setSelectedCell({
-                                          rowId: row.id,
-                                          columnId: column.id,
-                                        })
-                                      }
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.currentTarget.blur();
-                                          return;
+                                    {isLongText ? (
+                                      <>
+                                        {!isExpanded && (
+                                          <div className="airtable-long-text-preview">
+                                            {editedValue}
+                                          </div>
+                                        )}
+                                        {isExpanded && (
+                                          <>
+                                            <textarea
+                                              value={editedValue}
+                                              onChange={(event) =>
+                                                handleCellChange(
+                                                  row.id,
+                                                  column.id,
+                                                  event.target.value
+                                                )
+                                              }
+                                              onBlur={() =>
+                                                {
+                                                  handleCellCommit(
+                                                    row.id,
+                                                    column.id,
+                                                    editedValue,
+                                                    originalValue
+                                                  );
+                                                  setLongTextEditingCell(null);
+                                                }
+                                              }
+                                              onFocus={() =>
+                                                {
+                                                  setSelectedCell({
+                                                    rowId: row.id,
+                                                    columnId: column.id,
+                                                  });
+                                                  setLongTextEditingCell({
+                                                    rowId: row.id,
+                                                    columnId: column.id,
+                                                  });
+                                                }
+                                              }
+                                              onKeyDown={(event) => {
+                                                if (event.key === "Tab") {
+                                                  handleCellKeyDown(
+                                                    event,
+                                                    row.id,
+                                                    column.id
+                                                  );
+                                                }
+                                              }}
+                                              ref={(node) => {
+                                                const key = `${row.id}-${column.id}`;
+                                                if (node) {
+                                                  cellRefs.current.set(key, node);
+                                                } else {
+                                                  cellRefs.current.delete(key);
+                                                }
+                                              }}
+                                              className="airtable-long-text-input airtable-long-text-input--expanded"
+                                              style={{ height: LONG_TEXT_HEIGHT }}
+                                              aria-label={`${column.name} cell`}
+                                            />
+                                            <img
+                                              alt=""
+                                              className="airtable-long-text-selection"
+                                              src={longLineSelectionIcon.src}
+                                            />
+                                          </>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <input
+                                        value={editedValue}
+                                        onChange={(event) =>
+                                          handleCellChange(
+                                            row.id,
+                                            column.id,
+                                            event.target.value
+                                          )
                                         }
-                                        handleCellKeyDown(event, row.id, column.id);
-                                      }}
-                                      ref={(node) => {
-                                        const key = `${row.id}-${column.id}`;
-                                        if (node) {
-                                          cellRefs.current.set(key, node);
-                                        } else {
-                                          cellRefs.current.delete(key);
+                                        onBlur={() =>
+                                          handleCellCommit(
+                                            row.id,
+                                            column.id,
+                                            editedValue,
+                                            originalValue
+                                          )
                                         }
-                                      }}
-                                      className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
-                                      aria-label={`${column.name} cell`}
-                                    />
+                                        onFocus={() =>
+                                          setSelectedCell({
+                                            rowId: row.id,
+                                            columnId: column.id,
+                                          })
+                                        }
+                                        onClick={() =>
+                                          setSelectedCell({
+                                            rowId: row.id,
+                                            columnId: column.id,
+                                          })
+                                        }
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") {
+                                            event.currentTarget.blur();
+                                            return;
+                                          }
+                                          handleCellKeyDown(event, row.id, column.id);
+                                        }}
+                                        ref={(node) => {
+                                          const key = `${row.id}-${column.id}`;
+                                          if (node) {
+                                            cellRefs.current.set(key, node);
+                                          } else {
+                                            cellRefs.current.delete(key);
+                                          }
+                                        }}
+                                        className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
+                                        aria-label={`${column.name} cell`}
+                                      />
+                                    )}
                                     {isSelected && (
                                       <>
                                         <div className="pointer-events-none absolute inset-0 z-10 rounded-[2px] border-2 border-[#156FE2]" />
