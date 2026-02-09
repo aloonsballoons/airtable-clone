@@ -1576,11 +1576,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                 }
                                                 const isSameColumn =
                                                   column.id === sortItem.columnId;
-                                                const nextDirection = isSameColumn
-                                                  ? item.direction
-                                                  : coerceColumnType(column.type) === "number"
-                                                  ? "asc"
-                                                  : item.direction;
+                                                const nextDirection: SortConfig["direction"] =
+                                                  isSameColumn
+                                                    ? item.direction
+                                                    : coerceColumnType(column.type) === "number"
+                                                    ? "asc"
+                                                    : item.direction;
                                                 return {
                                                   columnId: column.id,
                                                   direction: nextDirection,
