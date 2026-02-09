@@ -1570,7 +1570,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             className="airtable-sort-field-menu-item"
                                             style={{ top: itemTop }}
                                             onClick={() => {
-                                              const nextSorts = sortRows.map((item) => {
+                                              const nextSorts: SortConfig[] = sortRows.map(
+                                                (item): SortConfig => {
                                                 if (item.columnId !== sortItem.columnId) {
                                                   return item;
                                                 }
@@ -1586,7 +1587,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                   columnId: column.id,
                                                   direction: nextDirection,
                                                 };
-                                              });
+                                              }
+                                              );
                                               applySorts(nextSorts);
                                               setOpenSortFieldId(null);
                                             }}
