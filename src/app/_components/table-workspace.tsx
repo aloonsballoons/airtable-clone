@@ -2473,7 +2473,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   selectedCell?.columnId === nameColumn.id;
                                 return (
                                   <div
-                                    className="relative flex overflow-visible px-2"
+                                    className={clsx(
+                                      "relative flex overflow-visible px-2",
+                                      nameIsSelected &&
+                                        (nameIsEditing
+                                          ? "airtable-cell--editing"
+                                          : "airtable-cell--selected")
+                                    )}
                                     style={{
                                       ...bodyCellBorder(nameColumn, true, isLastRow),
                                       width: nameColumnWidth,
@@ -2505,57 +2511,62 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     {nameIsLongText ? (
                                       <>
                                         {!nameExpanded ? (
-                                          <input
-                                            value={nameEditedValue}
-                                            onChange={(event) =>
-                                              handleCellChange(
-                                                row.id,
-                                                nameColumn.id,
-                                                event.target.value
-                                              )
-                                            }
-                                            onBlur={() => {
-                                              if (!nameIsEditing) return;
-                                              handleCellCommit(
-                                                row.id,
-                                                nameColumn.id,
-                                                nameEditedValue
-                                              );
-                                              setEditingCell(null);
-                                            }}
-                                            onFocus={() =>
-                                              setSelectedCell({
-                                                rowId: row.id,
-                                                columnId: nameColumn.id,
-                                              })
-                                            }
-                                            onDoubleClick={() =>
-                                              beginEditExisting(row.id, nameColumn.id)
-                                            }
-                                            onKeyDown={(event) =>
-                                              handleCellKeyDown(
-                                                event,
-                                                row.id,
-                                                nameColumn.id,
-                                                nameColumn.fieldType,
-                                                nameEditedValue
-                                              )
-                                            }
-                                            ref={(node) => {
-                                              const key = `${row.id}-${nameColumn.id}`;
-                                              if (node) {
-                                                cellRefs.current.set(key, node);
-                                              } else {
-                                                cellRefs.current.delete(key);
+                                          <>
+                                            <input
+                                              value={nameEditedValue}
+                                              onChange={(event) =>
+                                                handleCellChange(
+                                                  row.id,
+                                                  nameColumn.id,
+                                                  event.target.value
+                                                )
                                               }
-                                            }}
-                                            className={clsx(
-                                              "airtable-long-text-input airtable-long-text-input--collapsed",
-                                              !nameIsEditing && "airtable-cell-input--inactive"
-                                            )}
-                                            readOnly={!nameIsEditing}
-                                            aria-label={`${nameColumn.name} cell`}
-                                          />
+                                              onBlur={() => {
+                                                if (!nameIsEditing) return;
+                                                handleCellCommit(
+                                                  row.id,
+                                                  nameColumn.id,
+                                                  nameEditedValue
+                                                );
+                                                setEditingCell(null);
+                                              }}
+                                              onFocus={() =>
+                                                setSelectedCell({
+                                                  rowId: row.id,
+                                                  columnId: nameColumn.id,
+                                                })
+                                              }
+                                              onDoubleClick={() =>
+                                                beginEditExisting(row.id, nameColumn.id)
+                                              }
+                                              onKeyDown={(event) =>
+                                                handleCellKeyDown(
+                                                  event,
+                                                  row.id,
+                                                  nameColumn.id,
+                                                  nameColumn.fieldType,
+                                                  nameEditedValue
+                                                )
+                                              }
+                                              ref={(node) => {
+                                                const key = `${row.id}-${nameColumn.id}`;
+                                                if (node) {
+                                                  cellRefs.current.set(key, node);
+                                                } else {
+                                                  cellRefs.current.delete(key);
+                                                }
+                                              }}
+                                              className={clsx(
+                                                "airtable-long-text-input airtable-long-text-input--collapsed",
+                                                !nameIsEditing && "airtable-cell-input--inactive"
+                                              )}
+                                              readOnly={!nameIsEditing}
+                                              aria-label={`${nameColumn.name} cell`}
+                                            />
+                                            <div className="airtable-long-text-display">
+                                              {nameEditedValue}
+                                            </div>
+                                          </>
                                         ) : (
                                           <>
                                             <textarea
@@ -2680,19 +2691,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         aria-label={`${nameColumn.name} cell`}
                                       />
                                     )}
-                                    {nameIsSelected && (
-                                      <>
-                                        <div
-                                          className={clsx(
-                                            "pointer-events-none absolute inset-0 z-10 rounded-[2px] border-[#156FE2]",
-                                            nameIsEditing ? "border-4" : "border-2"
-                                          )}
-                                          style={{ inset: nameIsEditing ? -4 : -2 }}
-                                        />
-                                        {!nameIsEditing && (
-                                          <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
-                                        )}
-                                      </>
+                                    {nameIsSelected && !nameIsEditing && (
+                                      <div className="airtable-cell-handle" />
                                     )}
                                   </div>
                                 );
@@ -2753,7 +2753,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 return (
                                 <div
                                   key={`${row.id}-${column.id}`}
-                                  className="relative flex overflow-visible px-2"
+                                  className={clsx(
+                                    "relative flex overflow-visible px-2",
+                                    isSelected &&
+                                      (isEditing
+                                        ? "airtable-cell--editing"
+                                        : "airtable-cell--selected")
+                                  )}
                                   style={{
                                     ...cellStyle,
                                     width: virtualColumn.size,
@@ -2762,6 +2768,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     alignItems: isExpanded ? "flex-start" : "center",
                                     backgroundColor: cellBackground,
                                     zIndex: isExpanded ? 20 : undefined,
+                                    ...(isSelected
+                                      ? ({ ["--cell-outline-left" as string]: "0px" } as Record<
+                                          string,
+                                          string
+                                        >)
+                                      : null),
                                     }}
                                   onClick={() => {
                                     if (!isEditing) {
@@ -2772,57 +2784,62 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     {isLongText ? (
                                       <>
                                         {!isExpanded ? (
-                                          <input
-                                            value={editedValue}
-                                            onChange={(event) =>
-                                              handleCellChange(
-                                                row.id,
-                                                column.id,
-                                                event.target.value
-                                              )
-                                            }
-                                            onBlur={() => {
-                                              if (!isEditing) return;
-                                              handleCellCommit(
-                                                row.id,
-                                                column.id,
-                                                editedValue
-                                              );
-                                              setEditingCell(null);
-                                            }}
-                                            onFocus={() =>
-                                              setSelectedCell({
-                                                rowId: row.id,
-                                                columnId: column.id,
-                                              })
-                                            }
-                                            onDoubleClick={() =>
-                                              beginEditExisting(row.id, column.id)
-                                            }
-                                            onKeyDown={(event) =>
-                                              handleCellKeyDown(
-                                                event,
-                                                row.id,
-                                                column.id,
-                                                column.fieldType,
-                                                editedValue
-                                              )
-                                            }
-                                            ref={(node) => {
-                                              const key = `${row.id}-${column.id}`;
-                                              if (node) {
-                                                cellRefs.current.set(key, node);
-                                              } else {
-                                                cellRefs.current.delete(key);
+                                          <>
+                                            <input
+                                              value={editedValue}
+                                              onChange={(event) =>
+                                                handleCellChange(
+                                                  row.id,
+                                                  column.id,
+                                                  event.target.value
+                                                )
                                               }
-                                            }}
-                                            className={clsx(
-                                              "airtable-long-text-input airtable-long-text-input--collapsed",
-                                              !isEditing && "airtable-cell-input--inactive"
-                                            )}
-                                            readOnly={!isEditing}
-                                            aria-label={`${column.name} cell`}
-                                          />
+                                              onBlur={() => {
+                                                if (!isEditing) return;
+                                                handleCellCommit(
+                                                  row.id,
+                                                  column.id,
+                                                  editedValue
+                                                );
+                                                setEditingCell(null);
+                                              }}
+                                              onFocus={() =>
+                                                setSelectedCell({
+                                                  rowId: row.id,
+                                                  columnId: column.id,
+                                                })
+                                              }
+                                              onDoubleClick={() =>
+                                                beginEditExisting(row.id, column.id)
+                                              }
+                                              onKeyDown={(event) =>
+                                                handleCellKeyDown(
+                                                  event,
+                                                  row.id,
+                                                  column.id,
+                                                  column.fieldType,
+                                                  editedValue
+                                                )
+                                              }
+                                              ref={(node) => {
+                                                const key = `${row.id}-${column.id}`;
+                                                if (node) {
+                                                  cellRefs.current.set(key, node);
+                                                } else {
+                                                  cellRefs.current.delete(key);
+                                                }
+                                              }}
+                                              className={clsx(
+                                                "airtable-long-text-input airtable-long-text-input--collapsed",
+                                                !isEditing && "airtable-cell-input--inactive"
+                                              )}
+                                              readOnly={!isEditing}
+                                              aria-label={`${column.name} cell`}
+                                            />
+                                            <div className="airtable-long-text-display">
+                                              {editedValue}
+                                            </div>
+                                          </>
                                         ) : (
                                           <>
                                             <textarea
@@ -2947,19 +2964,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         aria-label={`${column.name} cell`}
                                       />
                                     )}
-                                    {isSelected && (
-                                      <>
-                                        <div
-                                          className={clsx(
-                                            "pointer-events-none absolute inset-0 z-10 rounded-[2px] border-[#156FE2]",
-                                            isEditing ? "border-4" : "border-2"
-                                          )}
-                                          style={{ inset: isEditing ? -4 : -2 }}
-                                        />
-                                        {!isEditing && (
-                                          <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
-                                        )}
-                                      </>
+                                    {isSelected && !isEditing && (
+                                      <div className="airtable-cell-handle" />
                                     )}
                                   </div>
                                 );

@@ -356,8 +356,75 @@ body {
   overflow-y: auto;
 }
 
+.airtable-long-text-input--collapsed {
+  height: 100%;
+  padding: 0;
+  line-height: 33px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.airtable-long-text-display {
+  position: absolute;
+  inset: 0;
+  padding: 0 8px;
+  line-height: 33px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 0;
+}
+
 .airtable-long-text-input--expanded {
   display: block;
+}
+
+.airtable-cell--selected,
+.airtable-cell--editing {
+  position: relative;
+}
+
+.airtable-cell--selected::after,
+.airtable-cell--editing::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+  z-index: 1;
+}
+
+.airtable-cell--selected::after {
+  top: var(--cell-outline-top, -2px);
+  right: var(--cell-outline-right, -2px);
+  bottom: var(--cell-outline-bottom, -2px);
+  left: var(--cell-outline-left, -2px);
+  border: 2px solid #156fe2;
+}
+
+.airtable-cell--editing::after {
+  top: var(--cell-outline-top, -4px);
+  right: var(--cell-outline-right, -4px);
+  bottom: var(--cell-outline-bottom, -4px);
+  left: var(--cell-outline-left, -4px);
+  border: 4px solid #156fe2;
+}
+
+.airtable-cell-handle {
+  pointer-events: none;
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1px solid #156fe2;
+  background: #ffffff;
+  border-radius: 1px;
+  right: -5px;
+  bottom: -5px;
+  z-index: 20;
 }
 
 .airtable-long-text-selection {
