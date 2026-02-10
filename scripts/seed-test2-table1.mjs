@@ -77,6 +77,7 @@ function parseArgs(argv) {
     table: "Table 1",
     count: 200,
     seed: 305,
+    overwrite: false,
     yes: false,
   };
 
@@ -87,6 +88,10 @@ function parseArgs(argv) {
 
     if (token === "--yes") {
       args.yes = true;
+      continue;
+    }
+    if (token === "--overwrite") {
+      args.overwrite = true;
       continue;
     }
     if (token === "--email" && next) {
@@ -145,6 +150,7 @@ function printHelpAndExit(code) {
       "  --table <name>    Table name (default: Table 1)",
       "  --count <n>       Rows to insert (default: 200)",
       "  --seed <n>        Faker seed (default: 305)",
+      "  --overwrite       Delete existing rows in the table before inserting",
       "  --yes             Execute (required; otherwise dry run)",
     ].join("\n"),
   );
@@ -154,6 +160,7 @@ function printHelpAndExit(code) {
 function valueForColumnName(name) {
   const normalized = name.trim().toLowerCase();
 
+  if (normalized === "column 6") return faker.number.int({ min: 0, max: 1_000_000 });
   if (normalized === "name") return faker.person.fullName();
   if (normalized === "notes") return faker.lorem.sentence({ min: 6, max: 12 });
   if (normalized === "assignee") return faker.person.fullName();
@@ -270,6 +277,7 @@ console.log(
     `- base: ${baseRecord.name} (${baseRecord.id})`,
     `- table: ${tableRecord.name} (${tableRecord.id})`,
     `- columns: ${columns.map((c) => c.name).join(", ")}`,
+    `- overwrite existing rows: ${args.overwrite ? "YES" : "no"}`,
     `- insert rows: ${args.count}`,
     `- faker seed: ${args.seed}`,
     args.yes ? "- mode: EXECUTE" : "- mode: DRY RUN (add --yes to execute)",
@@ -279,6 +287,12 @@ console.log(
 if (!args.yes) {
   await conn.end({ timeout: 5 });
   process.exit(0);
+}
+
+if (args.overwrite) {
+  await db.delete(rowTable).where(eq(rowTable.tableId, tableRecord.id));
+  // eslint-disable-next-line no-console
+  console.log("Deleted existing rows.");
 }
 
 const now = new Date();

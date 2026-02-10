@@ -149,6 +149,7 @@ function printHelpAndExit(code) {
 
 function valueForColumnName(name) {
   const normalized = name.trim().toLowerCase();
+  if (normalized === "column 6") return faker.number.int({ min: 0, max: 1_000_000 });
   if (normalized.includes("email")) return faker.internet.email();
   if (normalized.includes("date")) return faker.date.soon({ days: 30 }).toISOString();
   if (normalized.includes("url") || normalized.includes("link")) return faker.internet.url();

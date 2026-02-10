@@ -242,7 +242,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     rowId: string;
     columnId: string;
   } | null>(null);
-  const [longTextEditingCell, setLongTextEditingCell] = useState<{
+  const [editingCell, setEditingCell] = useState<{
     rowId: string;
     columnId: string;
   } | null>(null);
@@ -270,6 +270,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const sortRowsRef = useRef<SortConfig[]>([]);
   const dragOffsetRef = useRef(0);
   const dragIndexRef = useRef(0);
+  const hasLoadedTableMetaRef = useRef(false);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
   useEffect(() => {
@@ -279,6 +280,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     { tableId: activeTableId ?? "" },
     { enabled: Boolean(activeTableId) }
   );
+  useEffect(() => {
+    if (tableMetaQuery.data) {
+      hasLoadedTableMetaRef.current = true;
+    }
+  }, [tableMetaQuery.data]);
   const rawSortConfig = tableMetaQuery.data?.sort ?? null;
   const sortConfigList: SortConfig[] = Array.isArray(rawSortConfig)
     ? rawSortConfig.map((item) => ({
@@ -289,20 +295,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeColumnIdSet = new Set(
     tableMetaQuery.data?.columns?.map((column) => column.id) ?? []
   );
+  const filterActiveSorts = (sorts: SortConfig[]) => {
+    if (activeColumnIdSet.size === 0) return sorts;
+    return sorts.filter((sort) => activeColumnIdSet.has(sort.columnId));
+  };
   const sortParamSource = sortOverride ?? sortConfigList;
-  const sortParam = sortParamSource.filter((sort) =>
-    activeColumnIdSet.has(sort.columnId)
-  );
+  const sortParam = filterActiveSorts(sortParamSource);
   const hasSort = sortParam.length > 0;
+  const shouldIncludeSortInQuery =
+    sortOverride !== null || hasLoadedTableMetaRef.current;
   const getRowsQueryKeyForSort = (
     tableId: string,
-    sort: SortConfig[] | null
+    sort: SortConfig[]
   ) =>
-    sort && sort.length > 0
-      ? { tableId, limit: PAGE_ROWS, sort }
-      : { tableId, limit: PAGE_ROWS };
+    shouldIncludeSortInQuery ? { tableId, limit: PAGE_ROWS, sort } : { tableId, limit: PAGE_ROWS };
   const getRowsQueryKey = (tableId: string) =>
-    getRowsQueryKeyForSort(tableId, hasSort ? sortParam : null);
+    getRowsQueryKeyForSort(tableId, sortParam);
   const rowsQuery = api.base.getRows.useInfiniteQuery(
     getRowsQueryKey(activeTableId ?? ""),
     {
@@ -460,9 +468,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       });
       const nextKey = getRowsQueryKeyForSort(
         tableId,
-        normalizeSortList(nextSort)
+        filterActiveSorts(normalizeSortList(nextSort) ?? [])
       );
-      const prevKey = getRowsQueryKeyForSort(tableId, previousSort);
+      const prevKey = getRowsQueryKeyForSort(
+        tableId,
+        filterActiveSorts(previousSort ?? [])
+      );
       const keysMatch = JSON.stringify(nextKey) === JSON.stringify(prevKey);
       await utils.base.getRows.invalidate(nextKey);
       if (!keysMatch) {
@@ -481,8 +492,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
     onSettled: async (_data, _error, variables, context) => {
       await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
-      const nextSort = normalizeSortList(variables.sort ?? null);
-      const previousSort = normalizeSortList(context?.previousSort ?? null);
+      const nextSort = filterActiveSorts(
+        normalizeSortList(variables.sort ?? null) ?? []
+      );
+      const previousSort = filterActiveSorts(
+        normalizeSortList(context?.previousSort ?? null) ?? []
+      );
       const nextKey = getRowsQueryKeyForSort(variables.tableId, nextSort);
       const prevKey = getRowsQueryKeyForSort(variables.tableId, previousSort);
       const keysMatch = JSON.stringify(nextKey) === JSON.stringify(prevKey);
@@ -536,22 +551,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
     },
     onSuccess: (_data, variables) => {
-      setCellEdits((prev) => {
-        const rowEdits = prev[variables.rowId];
-        if (!rowEdits || !(variables.columnId in rowEdits)) {
-          return prev;
-        }
-        const { [variables.columnId]: _removed, ...rest } = rowEdits;
-        if (Object.keys(rest).length === 0) {
-          const { [variables.rowId]: _rowRemoved, ...next } = prev;
-          return next;
-        }
-        return { ...prev, [variables.rowId]: rest };
-      });
       if (
-        sortConfigList.length > 0 &&
+        sortParam.length > 0 &&
         activeTableId &&
-        sortConfigList.some((sort) => sort.columnId === variables.columnId)
+        sortParam.some((sort) => sort.columnId === variables.columnId)
       ) {
         void utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
@@ -564,7 +567,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setHoveredRowId(null);
     setHoveredHeaderId(null);
     setSelectedCell(null);
-    setLongTextEditingCell(null);
+    setEditingCell(null);
     setSortOverride(null);
   }, [baseId]);
 
@@ -812,40 +815,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (!sortOverride) return;
+    if (setTableSort.isPending) return;
     if (areSortsEqual(sortOverride, sortConfigList)) {
       setSortOverride(null);
     }
-  }, [sortConfigList, sortOverride]);
+  }, [sortConfigList, sortOverride, setTableSort.isPending]);
 
-  useEffect(() => {
-    if (!selectedCell) {
-      setLongTextEditingCell(null);
-      return;
-    }
-    const column = columnById.get(selectedCell.columnId);
-    if (!column) {
-      setLongTextEditingCell(null);
-      return;
-    }
-    if (coerceColumnType(column.type) !== "long_text") {
-      setLongTextEditingCell(null);
-      return;
-    }
-    setLongTextEditingCell(selectedCell);
-  }, [columnById, selectedCell]);
-
-  useEffect(() => {
-    if (!longTextEditingCell) return;
-    requestAnimationFrame(() => {
-      const key = `${longTextEditingCell.rowId}-${longTextEditingCell.columnId}`;
-      const node = cellRefs.current.get(key);
-      if (node && "setSelectionRange" in node) {
-        node.focus();
-        const length = node.value.length;
-        node.setSelectionRange(length, length);
-      }
-    });
-  }, [longTextEditingCell]);
 
   useEffect(() => {
     if (!activeColumns.length || !activeTableId) return;
@@ -927,8 +902,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [rowsQuery.data?.pages]);
 
   const columnOrder = useMemo(
-    () => activeColumns.map((column) => column.id),
-    [activeColumns]
+    () => orderedColumns.map((column) => column.id),
+    [orderedColumns]
   );
 
   const tableData = useMemo<TableRow[]>(() => {
@@ -936,11 +911,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     return rows.map((row) => {
       const data = row.data ?? {};
       const cells = Object.fromEntries(
-        activeColumns.map((column) => [column.id, data[column.id] ?? ""])
+        orderedColumns.map((column) => [column.id, data[column.id] ?? ""])
       );
       return { id: row.id, ...cells };
     });
-  }, [activeColumns, activeTable, rows]);
+  }, [activeTable, orderedColumns, rows]);
 
   const sortedTableData = useMemo(() => tableData, [tableData]);
 
@@ -951,7 +926,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const columnsWithAdd = useMemo(
     () => [
-      ...activeColumns.map((column) => ({
+      ...orderedColumns.map((column) => ({
         id: column.id,
         name: column.name,
         fieldType: coerceColumnType(column.type),
@@ -965,7 +940,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         type: "add" as const,
       },
     ],
-    [activeColumns, columnWidths]
+    [columnWidths, orderedColumns]
   );
 
   const totalColumnsWidth = useMemo(
@@ -1038,6 +1013,44 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     columnVirtualizer.measure();
   }, [columnVirtualizer, columnWidths, columnsWithAdd.length]);
+
+  const lastFocusedRef = useRef<{ key: string; mode: "select" | "edit" } | null>(
+    null
+  );
+  const focusTokenRef = useRef(0);
+
+  useEffect(() => {
+    const focusTarget = editingCell ?? selectedCell;
+    if (!focusTarget) {
+      lastFocusedRef.current = null;
+      return;
+    }
+    const token = (focusTokenRef.current += 1);
+    requestAnimationFrame(() => {
+      if (token !== focusTokenRef.current) return;
+      const key = `${focusTarget.rowId}-${focusTarget.columnId}`;
+      const node = cellRefs.current.get(key);
+      if (!node || !("setSelectionRange" in node)) return;
+      const mode = editingCell ? "edit" : "select";
+      const last = lastFocusedRef.current;
+      if (
+        last &&
+        last.key === key &&
+        last.mode === mode &&
+        document.activeElement === node
+      ) {
+        return;
+      }
+      node.focus();
+      if (editingCell) {
+        const length = node.value.length;
+        node.setSelectionRange(length, length);
+      } else {
+        node.setSelectionRange(0, 0);
+      }
+      lastFocusedRef.current = { key, mode };
+    });
+  }, [editingCell, selectedCell, virtualItems, virtualColumns]);
 
   useEffect(() => {
     const lastItem = virtualItems[virtualItems.length - 1];
@@ -1199,10 +1212,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     window.addEventListener("mouseup", handleUp);
   };
 
-  const handleCellChange = (rowId: string, columnId: string, value: string) => {
+  const setCellEditValue = (rowId: string, columnId: string, value: string) => {
     const columnType = coerceColumnType(columnById.get(columnId)?.type);
     if (columnType === "number" && !isValidNumberDraft(value)) {
-      return;
+      return false;
     }
     setCellEdits((prev) => ({
       ...prev,
@@ -1211,70 +1224,45 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         [columnId]: value,
       },
     }));
+    updateCell.mutate({ rowId, columnId, value });
+    return true;
+  };
+
+  const clearCellEdit = (rowId: string, columnId: string) => {
+    setCellEdits((prev) => {
+      const rowEdits = prev[rowId];
+      if (!rowEdits || !(columnId in rowEdits)) return prev;
+      const { [columnId]: _removed, ...rest } = rowEdits;
+      if (Object.keys(rest).length === 0) {
+        const { [rowId]: _rowRemoved, ...next } = prev;
+        return next;
+      }
+      return { ...prev, [rowId]: rest };
+    });
+  };
+
+  const handleCellChange = (rowId: string, columnId: string, value: string) => {
+    setCellEditValue(rowId, columnId, value);
   };
 
   const handleCellCommit = (
     rowId: string,
     columnId: string,
-    value: string,
-    originalValue: string
+    value: string
   ) => {
     const columnType = coerceColumnType(columnById.get(columnId)?.type);
     if (columnType === "number") {
       const normalized = normalizeNumberInput(value);
-      if (normalized === null) {
-        setCellEdits((prev) => {
-          const rowEdits = prev[rowId];
-          if (!rowEdits || !(columnId in rowEdits)) return prev;
-          const { [columnId]: _removed, ...rest } = rowEdits;
-          if (Object.keys(rest).length === 0) {
-            const { [rowId]: _rowRemoved, ...next } = prev;
-            return next;
-          }
-          return { ...prev, [rowId]: rest };
-        });
-        return;
+      if (normalized !== null && normalized !== value) {
+        setCellEditValue(rowId, columnId, normalized);
       }
-      if (normalized !== value) {
-        setCellEdits((prev) => ({
-          ...prev,
-          [rowId]: {
-            ...prev[rowId],
-            [columnId]: normalized,
-          },
-        }));
-      }
-      if (normalized === originalValue) {
-        setCellEdits((prev) => {
-          const rowEdits = prev[rowId];
-          if (!rowEdits || !(columnId in rowEdits)) return prev;
-          const { [columnId]: _removed, ...rest } = rowEdits;
-          if (Object.keys(rest).length === 0) {
-            const { [rowId]: _rowRemoved, ...next } = prev;
-            return next;
-          }
-          return { ...prev, [rowId]: rest };
-        });
-        return;
-      }
-      updateCell.mutate({ rowId, columnId, value: normalized });
-      return;
     }
+    clearCellEdit(rowId, columnId);
+  };
 
-    if (value === originalValue) {
-      setCellEdits((prev) => {
-        const rowEdits = prev[rowId];
-        if (!rowEdits || !(columnId in rowEdits)) return prev;
-        const { [columnId]: _removed, ...rest } = rowEdits;
-        if (Object.keys(rest).length === 0) {
-          const { [rowId]: _rowRemoved, ...next } = prev;
-          return next;
-        }
-        return { ...prev, [rowId]: rest };
-      });
-      return;
-    }
-    updateCell.mutate({ rowId, columnId, value });
+  const beginEditExisting = (rowId: string, columnId: string) => {
+    setSelectedCell({ rowId, columnId });
+    setEditingCell({ rowId, columnId });
   };
 
   const focusCell = (rowId: string, columnId: string) => {
@@ -1286,58 +1274,128 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (colIndex >= 0) {
       columnVirtualizer.scrollToIndex(colIndex);
     }
-    requestAnimationFrame(() => {
-      const key = `${rowId}-${columnId}`;
-      const node = cellRefs.current.get(key);
-      if (node) {
-        node.focus();
-        node.select();
-      }
-    });
     setSelectedCell({ rowId, columnId });
+    const key = `${rowId}-${columnId}`;
+    const node = cellRefs.current.get(key);
+    if (node && "setSelectionRange" in node) {
+      node.focus();
+      node.setSelectionRange(0, 0);
+    }
   };
+
+  const isPrintableKey = (
+    event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) =>
+    event.key.length === 1 &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey;
 
   const handleCellKeyDown = (
     event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
     rowId: string,
-    columnId: string
+    columnId: string,
+    columnType: ColumnFieldType,
+    currentValue: string
   ) => {
     if (columnOrder.length === 0 || rowOrder.length === 0) return;
     const rowIndex = rowOrder.indexOf(rowId);
     const colIndex = columnOrder.indexOf(columnId);
     if (rowIndex === -1 || colIndex === -1) return;
 
-    let nextRow = rowIndex;
-    let nextCol = colIndex;
+    const isEditing =
+      editingCell?.rowId === rowId && editingCell?.columnId === columnId;
+    const isLongText = columnType === "long_text";
 
-    if (event.key === "ArrowRight") {
-      nextCol = Math.min(columnOrder.length - 1, colIndex + 1);
-    } else if (event.key === "ArrowLeft") {
-      nextCol = Math.max(0, colIndex - 1);
-    } else if (event.key === "ArrowDown") {
-      nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
-    } else if (event.key === "ArrowUp") {
-      nextRow = Math.max(0, rowIndex - 1);
-    } else if (event.key === "Tab") {
-      if (event.shiftKey) {
-        if (colIndex > 0) {
-          nextCol = colIndex - 1;
-        } else if (rowIndex > 0) {
-          nextRow = rowIndex - 1;
-          nextCol = columnOrder.length - 1;
+    const navigate = () => {
+      let nextRow = rowIndex;
+      let nextCol = colIndex;
+
+      if (event.key === "ArrowRight") {
+        nextCol = Math.min(columnOrder.length - 1, colIndex + 1);
+      } else if (event.key === "ArrowLeft") {
+        nextCol = Math.max(0, colIndex - 1);
+      } else if (event.key === "ArrowDown") {
+        nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
+      } else if (event.key === "ArrowUp") {
+        nextRow = Math.max(0, rowIndex - 1);
+      } else if (event.key === "Tab") {
+        if (event.shiftKey) {
+          if (colIndex > 0) {
+            nextCol = colIndex - 1;
+          } else if (rowIndex > 0) {
+            nextRow = rowIndex - 1;
+            nextCol = columnOrder.length - 1;
+          }
+        } else if (colIndex < columnOrder.length - 1) {
+          nextCol = colIndex + 1;
+        } else if (rowIndex < rowOrder.length - 1) {
+          nextRow = rowIndex + 1;
+          nextCol = 0;
         }
-      } else if (colIndex < columnOrder.length - 1) {
-        nextCol = colIndex + 1;
-      } else if (rowIndex < rowOrder.length - 1) {
-        nextRow = rowIndex + 1;
-        nextCol = 0;
+      } else {
+        return;
       }
-    } else {
+
+      event.preventDefault();
+      focusCell(rowOrder[nextRow]!, columnOrder[nextCol]!);
+    };
+
+    if (!isEditing) {
+      if (
+        event.key === "ArrowRight" ||
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowDown" ||
+        event.key === "ArrowUp" ||
+        event.key === "Tab"
+      ) {
+        navigate();
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const nextValue = isLongText ? `${currentValue}\n` : currentValue;
+        setSelectedCell({ rowId, columnId });
+        setEditingCell({ rowId, columnId });
+        if (isLongText) {
+          setCellEditValue(rowId, columnId, nextValue);
+        }
+        return;
+      }
+
+      if (isPrintableKey(event) || event.key === "Backspace" || event.key === "Delete") {
+        event.preventDefault();
+        const nextValue =
+          event.key === "Backspace" || event.key === "Delete"
+            ? ""
+            : isLongText
+            ? `${currentValue}${event.key}`
+            : event.key;
+        if (!setCellEditValue(rowId, columnId, nextValue)) {
+          return;
+        }
+        setSelectedCell({ rowId, columnId });
+        setEditingCell({ rowId, columnId });
+      }
       return;
     }
 
-    event.preventDefault();
-    focusCell(rowOrder[nextRow]!, columnOrder[nextCol]!);
+    if (!isLongText && event.key === "Enter") {
+      event.preventDefault();
+      handleCellCommit(rowId, columnId, currentValue);
+      setEditingCell(null);
+      const nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
+      focusCell(rowOrder[nextRow]!, columnId);
+      return;
+    }
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      handleCellCommit(rowId, columnId, currentValue);
+      setEditingCell(null);
+      navigate();
+    }
   };
 
   const bulkRowsDisabled =
@@ -2406,10 +2464,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   nameColumn.fieldType === "long_text";
                                 const nameIsNumber =
                                   nameColumn.fieldType === "number";
+                                const nameIsEditing =
+                                  editingCell?.rowId === row.id &&
+                                  editingCell?.columnId === nameColumn.id;
                                 const nameExpanded =
                                   nameIsLongText &&
-                                  longTextEditingCell?.rowId === row.id &&
-                                  longTextEditingCell?.columnId === nameColumn.id;
+                                  selectedCell?.rowId === row.id &&
+                                  selectedCell?.columnId === nameColumn.id;
                                 return (
                                   <div
                                     className="relative flex overflow-visible px-2"
@@ -2435,29 +2496,67 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       left: 0,
                                       zIndex: nameExpanded ? 30 : 25,
                                     }}
-                                    onClick={() =>
-                                      {
-                                        setSelectedCell({
-                                          rowId: row.id,
-                                          columnId: nameColumn.id,
-                                        });
-                                        if (nameIsLongText) {
-                                          setLongTextEditingCell({
-                                            rowId: row.id,
-                                            columnId: nameColumn.id,
-                                          });
-                                        }
+                                    onClick={() => {
+                                      if (!nameIsEditing) {
+                                        focusCell(row.id, nameColumn.id);
                                       }
-                                    }
+                                    }}
                                   >
                                     {nameIsLongText ? (
                                       <>
-                                        {!nameExpanded && (
-                                          <div className="airtable-long-text-preview">
-                                            {nameEditedValue}
-                                          </div>
-                                        )}
-                                        {nameExpanded && (
+                                        {!nameExpanded ? (
+                                          <input
+                                            value={nameEditedValue}
+                                            onChange={(event) =>
+                                              handleCellChange(
+                                                row.id,
+                                                nameColumn.id,
+                                                event.target.value
+                                              )
+                                            }
+                                            onBlur={() => {
+                                              if (!nameIsEditing) return;
+                                              handleCellCommit(
+                                                row.id,
+                                                nameColumn.id,
+                                                nameEditedValue
+                                              );
+                                              setEditingCell(null);
+                                            }}
+                                            onFocus={() =>
+                                              setSelectedCell({
+                                                rowId: row.id,
+                                                columnId: nameColumn.id,
+                                              })
+                                            }
+                                            onDoubleClick={() =>
+                                              beginEditExisting(row.id, nameColumn.id)
+                                            }
+                                            onKeyDown={(event) =>
+                                              handleCellKeyDown(
+                                                event,
+                                                row.id,
+                                                nameColumn.id,
+                                                nameColumn.fieldType,
+                                                nameEditedValue
+                                              )
+                                            }
+                                            ref={(node) => {
+                                              const key = `${row.id}-${nameColumn.id}`;
+                                              if (node) {
+                                                cellRefs.current.set(key, node);
+                                              } else {
+                                                cellRefs.current.delete(key);
+                                              }
+                                            }}
+                                            className={clsx(
+                                              "airtable-long-text-input airtable-long-text-input--collapsed",
+                                              !nameIsEditing && "airtable-cell-input--inactive"
+                                            )}
+                                            readOnly={!nameIsEditing}
+                                            aria-label={`${nameColumn.name} cell`}
+                                          />
+                                        ) : (
                                           <>
                                             <textarea
                                               value={nameEditedValue}
@@ -2468,38 +2567,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                   event.target.value
                                                 )
                                               }
-                                              onBlur={() =>
-                                                {
-                                                  handleCellCommit(
-                                                    row.id,
-                                                    nameColumn.id,
-                                                    nameEditedValue,
-                                                    nameOriginalValue
-                                                  );
-                                                  setLongTextEditingCell(null);
-                                                }
-                                              }
-                                              onFocus={() =>
-                                                {
-                                                  setSelectedCell({
-                                                    rowId: row.id,
-                                                    columnId: nameColumn.id,
-                                                  });
-                                                  setLongTextEditingCell({
-                                                    rowId: row.id,
-                                                    columnId: nameColumn.id,
-                                                  });
-                                                }
-                                              }
-                                              onKeyDown={(event) => {
-                                                if (event.key === "Tab") {
-                                                  handleCellKeyDown(
-                                                    event,
-                                                    row.id,
-                                                    nameColumn.id
-                                                  );
-                                                }
+                                              onBlur={() => {
+                                                if (!nameIsEditing) return;
+                                                handleCellCommit(
+                                                  row.id,
+                                                  nameColumn.id,
+                                                  nameEditedValue
+                                                );
+                                                setEditingCell(null);
                                               }}
+                                              onFocus={() =>
+                                                setSelectedCell({
+                                                  rowId: row.id,
+                                                  columnId: nameColumn.id,
+                                                })
+                                              }
+                                              onDoubleClick={() =>
+                                                beginEditExisting(row.id, nameColumn.id)
+                                              }
+                                              onKeyDown={(event) =>
+                                                handleCellKeyDown(
+                                                  event,
+                                                  row.id,
+                                                  nameColumn.id,
+                                                  nameColumn.fieldType,
+                                                  nameEditedValue
+                                                )
+                                              }
                                               ref={(node) => {
                                                 const key = `${row.id}-${nameColumn.id}`;
                                                 if (node) {
@@ -2508,8 +2602,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                   cellRefs.current.delete(key);
                                                 }
                                               }}
-                                              className="airtable-long-text-input airtable-long-text-input--expanded"
+                                              className={clsx(
+                                                "airtable-long-text-input airtable-long-text-input--expanded",
+                                                !nameIsEditing && "airtable-cell-input--inactive"
+                                              )}
                                               style={{ height: LONG_TEXT_HEIGHT }}
+                                              readOnly={!nameIsEditing}
                                               aria-label={`${nameColumn.name} cell`}
                                             />
                                             <img
@@ -2530,33 +2628,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             event.target.value
                                           )
                                         }
-                                        onBlur={() =>
+                                        onBlur={() => {
+                                          if (!nameIsEditing) return;
                                           handleCellCommit(
                                             row.id,
                                             nameColumn.id,
-                                            nameEditedValue,
-                                            nameOriginalValue
-                                          )
-                                        }
+                                            nameEditedValue
+                                          );
+                                          setEditingCell(null);
+                                        }}
                                         onFocus={() =>
                                           setSelectedCell({
                                             rowId: row.id,
                                             columnId: nameColumn.id,
                                           })
                                         }
-                                        onClick={() =>
-                                          setSelectedCell({
-                                            rowId: row.id,
-                                            columnId: nameColumn.id,
-                                          })
+                                        onDoubleClick={() =>
+                                          beginEditExisting(row.id, nameColumn.id)
                                         }
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.currentTarget.blur();
-                                            return;
-                                          }
-                                          handleCellKeyDown(event, row.id, nameColumn.id);
-                                        }}
+                                        onKeyDown={(event) =>
+                                          handleCellKeyDown(
+                                            event,
+                                            row.id,
+                                            nameColumn.id,
+                                            nameColumn.fieldType,
+                                            nameEditedValue
+                                          )
+                                        }
                                         ref={(node) => {
                                           const key = `${row.id}-${nameColumn.id}`;
                                           if (node) {
@@ -2565,20 +2663,35 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             cellRefs.current.delete(key);
                                           }
                                         }}
-                                        className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
+                                        className={clsx(
+                                          "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
+                                          !nameIsEditing && "airtable-cell-input--inactive"
+                                        )}
                                         inputMode={nameIsNumber ? "decimal" : undefined}
                                         pattern={
                                           nameIsNumber
                                             ? "^-?\\d*(?:\\.\\d{0,8})?$"
                                             : undefined
                                         }
+                                        style={{
+                                          textAlign: nameIsNumber ? "right" : "left",
+                                        }}
+                                        readOnly={!nameIsEditing}
                                         aria-label={`${nameColumn.name} cell`}
                                       />
                                     )}
                                     {nameIsSelected && (
                                       <>
-                                        <div className="pointer-events-none absolute inset-0 z-10 rounded-[2px] border-2 border-[#156FE2]" />
-                                        <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
+                                        <div
+                                          className={clsx(
+                                            "pointer-events-none absolute inset-0 z-10 rounded-[2px] border-[#156FE2]",
+                                            nameIsEditing ? "border-4" : "border-2"
+                                          )}
+                                          style={{ inset: nameIsEditing ? -4 : -2 }}
+                                        />
+                                        {!nameIsEditing && (
+                                          <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
+                                        )}
                                       </>
                                     )}
                                   </div>
@@ -2629,10 +2742,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 column.type === "data" && column.fieldType === "long_text";
                               const isNumber =
                                 column.type === "data" && column.fieldType === "number";
+                              const isEditing =
+                                editingCell?.rowId === row.id &&
+                                editingCell?.columnId === column.id;
                               const isExpanded =
                                 isLongText &&
-                                longTextEditingCell?.rowId === row.id &&
-                                longTextEditingCell?.columnId === column.id;
+                                selectedCell?.rowId === row.id &&
+                                selectedCell?.columnId === column.id;
 
                                 return (
                                 <div
@@ -2648,26 +2764,66 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     zIndex: isExpanded ? 20 : undefined,
                                     }}
                                   onClick={() => {
-                                    setSelectedCell({
-                                      rowId: row.id,
-                                      columnId: column.id,
-                                    });
-                                    if (isLongText) {
-                                      setLongTextEditingCell({
-                                        rowId: row.id,
-                                        columnId: column.id,
-                                      });
+                                    if (!isEditing) {
+                                      focusCell(row.id, column.id);
                                     }
                                   }}
                                   >
                                     {isLongText ? (
                                       <>
-                                        {!isExpanded && (
-                                          <div className="airtable-long-text-preview">
-                                            {editedValue}
-                                          </div>
-                                        )}
-                                        {isExpanded && (
+                                        {!isExpanded ? (
+                                          <input
+                                            value={editedValue}
+                                            onChange={(event) =>
+                                              handleCellChange(
+                                                row.id,
+                                                column.id,
+                                                event.target.value
+                                              )
+                                            }
+                                            onBlur={() => {
+                                              if (!isEditing) return;
+                                              handleCellCommit(
+                                                row.id,
+                                                column.id,
+                                                editedValue
+                                              );
+                                              setEditingCell(null);
+                                            }}
+                                            onFocus={() =>
+                                              setSelectedCell({
+                                                rowId: row.id,
+                                                columnId: column.id,
+                                              })
+                                            }
+                                            onDoubleClick={() =>
+                                              beginEditExisting(row.id, column.id)
+                                            }
+                                            onKeyDown={(event) =>
+                                              handleCellKeyDown(
+                                                event,
+                                                row.id,
+                                                column.id,
+                                                column.fieldType,
+                                                editedValue
+                                              )
+                                            }
+                                            ref={(node) => {
+                                              const key = `${row.id}-${column.id}`;
+                                              if (node) {
+                                                cellRefs.current.set(key, node);
+                                              } else {
+                                                cellRefs.current.delete(key);
+                                              }
+                                            }}
+                                            className={clsx(
+                                              "airtable-long-text-input airtable-long-text-input--collapsed",
+                                              !isEditing && "airtable-cell-input--inactive"
+                                            )}
+                                            readOnly={!isEditing}
+                                            aria-label={`${column.name} cell`}
+                                          />
+                                        ) : (
                                           <>
                                             <textarea
                                               value={editedValue}
@@ -2678,38 +2834,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                   event.target.value
                                                 )
                                               }
-                                              onBlur={() =>
-                                                {
-                                                  handleCellCommit(
-                                                    row.id,
-                                                    column.id,
-                                                    editedValue,
-                                                    originalValue
-                                                  );
-                                                  setLongTextEditingCell(null);
-                                                }
-                                              }
-                                              onFocus={() =>
-                                                {
-                                                  setSelectedCell({
-                                                    rowId: row.id,
-                                                    columnId: column.id,
-                                                  });
-                                                  setLongTextEditingCell({
-                                                    rowId: row.id,
-                                                    columnId: column.id,
-                                                  });
-                                                }
-                                              }
-                                              onKeyDown={(event) => {
-                                                if (event.key === "Tab") {
-                                                  handleCellKeyDown(
-                                                    event,
-                                                    row.id,
-                                                    column.id
-                                                  );
-                                                }
+                                              onBlur={() => {
+                                                if (!isEditing) return;
+                                                handleCellCommit(
+                                                  row.id,
+                                                  column.id,
+                                                  editedValue
+                                                );
+                                                setEditingCell(null);
                                               }}
+                                              onFocus={() =>
+                                                setSelectedCell({
+                                                  rowId: row.id,
+                                                  columnId: column.id,
+                                                })
+                                              }
+                                              onDoubleClick={() =>
+                                                beginEditExisting(row.id, column.id)
+                                              }
+                                              onKeyDown={(event) =>
+                                                handleCellKeyDown(
+                                                  event,
+                                                  row.id,
+                                                  column.id,
+                                                  column.fieldType,
+                                                  editedValue
+                                                )
+                                              }
                                               ref={(node) => {
                                                 const key = `${row.id}-${column.id}`;
                                                 if (node) {
@@ -2718,8 +2869,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                   cellRefs.current.delete(key);
                                                 }
                                               }}
-                                              className="airtable-long-text-input airtable-long-text-input--expanded"
+                                              className={clsx(
+                                                "airtable-long-text-input airtable-long-text-input--expanded",
+                                                !isEditing && "airtable-cell-input--inactive"
+                                              )}
                                               style={{ height: LONG_TEXT_HEIGHT }}
+                                              readOnly={!isEditing}
                                               aria-label={`${column.name} cell`}
                                             />
                                             <img
@@ -2740,33 +2895,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             event.target.value
                                           )
                                         }
-                                        onBlur={() =>
+                                        onBlur={() => {
+                                          if (!isEditing) return;
                                           handleCellCommit(
                                             row.id,
                                             column.id,
-                                            editedValue,
-                                            originalValue
-                                          )
-                                        }
+                                            editedValue
+                                          );
+                                          setEditingCell(null);
+                                        }}
                                         onFocus={() =>
                                           setSelectedCell({
                                             rowId: row.id,
                                             columnId: column.id,
                                           })
                                         }
-                                        onClick={() =>
-                                          setSelectedCell({
-                                            rowId: row.id,
-                                            columnId: column.id,
-                                          })
+                                        onDoubleClick={() =>
+                                          beginEditExisting(row.id, column.id)
                                         }
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.currentTarget.blur();
-                                            return;
-                                          }
-                                          handleCellKeyDown(event, row.id, column.id);
-                                        }}
+                                        onKeyDown={(event) =>
+                                          handleCellKeyDown(
+                                            event,
+                                            row.id,
+                                            column.id,
+                                            column.fieldType,
+                                            editedValue
+                                          )
+                                        }
                                         ref={(node) => {
                                           const key = `${row.id}-${column.id}`;
                                           if (node) {
@@ -2775,20 +2930,35 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             cellRefs.current.delete(key);
                                           }
                                         }}
-                                        className="h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none"
+                                        className={clsx(
+                                          "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
+                                          !isEditing && "airtable-cell-input--inactive"
+                                        )}
                                         inputMode={isNumber ? "decimal" : undefined}
                                         pattern={
                                           isNumber
                                             ? "^-?\\d*(?:\\.\\d{0,8})?$"
                                             : undefined
                                         }
+                                        style={{
+                                          textAlign: isNumber ? "right" : "left",
+                                        }}
+                                        readOnly={!isEditing}
                                         aria-label={`${column.name} cell`}
                                       />
                                     )}
                                     {isSelected && (
                                       <>
-                                        <div className="pointer-events-none absolute inset-0 z-10 rounded-[2px] border-2 border-[#156FE2]" />
-                                        <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
+                                        <div
+                                          className={clsx(
+                                            "pointer-events-none absolute inset-0 z-10 rounded-[2px] border-[#156FE2]",
+                                            isEditing ? "border-4" : "border-2"
+                                          )}
+                                          style={{ inset: isEditing ? -4 : -2 }}
+                                        />
+                                        {!isEditing && (
+                                          <div className="pointer-events-none absolute bottom-0 right-0 z-20 h-[8px] w-[8px] translate-x-1/2 translate-y-1/2 rounded-[1px] border border-[#156FE2] bg-white" />
+                                        )}
                                       </>
                                     )}
                                   </div>
