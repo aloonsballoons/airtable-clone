@@ -986,9 +986,11 @@ export const baseRouter = createTRPCRouter({
 					const validConditions = conditions.filter(Boolean) as SqlExpression[];
 					if (validConditions.length === 0) return null;
 					if (validConditions.length === 1) return validConditions[0] ?? null;
-					return connector === "or"
-						? or(...validConditions)
-						: and(...validConditions);
+					return (
+						connector === "or"
+							? or(...validConditions)
+							: and(...validConditions)
+					) ?? null;
 				};
 
 				const topLevelConditions = input.filter.items
