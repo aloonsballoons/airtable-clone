@@ -94,26 +94,26 @@ const sortAddMenuIconSpecByName: Record<
   string,
   { src: string; width: number; height: number; left: number }
 > = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 19 },
+  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
   Status: {
     src: statusIcon.src,
     width: STATUS_MENU_ICON_SIZE,
     height: STATUS_MENU_ICON_SIZE,
-    left: 19,
+    left: 10,
   },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 20 },
-  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 22 },
-  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 18.5 },
-  Number: { src: numberIcon.src, width: 13, height: 13, left: 21 },
+  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
+  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
+  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
+  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
 };
 
 const sortAddMenuIconSpecByType: Record<
   ColumnFieldType,
   { src: string; width: number; height: number; left: number }
 > = {
-  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 22 },
-  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 18.5 },
-  number: { src: numberIcon.src, width: 13, height: 13, left: 21 },
+  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
+  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
+  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
 };
 
 const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
@@ -1299,21 +1299,26 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterFieldMenuMaxHeight = 277;
   const filterFieldMenuTopPadding = 20;
   const filterFieldMenuHeaderLeft = 20;
-  const filterFieldMenuHeaderHeight = 14;
-  const filterFieldMenuRowHeight = 34;
-  const filterFieldMenuRowStride = 34;
-  const filterFieldMenuHeaderOffset = filterFieldMenuRowHeight;
-  const filterFieldMenuBottomPadding = 10;
-  const filterFieldMenuItemLeft = 0;
-  const filterFieldMenuItemWidth = filterFieldMenuWidth;
+  const filterFieldMenuHeaderHeight = 13;
+  const filterFieldMenuTextHeight = 13;
+  const filterFieldMenuTextGap = 20; // 20px vertical distance between text lines
+  const filterFieldMenuRowStride = filterFieldMenuTextHeight + filterFieldMenuTextGap; // 13 + 20 = 33px between text tops
+  const filterFieldMenuRowHeight = 34; // Height of the hover box (visual only)
+  const filterFieldMenuRowGap = 0;
+  const filterFieldMenuHeaderGap = filterFieldMenuTextGap; // Same 20px gap from header to first item
+  const filterFieldMenuBottomPadding = 20;
+  const filterOperatorMenuBottomPadding = 0;
+  const filterFieldMenuItemLeft = 20;
+  const filterFieldMenuItemWidth = 164;
   const filterFieldMenuLabelLeft = 40;
+  const filterFieldMenuHoverPadding = (filterFieldMenuRowHeight - filterFieldMenuTextHeight) / 2; // Extra space for hover box
   const filterFieldMenuFirstRowTop =
-    filterFieldMenuTopPadding + filterFieldMenuHeaderOffset;
+    filterFieldMenuTopPadding + filterFieldMenuHeaderHeight + filterFieldMenuHeaderGap;
   const filterFieldMenuContentHeight =
     filterFieldMenuFirstRowTop +
     (orderedColumns.length > 0
       ? (orderedColumns.length - 1) * filterFieldMenuRowStride +
-        filterFieldMenuRowHeight
+        filterFieldMenuTextHeight
       : 0) +
     filterFieldMenuBottomPadding;
   const filterFieldMenuHeight = Math.min(
@@ -1322,16 +1327,20 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   );
   const filterFieldMenuListHeight = Math.max(
     0,
-    filterFieldMenuHeight - filterFieldMenuFirstRowTop - filterFieldMenuBottomPadding
+    filterFieldMenuHeight - filterFieldMenuFirstRowTop
   );
   const filterOperatorMenuWidth = 186;
   const filterOperatorMenuMaxHeight = 260;
-  const filterOperatorMenuRowHeight = 34;
-  const filterOperatorMenuRowStride = 34;
-  const filterOperatorMenuItemWidth = filterOperatorMenuWidth;
-  const filterOperatorMenuItemLeft = 0;
+  const filterOperatorMenuTextHeight = 13;
+  const filterOperatorMenuTextGap = 20; // 20px vertical distance between text lines
+  const filterOperatorMenuRowStride = filterOperatorMenuTextHeight + filterOperatorMenuTextGap; // 13 + 20 = 33px
+  const filterOperatorMenuRowHeight = 34; // Height of the hover box (visual only)
+  const filterOperatorMenuRowGap = 0;
+  const filterOperatorMenuItemWidth = 162;
+  const filterOperatorMenuItemLeft = 12;
+  const filterOperatorMenuHoverPadding = (filterOperatorMenuRowHeight - filterOperatorMenuTextHeight) / 2;
   const filterOperatorMenuFirstRowTop =
-    filterFieldMenuTopPadding + filterFieldMenuHeaderOffset;
+    filterFieldMenuTopPadding + filterFieldMenuHeaderHeight + filterFieldMenuHeaderGap;
   const sortAddMenuContentHeight =
     sortAddMenuFirstRowTop +
     (remainingSortColumns.length > 0
@@ -1727,13 +1736,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   });
 
   const filterFieldVirtualItems = filterFieldVirtualizer.getVirtualItems();
-  const filterFieldVirtualizerSize = Math.max(
-    0,
-    filterFieldVirtualizer.getTotalSize() -
-      (orderedColumns.length > 0
-        ? filterFieldMenuRowStride - filterFieldMenuRowHeight
-        : 0)
-  );
+  const filterFieldVirtualizerSize =
+    filterFieldVirtualizer.getTotalSize();
 
   const virtualColumns = columnVirtualizer.getVirtualItems();
   const nameColumnIndex = columnsWithAdd.findIndex(
@@ -2605,7 +2609,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               const operatorMenuContentHeight =
                                 filterOperatorMenuFirstRowTop +
                                 operatorListHeight +
-                                filterFieldMenuBottomPadding;
+                                filterOperatorMenuBottomPadding;
                               const operatorMenuHeight = Math.min(
                                 filterOperatorMenuMaxHeight,
                                 operatorMenuContentHeight
@@ -2614,7 +2618,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 0,
                                 operatorMenuHeight -
                                   filterOperatorMenuFirstRowTop -
-                                  filterFieldMenuBottomPadding
+                                  filterOperatorMenuBottomPadding
                               );
                               const isFieldMenuOpen = openFilterFieldId === row.condition.id;
                               const isOperatorMenuOpen =
@@ -2819,7 +2823,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         data-filter-field-menu={row.condition.id}
                                         style={{
                                           left: 0,
-                                          top: fieldMenuTop,
+                                          top: filterFieldHeight + 2,
                                           width: filterFieldMenuWidth,
                                           height: filterFieldMenuHeight,
                                           borderRadius: 3,
@@ -2831,9 +2835,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           style={{
                                             left: filterFieldMenuHeaderLeft,
                                             top: filterFieldMenuTopPadding,
-                                            height: filterFieldMenuRowHeight,
-                                            display: "flex",
-                                            alignItems: "center",
                                             lineHeight: `${filterFieldMenuHeaderHeight}px`,
                                           }}
                                         >
@@ -2843,8 +2844,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           ref={filterFieldMenuListRef}
                                           className="absolute left-0 right-0"
                                           style={{
-                                            top: filterFieldMenuFirstRowTop,
-                                            height: filterFieldMenuListHeight,
+                                            top: filterFieldMenuFirstRowTop - filterFieldMenuHoverPadding,
+                                            height: filterFieldMenuListHeight + filterFieldMenuHoverPadding,
                                             overflowY:
                                               filterFieldMenuContentHeight >
                                               filterFieldMenuHeight
@@ -2854,23 +2855,24 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         >
                                           <div
                                             className="relative w-full"
-                                            style={{ height: filterFieldVirtualizerSize }}
+                                            style={{ height: filterFieldVirtualizerSize + filterFieldMenuHoverPadding }}
                                           >
                                             {filterFieldVirtualItems.map((virtualRow) => {
-                                              const columnOption =
-                                                orderedColumns[virtualRow.index];
+                                              const columnOption = orderedColumns[virtualRow.index];
                                               if (!columnOption) return null;
                                               const iconSpec = getSortAddMenuIconSpec(
                                                 columnOption.name,
                                                 columnOption.type
                                               );
+                                              const hoverPadding = (filterFieldMenuRowHeight - filterFieldMenuTextHeight) / 2;
+                                              const hoverBoxTop = virtualRow.start;
                                               return (
                                                 <button
                                                   key={columnOption.id}
                                                   type="button"
                                                   className="airtable-filter-menu-item airtable-filter-menu-item--field absolute"
                                                   style={{
-                                                    top: virtualRow.start,
+                                                    top: hoverBoxTop,
                                                     width: filterFieldMenuItemWidth,
                                                     left: filterFieldMenuItemLeft,
                                                     height: filterFieldMenuRowHeight,
@@ -2884,20 +2886,23 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                   }
                                                 >
                                                   <span
-                                                    className="airtable-filter-menu-item-icon"
-                                                    aria-hidden="true"
                                                     style={{
-                                                      left: iconSpec.left,
+                                                      position: 'absolute',
+                                                      left: 0,
+                                                      top: hoverPadding,
                                                       width: iconSpec.width,
                                                       height: iconSpec.height,
                                                     }}
                                                   >
-                                                    <img alt="" src={iconSpec.src} />
+                                                    <img alt="" src={iconSpec.src} style={{ width: '100%', height: '100%' }} />
                                                   </span>
                                                   <span
-                                                    className="airtable-filter-menu-item-label"
                                                     style={{
-                                                      left: filterFieldMenuLabelLeft,
+                                                      position: 'absolute',
+                                                      left: filterFieldMenuLabelLeft - filterFieldMenuItemLeft,
+                                                      top: hoverPadding,
+                                                      fontSize: 13,
+                                                      lineHeight: '13px',
                                                     }}
                                                   >
                                                     {columnOption.name}
@@ -2960,7 +2965,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           data-filter-operator-menu={row.condition.id}
                                           style={{
                                             left: filterFieldSeparatorPositions[0],
-                                            top: operatorMenuTop,
+                                            top: filterFieldHeight + 2,
                                             width: filterOperatorMenuWidth,
                                             height: operatorMenuHeight,
                                             borderRadius: 3,
@@ -2972,9 +2977,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           style={{
                                             left: filterFieldMenuHeaderLeft,
                                             top: filterFieldMenuTopPadding,
-                                            height: filterFieldMenuRowHeight,
-                                            display: "flex",
-                                            alignItems: "center",
                                             lineHeight: `${filterFieldMenuHeaderHeight}px`,
                                           }}
                                         >
@@ -2984,8 +2986,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           ref={filterOperatorMenuListRef}
                                           className="absolute left-0 right-0"
                                           style={{
-                                            top: filterOperatorMenuFirstRowTop,
-                                            height: operatorMenuListHeight,
+                                            top: filterOperatorMenuFirstRowTop - filterOperatorMenuHoverPadding,
+                                            height: operatorMenuListHeight + filterOperatorMenuHoverPadding,
                                             overflowY:
                                               operatorMenuContentHeight >
                                               filterOperatorMenuMaxHeight
@@ -2997,37 +2999,47 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                             className="relative w-full"
                                             style={{ height: operatorListHeight }}
                                           >
-                                            {operatorOptions.map((operator, index) => (
-                                              <button
-                                                key={operator}
-                                                type="button"
-                                                className="airtable-filter-menu-item airtable-filter-menu-item--operator absolute"
-                                                style={{
-                                                  top: index * filterOperatorMenuRowStride,
-                                                  width: filterOperatorMenuItemWidth,
-                                                  left: filterOperatorMenuItemLeft,
-                                                  height: filterOperatorMenuRowHeight,
-                                                  paddingLeft: 20,
-                                                }}
-                                                onClick={() =>
-                                                  handleFilterOperatorSelect(
-                                                    row.condition.id,
-                                                    operator,
-                                                    scopeGroupId
-                                                  )
-                                                }
-                                              >
-                                                <span className="airtable-filter-menu-item-label">
-                                                  {FILTER_OPERATOR_LABELS[operator]}
-                                                </span>
-                                              </button>
-                                            ))}
+                                            {operatorOptions.map((operator, index) => {
+                                              const hoverBoxTop = index * filterOperatorMenuRowStride;
+                                              return (
+                                                <button
+                                                  key={operator}
+                                                  type="button"
+                                                  className="airtable-filter-menu-item airtable-filter-menu-item--operator absolute"
+                                                  style={{
+                                                    top: hoverBoxTop,
+                                                    width: filterOperatorMenuItemWidth,
+                                                    left: filterOperatorMenuItemLeft,
+                                                    height: filterOperatorMenuRowHeight,
+                                                  }}
+                                                  onClick={() =>
+                                                    handleFilterOperatorSelect(
+                                                      row.condition.id,
+                                                      operator,
+                                                      scopeGroupId
+                                                    )
+                                                  }
+                                                >
+                                                  <span
+                                                    className="airtable-filter-menu-item-label"
+                                                    style={{
+                                                      position: 'absolute',
+                                                      left: 8,
+                                                      top: '50%',
+                                                      transform: 'translateY(-50%)',
+                                                    }}
+                                                  >
+                                                    {FILTER_OPERATOR_LABELS[operator]}
+                                                  </span>
+                                                </button>
+                                              );
+                                            })}
                                           </div>
                                         </div>
                                       </div>
                                     )}
                                     <div
-                                      className="airtable-filter-section absolute flex items-center"
+                                      className={`airtable-filter-section absolute flex items-center${isFocused ? " airtable-filter-section--no-hover" : ""}`}
                                       style={{
                                         left: filterFieldSeparatorPositions[1],
                                         width:

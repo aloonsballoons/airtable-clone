@@ -454,21 +454,34 @@ export const baseRouter = createTRPCRouter({
 				});
 			}
 
-			const batchSize = 1000;
-			const batches = Math.ceil(input.count / batchSize);
-			let nextIndex = 0;
-			for (let batchIndex = 0; batchIndex < batches; batchIndex += 1) {
-				const remaining = input.count - batchIndex * batchSize;
-				const size = Math.min(batchSize, remaining);
-				const rows = Array.from({ length: size }, () => ({
-					id: input.ids?.[nextIndex++] ?? createId(),
-					tableId: input.tableId,
-					data: {},
-				}));
-				await ctx.db.insert(tableRow).values(rows);
-			}
+		// Use PostgreSQL unnest/generate_series for bulk insert in a single query
+		// This is significantly faster than multiple batch inserts
+		if (input.ids) {
+			// Use provided IDs with unnest
+			await ctx.db.execute(sql`
+				INSERT INTO table_row (id, table_id, data, created_at, updated_at)
+				SELECT 
+					unnest(${input.ids}::uuid[]),
+					${input.tableId}::uuid,
+					'{}'::jsonb,
+					NOW(),
+					NOW()
+			`);
+		} else {
+			// Let PostgreSQL generate UUIDs - even faster
+			await ctx.db.execute(sql`
+				INSERT INTO table_row (id, table_id, data, created_at, updated_at)
+				SELECT 
+					gen_random_uuid(),
+					${input.tableId}::uuid,
+					'{}'::jsonb,
+					NOW(),
+					NOW()
+				FROM generate_series(1, ${input.count})
+			`);
+		}
 
-			return { added: input.count };
+		return { added: input.count };
 		}),
 
 	deleteBase: protectedProcedure

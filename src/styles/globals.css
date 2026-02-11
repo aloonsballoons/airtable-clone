@@ -318,6 +318,8 @@ body {
   line-height: 13px;
   color: #1d1f24;
   isolation: isolate;
+  border: none;
+  background: transparent;
 }
 
 .airtable-filter-menu-item:hover {
@@ -330,38 +332,17 @@ body {
 }
 
 .airtable-filter-menu-item--field {
+  position: absolute;
   background: transparent;
   display: block;
   padding-left: 0;
   z-index: 0;
+  border-radius: 4px;
+  width: 164px;
+  height: 34px;
 }
 
 .airtable-filter-menu-item--field:hover {
-  background: transparent;
-}
-
-.airtable-filter-menu-item--field::before {
-  content: "";
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 162px;
-  height: 34px;
-  border-radius: 4px;
-  background: transparent;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.airtable-filter-menu-item--field .airtable-filter-menu-item-icon,
-.airtable-filter-menu-item--field .airtable-filter-menu-item-label {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.airtable-filter-menu-item--field:hover::before {
   background: var(--airtable-hover-bg);
 }
 
@@ -372,10 +353,22 @@ body {
   z-index: 1;
 }
 
+.airtable-filter-menu-item--field:hover .airtable-filter-menu-item-icon img {
+  mix-blend-mode: multiply;
+}
+
+.airtable-filter-menu-item.airtable-filter-menu-item--field .airtable-filter-menu-item-icon,
+.airtable-filter-menu-item.airtable-filter-menu-item--field .airtable-filter-menu-item-label {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .airtable-filter-menu-item-label {
-  line-height: 14px;
+  line-height: 13px;
   font-size: 13px;
   display: inline-block;
+  height: 13px;
 }
 
 .airtable-filter-menu-item-icon {
@@ -395,30 +388,25 @@ body {
 }
 
 .airtable-filter-menu-item--operator {
+  position: absolute;
   background: transparent;
   z-index: 0;
+  border-radius: 4px;
+  width: 162px;
+  height: 34px;
+  display: block;
+  padding-left: 0;
 }
 
 .airtable-filter-menu-item--operator:hover {
-  background: transparent;
-}
-
-.airtable-filter-menu-item--operator::before {
-  content: "";
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 162px;
-  height: 34px;
-  border-radius: 4px;
-  background: transparent;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.airtable-filter-menu-item--operator:hover::before {
   background: var(--airtable-hover-bg);
+}
+
+.airtable-filter-menu-item.airtable-filter-menu-item--operator .airtable-filter-menu-item-label {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
 }
 
 
@@ -434,6 +422,11 @@ body {
 
 .airtable-filter-section:hover {
   background: var(--airtable-hover-bg);
+}
+
+.airtable-filter-section--no-hover,
+.airtable-filter-section--no-hover:hover {
+  background: transparent;
 }
 
 .airtable-filter-section:hover img {
