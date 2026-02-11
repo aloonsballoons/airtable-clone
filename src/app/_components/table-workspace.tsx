@@ -38,7 +38,7 @@ import statusIcon from "~/assets/status.svg";
 import toggleIcon from "~/assets/toggle.svg";
 import xIcon from "~/assets/x.svg";
 import { authClient } from "~/server/better-auth/client";
-import { api } from "~/trpc/react";
+import { api, type RouterInputs } from "~/trpc/react";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -451,7 +451,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       ...activeColumns.filter((column) => column.id !== nameCol.id),
     ];
   }, [activeColumns]);
-  const filterInput = useMemo(() => {
+  const filterInput: RouterInputs["base"]["getRows"]["filter"] = useMemo(() => {
     const items: Array<
       | { type: "condition"; columnId: string; operator: FilterOperator; value: string }
       | {
@@ -512,7 +512,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
     });
 
-    if (items.length === 0) return null;
+    if (items.length === 0) return undefined;
     return {
       connector: filterConnector,
       items,
@@ -561,7 +561,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       tableId: string;
       limit: number;
       sort?: SortConfig[];
-      filter?: typeof filterInput;
+      filter?: RouterInputs["base"]["getRows"]["filter"];
     } = { tableId, limit: PAGE_ROWS };
     if (shouldIncludeSortInQuery) {
       key.sort = sort;
