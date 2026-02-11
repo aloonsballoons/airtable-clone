@@ -1182,7 +1182,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     filterWhereTop -
     (filterFieldHeight - filterFieldFontSize) / 2 +
     filterFieldTextAlignOffset;
-  const filterFieldSeparatorPositions = [125, 250, 390, 422];
+  const filterFieldSeparatorPositions = [125, 250, 390, 422] as const;
+  const [
+    filterFieldSeparatorFieldLeft,
+    filterFieldSeparatorOperatorLeft,
+    filterFieldSeparatorValueLeft,
+    filterFieldSeparatorActionsLeft,
+  ] = filterFieldSeparatorPositions;
   const filterFooterGap = 24;
   const filterFooterHeight = 16;
   const filterBottomPadding = 21;
@@ -2784,7 +2790,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       style={{
                                         left: 0,
                                         top: 0,
-                                        width: filterFieldSeparatorPositions[0],
+                                        width: filterFieldSeparatorFieldLeft,
                                         height: filterFieldHeight,
                                         paddingLeft: 9,
                                         paddingRight: 22,
@@ -2809,8 +2815,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         style={{
                                           width: 10,
                                           height: 6,
-                                          left:
-                                            filterFieldSeparatorPositions[0] - 11 - 10,
+                                          left: filterFieldSeparatorFieldLeft - 11 - 10,
                                           top: "50%",
                                           transform: "translateY(-50%)",
                                         }}
@@ -2919,11 +2924,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       className="airtable-filter-section absolute cursor-pointer"
                                       data-filter-operator-trigger={row.condition.id}
                                       style={{
-                                        left: filterFieldSeparatorPositions[0],
+                                        left: filterFieldSeparatorFieldLeft,
                                         top: 0,
                                         width:
-                                          filterFieldSeparatorPositions[1] -
-                                          filterFieldSeparatorPositions[0],
+                                          filterFieldSeparatorOperatorLeft -
+                                          filterFieldSeparatorFieldLeft,
                                         height: filterFieldHeight,
                                         paddingLeft: 9,
                                         paddingRight: 22,
@@ -2949,8 +2954,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           width: 10,
                                           height: 6,
                                           left:
-                                            filterFieldSeparatorPositions[1] -
-                                            filterFieldSeparatorPositions[0] -
+                                            filterFieldSeparatorOperatorLeft -
+                                            filterFieldSeparatorFieldLeft -
                                             11 -
                                             10,
                                           top: "50%",
@@ -2964,7 +2969,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           className="airtable-dropdown-surface absolute"
                                           data-filter-operator-menu={row.condition.id}
                                           style={{
-                                            left: filterFieldSeparatorPositions[0],
+                                            left: filterFieldSeparatorFieldLeft,
                                             top: filterFieldHeight + 2,
                                             width: filterOperatorMenuWidth,
                                             height: operatorMenuHeight,
@@ -3041,10 +3046,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     <div
                                       className={`airtable-filter-section absolute flex items-center${isFocused ? " airtable-filter-section--no-hover" : ""}`}
                                       style={{
-                                        left: filterFieldSeparatorPositions[1],
+                                        left: filterFieldSeparatorOperatorLeft,
                                         width:
-                                          filterFieldSeparatorPositions[2] -
-                                          filterFieldSeparatorPositions[1],
+                                          filterFieldSeparatorValueLeft -
+                                          filterFieldSeparatorOperatorLeft,
                                         height: filterFieldHeight,
                                         paddingLeft: 9,
                                         paddingRight: 9,
@@ -3111,11 +3116,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       type="button"
                                       className="airtable-filter-section absolute flex items-center justify-center cursor-pointer"
                                       style={{
-                                        left: filterFieldSeparatorPositions[2],
+                                        left: filterFieldSeparatorValueLeft,
                                         top: 0,
                                         width:
-                                          filterFieldSeparatorPositions[3] -
-                                          filterFieldSeparatorPositions[2],
+                                          filterFieldSeparatorActionsLeft -
+                                          filterFieldSeparatorValueLeft,
                                         height: filterFieldHeight,
                                       }}
                                       onClick={() => {
@@ -3161,9 +3166,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       type="button"
                                       className="airtable-filter-section absolute flex items-center justify-center cursor-grab"
                                       style={{
-                                        left: filterFieldSeparatorPositions[3],
+                                        left: filterFieldSeparatorActionsLeft,
                                         top: 0,
-                                        width: filterFieldWidth - filterFieldSeparatorPositions[3],
+                                        width: filterFieldWidth - filterFieldSeparatorActionsLeft,
                                         height: filterFieldHeight,
                                       }}
                                       onMouseDown={(event) =>
