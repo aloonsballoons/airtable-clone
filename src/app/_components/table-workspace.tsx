@@ -10,10 +10,12 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
+import arrowIcon from "~/assets/arrow.svg";
 import assigneeIcon from "~/assets/assignee.svg";
 import attachmentsIcon from "~/assets/attachments.svg";
 import bellIcon from "~/assets/bell.svg";
 import colourIcon from "~/assets/colour.svg";
+import deleteIcon from "~/assets/delete.svg";
 import filterIcon from "~/assets/filter.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
 import groupIcon from "~/assets/group.svg";
@@ -26,6 +28,7 @@ import nameIcon from "~/assets/name.svg";
 import notesIcon from "~/assets/notes.svg";
 import numberIcon from "~/assets/number.svg";
 import omniIcon from "~/assets/omni.svg";
+import pinkIcon from "~/assets/pink.svg";
 import refreshIcon from "~/assets/refresh.svg";
 import reorderIcon from "~/assets/reorder.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
@@ -91,26 +94,26 @@ const sortAddMenuIconSpecByName: Record<
   string,
   { src: string; width: number; height: number; left: number }
 > = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
+  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 19 },
   Status: {
     src: statusIcon.src,
     width: STATUS_MENU_ICON_SIZE,
     height: STATUS_MENU_ICON_SIZE,
-    left: 10,
+    left: 19,
   },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
-  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 20 },
+  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 22 },
+  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 18.5 },
+  Number: { src: numberIcon.src, width: 13, height: 13, left: 21 },
 };
 
 const sortAddMenuIconSpecByType: Record<
   ColumnFieldType,
   { src: string; width: number; height: number; left: number }
 > = {
-  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 22 },
+  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 18.5 },
+  number: { src: numberIcon.src, width: 13, height: 13, left: 21 },
 };
 
 const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
@@ -149,6 +152,37 @@ const imgEllipse3 =
 
 type TableRow = Record<string, string> & { id: string };
 type SortConfig = { columnId: string; direction: "asc" | "desc" };
+type FilterConnector = "and" | "or";
+type FilterOperator =
+  | "contains"
+  | "does_not_contain"
+  | "is"
+  | "is_not"
+  | "is_empty"
+  | "is_not_empty"
+  | "eq"
+  | "neq"
+  | "lt"
+  | "gt"
+  | "lte"
+  | "gte";
+
+type FilterConditionItem = {
+  id: string;
+  type: "condition";
+  columnId: string | null;
+  operator: FilterOperator;
+  value: string;
+};
+
+type FilterGroupItem = {
+  id: string;
+  type: "group";
+  connector: FilterConnector;
+  conditions: FilterConditionItem[];
+};
+
+type FilterItem = FilterConditionItem | FilterGroupItem;
 
 type TableWorkspaceProps = {
   baseId: string;
@@ -223,6 +257,79 @@ const normalizeNumberInput = (value: string) => {
   return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
 };
 
+const FILTER_CONNECTORS: FilterConnector[] = ["and", "or"];
+const FILTER_TEXT_OPERATORS: FilterOperator[] = [
+  "contains",
+  "does_not_contain",
+  "is",
+  "is_not",
+  "is_empty",
+  "is_not_empty",
+];
+const FILTER_NUMBER_OPERATORS: FilterOperator[] = [
+  "eq",
+  "neq",
+  "lt",
+  "gt",
+  "lte",
+  "gte",
+  "is_empty",
+  "is_not_empty",
+];
+const FILTER_OPERATOR_LABELS: Record<FilterOperator, string> = {
+  contains: "contains...",
+  does_not_contain: "does not contain...",
+  is: "is...",
+  is_not: "is not...",
+  is_empty: "is empty",
+  is_not_empty: "is not empty",
+  eq: "=",
+  neq: "≠",
+  lt: "<",
+  gt: ">",
+  lte: "≤",
+  gte: "≥",
+};
+const FILTER_OPERATOR_REQUIRES_VALUE = new Set<FilterOperator>([
+  "contains",
+  "does_not_contain",
+  "is",
+  "is_not",
+  "eq",
+  "neq",
+  "lt",
+  "gt",
+  "lte",
+  "gte",
+]);
+
+const getDefaultFilterOperator = (columnType: ColumnFieldType) =>
+  columnType === "number" ? "eq" : "contains";
+
+const getFilterOperatorsForType = (columnType: ColumnFieldType) =>
+  columnType === "number" ? FILTER_NUMBER_OPERATORS : FILTER_TEXT_OPERATORS;
+
+const formatFilterOperatorLabel = (label: string) =>
+  label.length > 12 ? `${label.slice(0, 11)}...` : label;
+
+const createFilterCondition = (
+  columnId: string | null = null,
+  columnType: ColumnFieldType = "single_line_text"
+): FilterConditionItem => ({
+  id: crypto.randomUUID(),
+  type: "condition",
+  columnId,
+  operator: getDefaultFilterOperator(columnType),
+  value: "",
+});
+
+const createFilterGroup = (): FilterGroupItem => ({
+  id: crypto.randomUUID(),
+  type: "group",
+  connector: "and",
+  conditions: [createFilterCondition()],
+});
+
 export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const router = useRouter();
   const utils = api.useUtils();
@@ -248,6 +355,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   } | null>(null);
   const [addRowHover, setAddRowHover] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
   const [openSortDirectionId, setOpenSortDirectionId] = useState<string | null>(null);
   const [openSortFieldId, setOpenSortFieldId] = useState<string | null>(null);
@@ -258,9 +366,31 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [sortOverride, setSortOverride] = useState<SortConfig[] | null>(null);
   const [draggingSortId, setDraggingSortId] = useState<string | null>(null);
   const [draggingSortTop, setDraggingSortTop] = useState<number | null>(null);
+  const [filterItems, setFilterItems] = useState<FilterItem[]>([]);
+  const [filterConnector, setFilterConnector] = useState<FilterConnector>("and");
+  const [activeFilterAdd, setActiveFilterAdd] = useState<"condition" | "group" | null>(
+    null
+  );
+  const [openFilterFieldId, setOpenFilterFieldId] = useState<string | null>(null);
+  const [openFilterOperatorId, setOpenFilterOperatorId] = useState<string | null>(
+    null
+  );
+  const [openFilterConnectorId, setOpenFilterConnectorId] = useState<string | null>(
+    null
+  );
+  const [focusedFilterValueId, setFocusedFilterValueId] = useState<string | null>(
+    null
+  );
+  const [filterValueErrorId, setFilterValueErrorId] = useState<string | null>(null);
+  const [draggingFilterId, setDraggingFilterId] = useState<string | null>(null);
+  const [draggingFilterTop, setDraggingFilterTop] = useState<number | null>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
+  const filterButtonRef = useRef<HTMLButtonElement>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
   const sortFieldMenuRef = useRef<HTMLDivElement>(null);
+  const filterFieldMenuListRef = useRef<HTMLDivElement>(null);
+  const filterOperatorMenuListRef = useRef<HTMLDivElement>(null);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const sortAddMenuListRef = useRef<HTMLDivElement>(null);
@@ -268,6 +398,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     Map<string, HTMLInputElement | HTMLTextAreaElement | null>
   >(new Map());
   const sortRowsRef = useRef<SortConfig[]>([]);
+  const filterDragOffsetRef = useRef(0);
+  const filterDragIndexRef = useRef(0);
+  const filterDragScopeRef = useRef<{
+    scope: "root" | "group";
+    groupId?: string;
+    startIndex: number;
+    listStartTop: number;
+    rowCount: number;
+    order: string[];
+  } | null>(null);
   const dragOffsetRef = useRef(0);
   const dragIndexRef = useRef(0);
   const hasLoadedTableMetaRef = useRef(false);
@@ -295,6 +435,115 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeColumnIdSet = new Set(
     tableMetaQuery.data?.columns?.map((column) => column.id) ?? []
   );
+  const activeTables = baseDetailsQuery.data?.tables ?? [];
+  const activeTable = tableMetaQuery.data?.table ?? null;
+  const activeColumns = tableMetaQuery.data?.columns ?? [];
+  const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
+  const columnById = useMemo(
+    () => new Map(activeColumns.map((column) => [column.id, column])),
+    [activeColumns]
+  );
+  const orderedColumns = useMemo(() => {
+    const nameCol = activeColumns.find((column) => column.name === "Name");
+    if (!nameCol) return activeColumns;
+    return [
+      nameCol,
+      ...activeColumns.filter((column) => column.id !== nameCol.id),
+    ];
+  }, [activeColumns]);
+  const filterInput = useMemo(() => {
+    const items: Array<
+      | { type: "condition"; columnId: string; operator: FilterOperator; value: string }
+      | {
+          type: "group";
+          connector: FilterConnector;
+          conditions: Array<{
+            type: "condition";
+            columnId: string;
+            operator: FilterOperator;
+            value: string;
+          }>;
+        }
+    > = [];
+
+    const normalizeCondition = (
+      condition: FilterConditionItem
+    ): { type: "condition"; columnId: string; operator: FilterOperator; value: string } | null => {
+      if (!condition.columnId) return null;
+      const column = columnById.get(condition.columnId);
+      if (!column) return null;
+      const columnType = coerceColumnType(column.type);
+      const allowedOperators = getFilterOperatorsForType(columnType);
+      if (!allowedOperators.includes(condition.operator)) return null;
+      const trimmedValue = condition.value.trim();
+      if (FILTER_OPERATOR_REQUIRES_VALUE.has(condition.operator) && !trimmedValue) {
+        return null;
+      }
+      return {
+        type: "condition",
+        columnId: condition.columnId,
+        operator: condition.operator,
+        value: trimmedValue,
+      };
+    };
+
+    filterItems.forEach((item) => {
+      if (item.type === "condition") {
+        const normalized = normalizeCondition(item);
+        if (normalized) items.push(normalized);
+        return;
+      }
+      const normalizedGroup = item.conditions
+        .map(normalizeCondition)
+        .filter(
+          (condition): condition is {
+            type: "condition";
+            columnId: string;
+            operator: FilterOperator;
+            value: string;
+          } => Boolean(condition)
+        );
+      if (normalizedGroup.length > 0) {
+        items.push({
+          type: "group",
+          connector: item.connector,
+          conditions: normalizedGroup,
+        });
+      }
+    });
+
+    if (items.length === 0) return null;
+    return {
+      connector: filterConnector,
+      items,
+    };
+  }, [columnById, filterConnector, filterItems]);
+
+  const activeFilterConditions = useMemo(() => {
+    if (!filterInput) return [];
+    return filterInput.items.flatMap((item) =>
+      item.type === "condition" ? [item] : item.conditions
+    );
+  }, [filterInput]);
+
+  const filteredColumnIds = useMemo(() => {
+    const ids = new Set<string>();
+    activeFilterConditions.forEach((condition) => ids.add(condition.columnId));
+    return ids;
+  }, [activeFilterConditions]);
+
+  const filteredColumnNames = useMemo(() => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    activeFilterConditions.forEach((condition) => {
+      const column = columnById.get(condition.columnId);
+      if (!column || seen.has(column.id)) return;
+      seen.add(column.id);
+      names.push(column.name);
+    });
+    return names;
+  }, [activeFilterConditions, columnById]);
+  const hasActiveFilters = activeFilterConditions.length > 0;
   const filterActiveSorts = (sorts: SortConfig[]) => {
     if (activeColumnIdSet.size === 0) return sorts;
     return sorts.filter((sort) => activeColumnIdSet.has(sort.columnId));
@@ -307,8 +556,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const getRowsQueryKeyForSort = (
     tableId: string,
     sort: SortConfig[]
-  ) =>
-    shouldIncludeSortInQuery ? { tableId, limit: PAGE_ROWS, sort } : { tableId, limit: PAGE_ROWS };
+  ) => {
+    const key: {
+      tableId: string;
+      limit: number;
+      sort?: SortConfig[];
+      filter?: typeof filterInput;
+    } = { tableId, limit: PAGE_ROWS };
+    if (shouldIncludeSortInQuery) {
+      key.sort = sort;
+    }
+    if (filterInput) {
+      key.filter = filterInput;
+    }
+    return key;
+  };
   const getRowsQueryKey = (tableId: string) =>
     getRowsQueryKeyForSort(tableId, sortParam);
   const rowsQuery = api.base.getRows.useInfiniteQuery(
@@ -386,7 +648,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       const queryKey = getRowsQueryKey(tableId);
       await utils.base.getRows.cancel(queryKey);
 
-      if (ids?.length) {
+      if (ids?.length && !hasActiveFilters) {
         const optimisticRows = ids.map((id) => ({ id, data: {} }));
         utils.base.getRows.setInfiniteData(queryKey, (data) => {
           if (!data) return data;
@@ -551,11 +813,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
     },
     onSuccess: (_data, variables) => {
-      if (
+      const shouldInvalidateSort =
         sortParam.length > 0 &&
-        activeTableId &&
-        sortParam.some((sort) => sort.columnId === variables.columnId)
-      ) {
+        sortParam.some((sort) => sort.columnId === variables.columnId);
+      const shouldInvalidateFilter =
+        hasActiveFilters && filteredColumnIds.has(variables.columnId);
+      if ((shouldInvalidateSort || shouldInvalidateFilter) && activeTableId) {
         void utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
     },
@@ -665,6 +928,126 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [openSortFieldId]);
 
   useEffect(() => {
+    if (!isFilterMenuOpen) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (filterMenuRef.current?.contains(target)) return;
+      if (filterButtonRef.current?.contains(target)) return;
+      setIsFilterMenuOpen(false);
+      setOpenFilterFieldId(null);
+      setOpenFilterOperatorId(null);
+      setOpenFilterConnectorId(null);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFilterMenuOpen(false);
+        setOpenFilterFieldId(null);
+        setOpenFilterOperatorId(null);
+        setOpenFilterConnectorId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [isFilterMenuOpen]);
+
+  useEffect(() => {
+    if (!openFilterFieldId) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (target instanceof Element) {
+        if (target.closest(`[data-filter-field-menu="${openFilterFieldId}"]`)) {
+          return;
+        }
+        if (target.closest(`[data-filter-field-trigger="${openFilterFieldId}"]`)) {
+          return;
+        }
+      }
+      setOpenFilterFieldId(null);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenFilterFieldId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openFilterFieldId]);
+
+  useEffect(() => {
+    if (!openFilterOperatorId) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (target instanceof Element) {
+        if (target.closest(`[data-filter-operator-menu="${openFilterOperatorId}"]`)) {
+          return;
+        }
+        if (target.closest(`[data-filter-operator-trigger="${openFilterOperatorId}"]`)) {
+          return;
+        }
+      }
+      setOpenFilterOperatorId(null);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenFilterOperatorId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openFilterOperatorId]);
+
+  useEffect(() => {
+    if (!openFilterConnectorId) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (target instanceof Element) {
+        if (target.closest(`[data-filter-connector-menu="${openFilterConnectorId}"]`)) {
+          return;
+        }
+        if (target.closest(`[data-filter-connector-trigger="${openFilterConnectorId}"]`)) {
+          return;
+        }
+      }
+      setOpenFilterConnectorId(null);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenFilterConnectorId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openFilterConnectorId]);
+
+  useEffect(() => {
     if (!isAddColumnMenuOpen) return;
     const handleClick = (event: Event) => {
       const target = event.target as Node | null;
@@ -687,14 +1070,49 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     };
   }, [isAddColumnMenuOpen]);
 
-  const activeTables = baseDetailsQuery.data?.tables ?? [];
-  const activeTable = tableMetaQuery.data?.table ?? null;
-  const activeColumns = tableMetaQuery.data?.columns ?? [];
-  const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
   const sortRows = sortOrderOverride ?? sortOverride ?? sortConfigList;
   const sortedColumnIds = useMemo(
     () => new Set(sortRows.map((sort) => sort.columnId)),
     [sortRows]
+  );
+  const [filterDragPreview, setFilterDragPreview] = useState<{
+    scope: "root" | "group";
+    groupId?: string;
+    order: string[];
+  } | null>(null);
+  const filterRows = useMemo(() => {
+    if (!filterDragPreview) return filterItems;
+    if (filterDragPreview.scope === "root") {
+      const rootItems = filterItems.filter(
+        (item): item is FilterConditionItem => item.type === "condition"
+      );
+      if (rootItems.length !== filterDragPreview.order.length) return filterItems;
+      const byId = new Map(rootItems.map((item) => [item.id, item]));
+      return filterDragPreview.order
+        .map((id) => byId.get(id))
+        .filter((item): item is FilterConditionItem => Boolean(item));
+    }
+    if (filterDragPreview.groupId) {
+      return filterItems.map((item) => {
+        if (item.type !== "group" || item.id !== filterDragPreview.groupId) {
+          return item;
+        }
+        const byId = new Map(
+          item.conditions.map((condition) => [condition.id, condition])
+        );
+        const nextConditions = filterDragPreview.order
+          .map((id) => byId.get(id))
+          .filter((condition): condition is FilterConditionItem => Boolean(condition));
+        if (nextConditions.length !== item.conditions.length) return item;
+        return { ...item, conditions: nextConditions };
+      });
+    }
+    return filterItems;
+  }, [filterDragPreview, filterItems]);
+  const hasFilterItems = filterItems.length > 0;
+  const hasFilterGroups = useMemo(
+    () => filterItems.some((item) => item.type === "group"),
+    [filterItems]
   );
   const sortListHeight = 97 + activeColumns.length * 32;
   const sortFieldTop = 52;
@@ -736,17 +1154,184 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const sortAddMenuRowHeight = 26;
   const sortAddMenuRowStride = 32;
   const sortAddMenuBottomPadding = 10;
-  const orderedColumns = useMemo(() => {
-    const nameCol = activeColumns.find((column) => column.name === "Name");
-    if (!nameCol) return activeColumns;
-    return [
-      nameCol,
-      ...activeColumns.filter((column) => column.id !== nameCol.id),
-    ];
-  }, [activeColumns]);
+  const filterDropdownBaseWidth = 332;
+  const filterDropdownExpandedWidth = 590;
+  const filterDropdownBaseHeight = 166;
+  const filterDropdownHeaderLeft = 16;
+  const filterDropdownHeaderTop = 14;
+  const filterInputLeft = 16;
+  const filterInputTop = 41;
+  const filterInputHeight = 32;
+  const filterInputRadius = 6;
+  const filterEmptyMessageTop = 98;
+  const filterExpandedMessageTop = 94;
+  const filterWhereTop = 131;
+  const filterRowLeft = 32;
+  const filterRowHeight = 32;
+  const filterRowGap = 8;
+  const filterRowStride = filterRowHeight + filterRowGap;
+  const filterConnectorWidth = 56;
+  const filterConnectorHeight = 32;
+  const filterConnectorGap = 8;
+  const filterFieldLeft = filterConnectorWidth + filterConnectorGap;
+  const filterFieldWidth = 456;
+  const filterFieldHeight = filterConnectorHeight;
+  const filterFieldFontSize = 13;
+  const filterFieldTextAlignOffset = 2;
+  const filterFirstRowTop =
+    filterWhereTop -
+    (filterFieldHeight - filterFieldFontSize) / 2 +
+    filterFieldTextAlignOffset;
+  const filterFieldSeparatorPositions = [125, 250, 390, 422];
+  const filterFooterGap = 24;
+  const filterFooterHeight = 16;
+  const filterBottomPadding = 21;
+  const filterDropdownWidth = hasFilterItems
+    ? filterDropdownExpandedWidth
+    : filterDropdownBaseWidth;
+  const filterInputWidth = filterDropdownWidth - 32;
+
+  const filterLayout = useMemo(() => {
+    let currentTop = filterFirstRowTop;
+    let rootIndex = 0;
+    const rows: Array<{
+      condition: FilterConditionItem;
+      top: number;
+      left: number;
+      scope: "root" | "group";
+      groupId?: string;
+      indexInScope: number;
+      showConnector: boolean;
+      showConnectorControl: boolean;
+      connector: FilterConnector;
+      connectorKey: string;
+      showRootConnector: boolean;
+      showGroupConnector: boolean;
+    }> = [];
+    const groupMetaMap = new Map<
+      string,
+      { startTop: number; bottomTop: number; rowCount: number }
+    >();
+
+    filterRows.forEach((item) => {
+      if (item.type === "condition") {
+        const showRootConnector = rootIndex > 0;
+        rows.push({
+          condition: item,
+          top: currentTop,
+          left: filterRowLeft,
+          scope: "root",
+          indexInScope: rootIndex,
+          showConnector: showRootConnector,
+          showConnectorControl: rootIndex === 1,
+          connector: filterConnector,
+          connectorKey: "root",
+          showRootConnector,
+          showGroupConnector: false,
+        });
+        currentTop += filterRowStride;
+        rootIndex += 1;
+        return;
+      }
+
+      const groupId = item.id;
+      const groupStartTop = currentTop;
+      const groupConnector = item.connector;
+      item.conditions.forEach((condition, index) => {
+        const showRootConnector = index === 0 && rootIndex > 0;
+        const showGroupConnector = index > 0;
+        const connector =
+          showRootConnector ? filterConnector : groupConnector;
+        const connectorKey = showRootConnector ? "root" : `group:${groupId}`;
+        rows.push({
+          condition,
+          top: currentTop,
+          left: filterRowLeft,
+          scope: "group",
+          groupId,
+          indexInScope: index,
+          showConnector: showRootConnector || showGroupConnector,
+          showConnectorControl: showRootConnector
+            ? rootIndex === 1
+            : index === 1,
+          connector,
+          connectorKey,
+          showRootConnector,
+          showGroupConnector,
+        });
+        currentTop += filterRowStride;
+      });
+      const rowCount = item.conditions.length;
+      const groupBottomTop =
+        rowCount > 0
+          ? groupStartTop + (rowCount - 1) * filterRowStride + filterRowHeight
+          : groupStartTop;
+      groupMetaMap.set(groupId, {
+        startTop: groupStartTop,
+        bottomTop: groupBottomTop,
+        rowCount,
+      });
+      rootIndex += 1;
+    });
+
+    const rowCount = rows.length;
+    const contentBottom =
+      rowCount > 0
+        ? filterFirstRowTop + (rowCount - 1) * filterRowStride + filterRowHeight
+        : filterWhereTop;
+    return {
+      rows,
+      contentBottom,
+      groupMetaMap,
+    };
+  }, [filterConnector, filterRows]);
+
+  const filterFooterTop = hasFilterItems
+    ? filterLayout.contentBottom + filterFooterGap
+    : 132;
+  const filterDropdownHeight = hasFilterItems
+    ? filterFooterTop + filterFooterHeight + filterBottomPadding
+    : filterDropdownBaseHeight;
   const remainingSortColumns = orderedColumns.filter(
     (column) => !sortedColumnIds.has(column.id)
   );
+  const filterFieldMenuWidth = 204;
+  const filterFieldMenuMaxHeight = 277;
+  const filterFieldMenuTopPadding = 20;
+  const filterFieldMenuHeaderLeft = 20;
+  const filterFieldMenuHeaderHeight = 14;
+  const filterFieldMenuRowHeight = 34;
+  const filterFieldMenuRowStride = 34;
+  const filterFieldMenuHeaderOffset = filterFieldMenuRowHeight;
+  const filterFieldMenuBottomPadding = 10;
+  const filterFieldMenuItemLeft = 0;
+  const filterFieldMenuItemWidth = filterFieldMenuWidth;
+  const filterFieldMenuLabelLeft = 40;
+  const filterFieldMenuFirstRowTop =
+    filterFieldMenuTopPadding + filterFieldMenuHeaderOffset;
+  const filterFieldMenuContentHeight =
+    filterFieldMenuFirstRowTop +
+    (orderedColumns.length > 0
+      ? (orderedColumns.length - 1) * filterFieldMenuRowStride +
+        filterFieldMenuRowHeight
+      : 0) +
+    filterFieldMenuBottomPadding;
+  const filterFieldMenuHeight = Math.min(
+    filterFieldMenuMaxHeight,
+    filterFieldMenuContentHeight
+  );
+  const filterFieldMenuListHeight = Math.max(
+    0,
+    filterFieldMenuHeight - filterFieldMenuFirstRowTop - filterFieldMenuBottomPadding
+  );
+  const filterOperatorMenuWidth = 186;
+  const filterOperatorMenuMaxHeight = 260;
+  const filterOperatorMenuRowHeight = 34;
+  const filterOperatorMenuRowStride = 34;
+  const filterOperatorMenuItemWidth = filterOperatorMenuWidth;
+  const filterOperatorMenuItemLeft = 0;
+  const filterOperatorMenuFirstRowTop =
+    filterFieldMenuTopPadding + filterFieldMenuHeaderOffset;
   const sortAddMenuContentHeight =
     sortAddMenuFirstRowTop +
     (remainingSortColumns.length > 0
@@ -758,10 +1343,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const sortAddMenuListHeight = Math.max(
     0,
     sortAddMenuHeight - sortAddMenuFirstRowTop - sortAddMenuBottomPadding
-  );
-  const columnById = useMemo(
-    () => new Map(activeColumns.map((column) => [column.id, column])),
-    [activeColumns]
   );
   const canDeleteTable = activeTables.length > 1;
   const canDeleteColumn = activeColumns.length > 1;
@@ -783,6 +1364,143 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       });
     },
     [activeTableId, setTableSort]
+  );
+
+  const updateFilterCondition = useCallback(
+    (
+      conditionId: string,
+      updater: (condition: FilterConditionItem) => FilterConditionItem,
+      groupId?: string
+    ) => {
+      setFilterItems((prev) =>
+        prev.map((item) => {
+          if (groupId) {
+            if (item.type !== "group" || item.id !== groupId) return item;
+            return {
+              ...item,
+              conditions: item.conditions.map((condition) =>
+                condition.id === conditionId ? updater(condition) : condition
+              ),
+            };
+          }
+          if (item.type !== "condition") return item;
+          return item.id === conditionId ? updater(item) : item;
+        })
+      );
+    },
+    []
+  );
+
+  const getDefaultFilterCondition = useCallback(() => {
+    const defaultColumn = orderedColumns[0];
+    if (!defaultColumn) return createFilterCondition();
+    const columnType = coerceColumnType(defaultColumn.type);
+    return createFilterCondition(defaultColumn.id, columnType);
+  }, [orderedColumns]);
+
+  const addFilterCondition = useCallback(() => {
+    setFilterItems((prev) => [...prev, getDefaultFilterCondition()]);
+    setActiveFilterAdd("condition");
+  }, [getDefaultFilterCondition]);
+
+  const addFilterGroup = useCallback(() => {
+    setFilterItems((prev) => [
+      ...prev,
+      {
+        ...createFilterGroup(),
+        conditions: [getDefaultFilterCondition()],
+      },
+    ]);
+    setActiveFilterAdd("group");
+  }, [getDefaultFilterCondition]);
+
+  const addFilterConditionToGroup = useCallback(
+    (groupId: string) => {
+      setFilterItems((prev) =>
+        prev.map((item) => {
+          if (item.type !== "group" || item.id !== groupId) return item;
+          return {
+            ...item,
+            conditions: [...item.conditions, getDefaultFilterCondition()],
+          };
+        })
+      );
+    },
+    [getDefaultFilterCondition]
+  );
+
+  const handleFilterFieldSelect = useCallback(
+    (conditionId: string, columnId: string, groupId?: string) => {
+      const column = columnById.get(columnId);
+      const columnType = coerceColumnType(column?.type);
+      updateFilterCondition(
+        conditionId,
+        (condition) => {
+          const allowedOperators = getFilterOperatorsForType(columnType);
+          const nextOperator = allowedOperators.includes(condition.operator)
+            ? condition.operator
+            : getDefaultFilterOperator(columnType);
+          return {
+            ...condition,
+            columnId,
+            operator: nextOperator,
+          };
+        },
+        groupId
+      );
+      setOpenFilterFieldId(null);
+      setOpenFilterOperatorId(null);
+    },
+    [columnById, updateFilterCondition]
+  );
+
+  const handleFilterOperatorSelect = useCallback(
+    (conditionId: string, operator: FilterOperator, groupId?: string) => {
+      updateFilterCondition(
+        conditionId,
+        (condition) => ({
+          ...condition,
+          operator,
+        }),
+        groupId
+      );
+      setOpenFilterOperatorId(null);
+    },
+    [updateFilterCondition]
+  );
+
+  const handleFilterValueChange = useCallback(
+    (conditionId: string, value: string, groupId?: string) => {
+      let isValid = true;
+      const columnId = (() => {
+        if (!groupId) {
+          const condition = filterItems.find(
+            (item): item is FilterConditionItem =>
+              item.type === "condition" && item.id === conditionId
+          );
+          return condition?.columnId ?? null;
+        }
+        const group = filterItems.find(
+          (item): item is FilterGroupItem => item.type === "group" && item.id === groupId
+        );
+        const condition = group?.conditions.find((item) => item.id === conditionId);
+        return condition?.columnId ?? null;
+      })();
+      const columnType = columnId
+        ? coerceColumnType(columnById.get(columnId)?.type)
+        : "single_line_text";
+      if (columnType === "number" && !isValidNumberDraft(value)) {
+        isValid = false;
+      }
+      setFilterValueErrorId(isValid ? null : conditionId);
+      if (!isValid) return;
+      updateFilterCondition(
+        conditionId,
+        (condition) => ({ ...condition, value }),
+        groupId
+      );
+    },
+    [columnById, filterItems, updateFilterCondition]
   );
 
   const getSortDirectionLabels = useCallback(
@@ -812,6 +1530,18 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     sortRowsRef.current = sortRows;
   }, [sortRows]);
+
+  useEffect(() => {
+    setFilterItems([]);
+    setFilterConnector("and");
+    setActiveFilterAdd(null);
+    setIsFilterMenuOpen(false);
+    setOpenFilterFieldId(null);
+    setOpenFilterOperatorId(null);
+    setOpenFilterConnectorId(null);
+    setFocusedFilterValueId(null);
+    setFilterValueErrorId(null);
+  }, [activeTableId]);
 
   useEffect(() => {
     if (!sortOverride) return;
@@ -989,6 +1719,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         : 0)
   );
 
+  const filterFieldVirtualizer = useVirtualizer({
+    count: orderedColumns.length,
+    getScrollElement: () => filterFieldMenuListRef.current,
+    estimateSize: () => filterFieldMenuRowStride,
+    overscan: 4,
+  });
+
+  const filterFieldVirtualItems = filterFieldVirtualizer.getVirtualItems();
+  const filterFieldVirtualizerSize = Math.max(
+    0,
+    filterFieldVirtualizer.getTotalSize() -
+      (orderedColumns.length > 0
+        ? filterFieldMenuRowStride - filterFieldMenuRowHeight
+        : 0)
+  );
+
   const virtualColumns = columnVirtualizer.getVirtualItems();
   const nameColumnIndex = columnsWithAdd.findIndex(
     (column) => column.type === "data" && column.name === "Name"
@@ -1025,6 +1771,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       lastFocusedRef.current = null;
       return;
     }
+    if (
+      isFilterMenuOpen &&
+      document.activeElement &&
+      filterMenuRef.current?.contains(document.activeElement)
+    ) {
+      return;
+    }
     const token = (focusTokenRef.current += 1);
     requestAnimationFrame(() => {
       if (token !== focusTokenRef.current) return;
@@ -1050,7 +1803,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
       lastFocusedRef.current = { key, mode };
     });
-  }, [editingCell, selectedCell, virtualItems, virtualColumns]);
+  }, [editingCell, isFilterMenuOpen, selectedCell, virtualItems, virtualColumns]);
 
   useEffect(() => {
     const lastItem = virtualItems[virtualItems.length - 1];
@@ -1206,6 +1959,144 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       setDraggingSortId(null);
       setDraggingSortTop(null);
       setSortOrderOverride(null);
+    };
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+  };
+
+  const handleFilterDragStart = (
+    event: ReactMouseEvent,
+    conditionId: string,
+    scope: "root" | "group",
+    groupId?: string
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (scope === "root" && hasFilterGroups) return;
+    const containerRect = filterMenuRef.current?.getBoundingClientRect();
+    if (!containerRect) return;
+    let list: FilterConditionItem[] = [];
+    let listStartTop = filterFirstRowTop;
+    if (scope === "root") {
+      list = filterItems.filter(
+        (item): item is FilterConditionItem => item.type === "condition"
+      );
+      listStartTop = filterFirstRowTop;
+    } else if (groupId) {
+      const group = filterItems.find(
+        (item): item is FilterGroupItem => item.type === "group" && item.id === groupId
+      );
+      if (!group) return;
+      list = group.conditions;
+      listStartTop =
+        filterLayout.groupMetaMap.get(groupId)?.startTop ?? filterFirstRowTop;
+    }
+
+    if (list.length < 2) return;
+    const startIndex = list.findIndex((condition) => condition.id === conditionId);
+    if (startIndex < 0) return;
+    const startTop = listStartTop + startIndex * filterRowStride;
+    const initialOrder = list.map((condition) => condition.id);
+    filterDragOffsetRef.current =
+      event.clientY - (containerRect.top + startTop);
+    filterDragScopeRef.current = {
+      scope,
+      groupId,
+      startIndex,
+      listStartTop,
+      rowCount: list.length,
+      order: initialOrder,
+    };
+    filterDragIndexRef.current = startIndex;
+    setDraggingFilterId(conditionId);
+    setDraggingFilterTop(startTop);
+    setFilterDragPreview({ scope, groupId, order: initialOrder });
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      const ctx = filterDragScopeRef.current;
+      if (!ctx) return;
+      const maxTop = ctx.listStartTop + filterRowStride * (ctx.rowCount - 1);
+      const nextTop = Math.min(
+        maxTop,
+        Math.max(
+          ctx.listStartTop,
+          moveEvent.clientY - containerRect.top - filterDragOffsetRef.current
+        )
+      );
+      setDraggingFilterTop(nextTop);
+      const targetIndex = Math.min(
+        ctx.rowCount - 1,
+        Math.max(
+          0,
+          Math.floor(
+            (nextTop - ctx.listStartTop + filterRowHeight / 2) /
+              filterRowStride
+          )
+        )
+      );
+      const currentIndex = filterDragIndexRef.current;
+      if (targetIndex === currentIndex) return;
+      const nextOrder = [...ctx.order];
+      const [moved] = nextOrder.splice(currentIndex, 1);
+      if (!moved) return;
+      nextOrder.splice(targetIndex, 0, moved);
+      ctx.order = nextOrder;
+      filterDragIndexRef.current = targetIndex;
+      setFilterDragPreview({
+        scope: ctx.scope,
+        groupId: ctx.groupId,
+        order: nextOrder,
+      });
+    };
+
+    const handleUp = () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      const ctx = filterDragScopeRef.current;
+      if (ctx && ctx.rowCount > 1) {
+        const finalOrder = ctx.order;
+        if (ctx.scope === "root") {
+          setFilterItems((prev) => {
+            if (prev.some((item) => item.type === "group")) return prev;
+            const rootItems = prev.filter(
+              (item): item is FilterConditionItem => item.type === "condition"
+            );
+            if (rootItems.length < 2) return prev;
+            const byId = new Map(rootItems.map((item) => [item.id, item]));
+            const nextRoot = finalOrder
+              .map((id) => byId.get(id))
+              .filter((item): item is FilterConditionItem => Boolean(item));
+            return nextRoot.length === rootItems.length ? nextRoot : prev;
+          });
+        } else if (ctx.groupId) {
+          setFilterItems((prev) =>
+            prev.map((item) => {
+              if (item.type !== "group" || item.id !== ctx.groupId) return item;
+              if (item.conditions.length < 2) return item;
+              const byId = new Map(
+                item.conditions.map((condition) => [condition.id, condition])
+              );
+              const nextConditions = finalOrder
+                .map((id) => byId.get(id))
+                .filter(
+                  (condition): condition is FilterConditionItem => Boolean(condition)
+                );
+              return nextConditions.length === item.conditions.length
+                ? { ...item, conditions: nextConditions }
+                : item;
+            })
+          );
+        }
+      }
+      setDraggingFilterId(null);
+      setDraggingFilterTop(null);
+      filterDragScopeRef.current = null;
+      setFilterDragPreview(null);
     };
 
     window.addEventListener("mousemove", handleMove);
@@ -1588,10 +2479,742 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   <img alt="" className="h-[14px] w-[14px]" src={hideFieldsIcon.src} />
                   Hide fields
                 </button>
-                <button type="button" className="flex items-center gap-2">
-                  <img alt="" className="h-[14px] w-[14px]" src={filterIcon.src} />
-                  Filter
-                </button>
+                <div className="relative">
+                  <button
+                    ref={filterButtonRef}
+                    type="button"
+                    className={clsx(
+                      "airtable-table-feature-selection gap-2 font-normal",
+                      hasActiveFilters &&
+                        "airtable-table-feature-selection--filter-active text-[#1d1f24]"
+                    )}
+                    onClick={() =>
+                      setIsFilterMenuOpen((prev) => {
+                        const next = !prev;
+                        if (!next) {
+                          setOpenFilterFieldId(null);
+                          setOpenFilterOperatorId(null);
+                          setOpenFilterConnectorId(null);
+                        }
+                        return next;
+                      })
+                    }
+                    aria-haspopup="menu"
+                    aria-expanded={isFilterMenuOpen}
+                  >
+                    <img
+                      alt=""
+                      className={clsx(
+                        "h-[14px] w-[14px]",
+                        hasActiveFilters && "airtable-filter-icon--active"
+                      )}
+                      src={filterIcon.src}
+                    />
+                    <span>
+                      {hasActiveFilters
+                        ? `Filtered by ${filteredColumnNames.join(", ")}`
+                        : "Filter"}
+                    </span>
+                  </button>
+                  {isFilterMenuOpen && (
+                    <div
+                      ref={filterMenuRef}
+                      className="airtable-filter-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                      style={{
+                        width: filterDropdownWidth,
+                        height: filterDropdownHeight,
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div className="relative h-full w-full">
+                        <div
+                          className="absolute flex items-center gap-[3px] airtable-secondary-font"
+                          style={{
+                            left: filterDropdownHeaderLeft,
+                            top: filterDropdownHeaderTop,
+                          }}
+                        >
+                          <span>Filter</span>
+                        </div>
+                        <div
+                          className="absolute flex items-center border border-[#F2F2F2] bg-white text-[13px] font-normal text-[#757575]"
+                          style={{
+                            left: filterInputLeft,
+                            top: filterInputTop,
+                            width: filterInputWidth,
+                            height: filterInputHeight,
+                            borderRadius: filterInputRadius,
+                            paddingLeft: 7.5,
+                            gap: 7,
+                          }}
+                        >
+                          <img
+                            alt=""
+                            className="h-[21px] w-[21px]"
+                            src={pinkIcon.src}
+                          />
+                          <span>Describe what you want to see</span>
+                        </div>
+                        {!hasFilterItems ? (
+                          <>
+                            <div
+                              className="absolute flex items-center text-[13px] font-normal text-[#8E8F92]"
+                              style={{ left: 16, top: filterEmptyMessageTop }}
+                            >
+                              <span>No filter conditions are applied</span>
+                              <span
+                                className="airtable-help-icon ml-[6px] text-[#8E8F92]"
+                                style={{ width: 14, height: 14 }}
+                                aria-hidden="true"
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div
+                              className="absolute text-[13px] font-normal text-[#616670]"
+                              style={{ left: 16, top: filterExpandedMessageTop }}
+                            >
+                              In this view, show records
+                            </div>
+                            <div
+                              className="absolute text-[13px] font-normal text-[#1D1F24]"
+                              style={{
+                                left: filterRowLeft,
+                                top: filterWhereTop,
+                                width: filterConnectorWidth,
+                                textAlign: "center",
+                              }}
+                            >
+                              Where
+                            </div>
+                            {filterLayout.rows.map((row) => {
+                              const columnId = row.condition.columnId;
+                              const column = columnId ? columnById.get(columnId) : null;
+                              const columnType = coerceColumnType(column?.type);
+                              const operatorLabel = formatFilterOperatorLabel(
+                                FILTER_OPERATOR_LABELS[row.condition.operator]
+                              );
+                              const operatorOptions = getFilterOperatorsForType(columnType);
+                              const operatorListHeight =
+                                operatorOptions.length > 0
+                                  ? (operatorOptions.length - 1) *
+                                      filterOperatorMenuRowStride +
+                                    filterOperatorMenuRowHeight
+                                  : 0;
+                              const operatorMenuContentHeight =
+                                filterOperatorMenuFirstRowTop +
+                                operatorListHeight +
+                                filterFieldMenuBottomPadding;
+                              const operatorMenuHeight = Math.min(
+                                filterOperatorMenuMaxHeight,
+                                operatorMenuContentHeight
+                              );
+                              const operatorMenuListHeight = Math.max(
+                                0,
+                                operatorMenuHeight -
+                                  filterOperatorMenuFirstRowTop -
+                                  filterFieldMenuBottomPadding
+                              );
+                              const isFieldMenuOpen = openFilterFieldId === row.condition.id;
+                              const isOperatorMenuOpen =
+                                openFilterOperatorId === row.condition.id;
+                              const isNumber = columnType === "number";
+                              const isFocused = focusedFilterValueId === row.condition.id;
+                              const hasError = filterValueErrorId === row.condition.id;
+                              const connectorLabel = row.connector;
+                              const showConnectorControl = row.showConnectorControl;
+                              const connectorKey = row.connectorKey;
+                              const isConnectorOpen = openFilterConnectorId === connectorKey;
+                              const fieldValue = row.condition.value;
+                              const scopeGroupId = row.scope === "group" ? row.groupId : undefined;
+                              const isDraggingRow = draggingFilterId === row.condition.id;
+                              const dragOffset =
+                                isDraggingRow && draggingFilterTop !== null
+                                  ? draggingFilterTop - row.top
+                                  : 0;
+                              const fieldTop =
+                                (filterRowHeight - filterFieldHeight) / 2 + dragOffset;
+                              const fieldMenuTop = fieldTop + filterFieldHeight + 2;
+                              const operatorMenuTop = fieldMenuTop;
+                              const rowZIndex = isOperatorMenuOpen
+                                ? 40
+                                : isDraggingRow
+                                ? 30
+                                : isFieldMenuOpen || isConnectorOpen
+                                ? 25
+                                : 10;
+                              const hideConnectorControl =
+                                showConnectorControl && isDraggingRow;
+                              return (
+                                <div
+                                  key={row.condition.id}
+                                  className="absolute"
+                                  style={{
+                                    left: row.left,
+                                    top: row.top,
+                                    width: filterFieldLeft + filterFieldWidth,
+                                    height: filterRowHeight,
+                                    zIndex: rowZIndex,
+                                    transition: isDraggingRow ? "none" : "top 0.15s ease",
+                                    overflow: "visible",
+                                  }}
+                                >
+                                  {row.showConnector && !hideConnectorControl && (
+                                    <>
+                                      {showConnectorControl ? (
+                                        <button
+                                          type="button"
+                                          className="absolute flex items-center rounded-[2px] border border-[#E4E4E4] text-[13px] font-normal text-[#1D1F24] hover:bg-[#F2F2F2] cursor-pointer"
+                                          style={{
+                                            width: filterConnectorWidth,
+                                            height: filterConnectorHeight,
+                                            left: 0,
+                                            top: 0,
+                                            paddingLeft: 8,
+                                          }}
+                                          onClick={() =>
+                                            setOpenFilterConnectorId((prev) =>
+                                              prev === connectorKey ? null : connectorKey
+                                            )
+                                          }
+                                          data-filter-connector-trigger={connectorKey}
+                                        >
+                                          <span>{connectorLabel}</span>
+                                          <img
+                                            alt=""
+                                            className="absolute"
+                                            style={{
+                                              width: 10,
+                                              height: 6,
+                                              right: 7,
+                                            }}
+                                            src={arrowIcon.src}
+                                          />
+                                        </button>
+                                      ) : (
+                                        <span
+                                          className="absolute text-[13px] font-normal text-[#1D1F24]"
+                                          style={{ left: 8, top: 8 }}
+                                        >
+                                          {connectorLabel}
+                                        </span>
+                                      )}
+                                      {showConnectorControl && isConnectorOpen && (
+                                        <div
+                                          className="airtable-dropdown-surface absolute z-20"
+                                          data-filter-connector-menu={connectorKey}
+                                          style={{
+                                            width: filterConnectorWidth,
+                                            height: 72,
+                                            left: 0,
+                                            top: filterConnectorHeight,
+                                            borderRadius: 2,
+                                            zIndex: 1000,
+                                          }}
+                                        >
+                                          {FILTER_CONNECTORS.map((connector, index) => (
+                                            <button
+                                              key={connector}
+                                              type="button"
+                                              className="absolute text-[13px] font-normal text-[#1D1F24] cursor-pointer"
+                                              style={{
+                                                left: 6,
+                                                top: index === 0 ? 10 : 46,
+                                              }}
+                                              onClick={() => {
+                                                if (row.showRootConnector) {
+                                                  setFilterConnector(connector);
+                                                } else if (row.groupId) {
+                                                  setFilterItems((prev) =>
+                                                    prev.map((item) =>
+                                                      item.type === "group" &&
+                                                      item.id === row.groupId
+                                                        ? { ...item, connector }
+                                                        : item
+                                                    )
+                                                  );
+                                                }
+                                                setOpenFilterConnectorId(null);
+                                              }}
+                                            >
+                                              {connector}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                  <div
+                                    className="absolute flex items-center text-[13px] font-normal text-[#1D1F24]"
+                                    style={{
+                                      left: filterFieldLeft,
+                                      top: fieldTop,
+                                      width: filterFieldWidth,
+                                      height: filterFieldHeight,
+                                      borderRadius: 3,
+                                      border: "1px solid #E4E4E4",
+                                      background: "#ffffff",
+                                      zIndex: isDraggingRow ? 40 : 10,
+                                      transition: isDraggingRow
+                                        ? "none"
+                                        : "top 0.15s ease",
+                                      overflow: "visible",
+                                    }}
+                                  >
+                                    {filterFieldSeparatorPositions.map((left) => (
+                                      <span
+                                        key={left}
+                                        className="absolute top-0 h-full"
+                                        style={{
+                                          left,
+                                          width: 1,
+                                          background: "#E4E4E4",
+                                        }}
+                                      />
+                                    ))}
+                                    <button
+                                      type="button"
+                                      className="airtable-filter-section absolute cursor-pointer"
+                                      data-filter-field-trigger={row.condition.id}
+                                      style={{
+                                        left: 0,
+                                        top: 0,
+                                        width: filterFieldSeparatorPositions[0],
+                                        height: filterFieldHeight,
+                                        paddingLeft: 9,
+                                        paddingRight: 22,
+                                        display: "flex",
+                                        alignItems: "center",
+                                      }}
+                                      onClick={() =>
+                                        {
+                                          setOpenFilterOperatorId(null);
+                                          setOpenFilterFieldId((prev) =>
+                                            prev === row.condition.id ? null : row.condition.id
+                                          );
+                                        }
+                                      }
+                                    >
+                                      <span className="text-[13px] font-normal text-[#1D1F24]">
+                                        {column?.name ?? "Name"}
+                                      </span>
+                                      <img
+                                        alt=""
+                                        className="absolute"
+                                        style={{
+                                          width: 10,
+                                          height: 6,
+                                          left:
+                                            filterFieldSeparatorPositions[0] - 11 - 10,
+                                          top: "50%",
+                                          transform: "translateY(-50%)",
+                                        }}
+                                        src={arrowIcon.src}
+                                      />
+                                    </button>
+                                    {isFieldMenuOpen && (
+                                      <div
+                                        className="airtable-dropdown-surface absolute"
+                                        data-filter-field-menu={row.condition.id}
+                                        style={{
+                                          left: 0,
+                                          top: fieldMenuTop,
+                                          width: filterFieldMenuWidth,
+                                          height: filterFieldMenuHeight,
+                                          borderRadius: 3,
+                                          zIndex: 1000,
+                                        }}
+                                      >
+                                        <div
+                                          className="absolute text-[13px] font-normal text-[#757575]"
+                                          style={{
+                                            left: filterFieldMenuHeaderLeft,
+                                            top: filterFieldMenuTopPadding,
+                                            height: filterFieldMenuRowHeight,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            lineHeight: `${filterFieldMenuHeaderHeight}px`,
+                                          }}
+                                        >
+                                          Find a field
+                                        </div>
+                                        <div
+                                          ref={filterFieldMenuListRef}
+                                          className="absolute left-0 right-0"
+                                          style={{
+                                            top: filterFieldMenuFirstRowTop,
+                                            height: filterFieldMenuListHeight,
+                                            overflowY:
+                                              filterFieldMenuContentHeight >
+                                              filterFieldMenuHeight
+                                                ? "auto"
+                                                : "hidden",
+                                          }}
+                                        >
+                                          <div
+                                            className="relative w-full"
+                                            style={{ height: filterFieldVirtualizerSize }}
+                                          >
+                                            {filterFieldVirtualItems.map((virtualRow) => {
+                                              const columnOption =
+                                                orderedColumns[virtualRow.index];
+                                              if (!columnOption) return null;
+                                              const iconSpec = getSortAddMenuIconSpec(
+                                                columnOption.name,
+                                                columnOption.type
+                                              );
+                                              return (
+                                                <button
+                                                  key={columnOption.id}
+                                                  type="button"
+                                                  className="airtable-filter-menu-item airtable-filter-menu-item--field absolute"
+                                                  style={{
+                                                    top: virtualRow.start,
+                                                    width: filterFieldMenuItemWidth,
+                                                    left: filterFieldMenuItemLeft,
+                                                    height: filterFieldMenuRowHeight,
+                                                  }}
+                                                  onClick={() =>
+                                                    handleFilterFieldSelect(
+                                                      row.condition.id,
+                                                      columnOption.id,
+                                                      scopeGroupId
+                                                    )
+                                                  }
+                                                >
+                                                  <span
+                                                    className="airtable-filter-menu-item-icon"
+                                                    aria-hidden="true"
+                                                    style={{
+                                                      left: iconSpec.left,
+                                                      width: iconSpec.width,
+                                                      height: iconSpec.height,
+                                                    }}
+                                                  >
+                                                    <img alt="" src={iconSpec.src} />
+                                                  </span>
+                                                  <span
+                                                    className="airtable-filter-menu-item-label"
+                                                    style={{
+                                                      left: filterFieldMenuLabelLeft,
+                                                    }}
+                                                  >
+                                                    {columnOption.name}
+                                                  </span>
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="airtable-filter-section absolute cursor-pointer"
+                                      data-filter-operator-trigger={row.condition.id}
+                                      style={{
+                                        left: filterFieldSeparatorPositions[0],
+                                        top: 0,
+                                        width:
+                                          filterFieldSeparatorPositions[1] -
+                                          filterFieldSeparatorPositions[0],
+                                        height: filterFieldHeight,
+                                        paddingLeft: 9,
+                                        paddingRight: 22,
+                                        display: "flex",
+                                        alignItems: "center",
+                                      }}
+                                      onClick={() =>
+                                        {
+                                          setOpenFilterFieldId(null);
+                                          setOpenFilterOperatorId((prev) =>
+                                            prev === row.condition.id ? null : row.condition.id
+                                          );
+                                        }
+                                      }
+                                    >
+                                      <span className="text-[13px] font-normal text-[#1D1F24]">
+                                        {operatorLabel}
+                                      </span>
+                                      <img
+                                        alt=""
+                                        className="absolute"
+                                        style={{
+                                          width: 10,
+                                          height: 6,
+                                          left:
+                                            filterFieldSeparatorPositions[1] -
+                                            filterFieldSeparatorPositions[0] -
+                                            11 -
+                                            10,
+                                          top: "50%",
+                                          transform: "translateY(-50%)",
+                                        }}
+                                        src={arrowIcon.src}
+                                      />
+                                    </button>
+                                    {isOperatorMenuOpen && (
+                                        <div
+                                          className="airtable-dropdown-surface absolute"
+                                          data-filter-operator-menu={row.condition.id}
+                                          style={{
+                                            left: filterFieldSeparatorPositions[0],
+                                            top: operatorMenuTop,
+                                            width: filterOperatorMenuWidth,
+                                            height: operatorMenuHeight,
+                                            borderRadius: 3,
+                                            zIndex: 3000,
+                                          }}
+                                        >
+                                        <div
+                                          className="absolute text-[13px] font-normal text-[#757575]"
+                                          style={{
+                                            left: filterFieldMenuHeaderLeft,
+                                            top: filterFieldMenuTopPadding,
+                                            height: filterFieldMenuRowHeight,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            lineHeight: `${filterFieldMenuHeaderHeight}px`,
+                                          }}
+                                        >
+                                          Find an operator
+                                        </div>
+                                        <div
+                                          ref={filterOperatorMenuListRef}
+                                          className="absolute left-0 right-0"
+                                          style={{
+                                            top: filterOperatorMenuFirstRowTop,
+                                            height: operatorMenuListHeight,
+                                            overflowY:
+                                              operatorMenuContentHeight >
+                                              filterOperatorMenuMaxHeight
+                                                ? "auto"
+                                                : "hidden",
+                                          }}
+                                        >
+                                          <div
+                                            className="relative w-full"
+                                            style={{ height: operatorListHeight }}
+                                          >
+                                            {operatorOptions.map((operator, index) => (
+                                              <button
+                                                key={operator}
+                                                type="button"
+                                                className="airtable-filter-menu-item airtable-filter-menu-item--operator absolute"
+                                                style={{
+                                                  top: index * filterOperatorMenuRowStride,
+                                                  width: filterOperatorMenuItemWidth,
+                                                  left: filterOperatorMenuItemLeft,
+                                                  height: filterOperatorMenuRowHeight,
+                                                  paddingLeft: 20,
+                                                }}
+                                                onClick={() =>
+                                                  handleFilterOperatorSelect(
+                                                    row.condition.id,
+                                                    operator,
+                                                    scopeGroupId
+                                                  )
+                                                }
+                                              >
+                                                <span className="airtable-filter-menu-item-label">
+                                                  {FILTER_OPERATOR_LABELS[operator]}
+                                                </span>
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div
+                                      className="airtable-filter-section absolute flex items-center"
+                                      style={{
+                                        left: filterFieldSeparatorPositions[1],
+                                        width:
+                                          filterFieldSeparatorPositions[2] -
+                                          filterFieldSeparatorPositions[1],
+                                        height: filterFieldHeight,
+                                        paddingLeft: 9,
+                                        paddingRight: 9,
+                                        cursor: "text",
+                                      }}
+                                    >
+                                      <div
+                                        className="absolute"
+                                        style={{
+                                          left: 0,
+                                          right: 0,
+                                          top: -4,
+                                          bottom: -4,
+                                          border: isFocused
+                                            ? "2px solid #156FE2"
+                                            : "2px solid transparent",
+                                          borderRadius: 2,
+                                        }}
+                                      />
+                                      {isNumber && isFocused && (
+                                        <div
+                                          className="absolute"
+                                          style={{
+                                            left: 4,
+                                            right: 4,
+                                            top: 2,
+                                            bottom: 2,
+                                            border: hasError
+                                              ? "2px solid #DC053C"
+                                              : "2px solid #BFBFBF",
+                                            borderRadius: 2,
+                                          }}
+                                        />
+                                      )}
+                                      <input
+                                        value={fieldValue}
+                                        onChange={(event) =>
+                                          handleFilterValueChange(
+                                            row.condition.id,
+                                            event.target.value,
+                                            scopeGroupId
+                                          )
+                                        }
+                                        onFocus={() =>
+                                          setFocusedFilterValueId(row.condition.id)
+                                        }
+                                        onBlur={() => {
+                                          setFocusedFilterValueId(null);
+                                          setFilterValueErrorId(null);
+                                        }}
+                                        placeholder="Enter a value"
+                                        inputMode={isNumber ? "decimal" : undefined}
+                                        pattern={
+                                          isNumber ? "^-?\\d*(?:\\.\\d{0,8})?$" : undefined
+                                        }
+                                        className="relative z-10 w-full bg-transparent text-[13px] font-normal text-[#1D1F24] outline-none placeholder:text-[#616670]"
+                                        style={{
+                                          paddingLeft: 0,
+                                          paddingRight: 0,
+                                        }}
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="airtable-filter-section absolute flex items-center justify-center cursor-pointer"
+                                      style={{
+                                        left: filterFieldSeparatorPositions[2],
+                                        top: 0,
+                                        width:
+                                          filterFieldSeparatorPositions[3] -
+                                          filterFieldSeparatorPositions[2],
+                                        height: filterFieldHeight,
+                                      }}
+                                      onClick={() => {
+                                        if (row.scope === "root") {
+                                          setFilterItems((prev) =>
+                                            prev.filter(
+                                              (item) =>
+                                                item.type !== "condition" ||
+                                                item.id !== row.condition.id
+                                            )
+                                          );
+                                        } else if (row.groupId) {
+                                          setFilterItems((prev) =>
+                                            prev.flatMap((item) => {
+                                              if (
+                                                item.type !== "group" ||
+                                                item.id !== row.groupId
+                                              ) {
+                                                return [item];
+                                              }
+                                              const nextConditions = item.conditions.filter(
+                                                (condition) =>
+                                                  condition.id !== row.condition.id
+                                              );
+                                              if (nextConditions.length === 0) return [];
+                                              return [{ ...item, conditions: nextConditions }];
+                                            })
+                                          );
+                                        }
+                                      }}
+                                      aria-label="Delete condition"
+                                    >
+                                      <img
+                                        alt=""
+                                        style={{
+                                          width: 13.15,
+                                          height: 15.45,
+                                        }}
+                                        src={deleteIcon.src}
+                                      />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="airtable-filter-section absolute flex items-center justify-center cursor-grab"
+                                      style={{
+                                        left: filterFieldSeparatorPositions[3],
+                                        top: 0,
+                                        width: filterFieldWidth - filterFieldSeparatorPositions[3],
+                                        height: filterFieldHeight,
+                                      }}
+                                      onMouseDown={(event) =>
+                                        handleFilterDragStart(
+                                          event,
+                                          row.condition.id,
+                                          row.scope,
+                                          row.groupId
+                                        )
+                                      }
+                                      aria-label="Reorder condition"
+                                    >
+                                      <img
+                                        alt=""
+                                        style={{
+                                          width: 10.23,
+                                          height: 13.3,
+                                        }}
+                                        src={reorderIcon.src}
+                                      />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          className={clsx(
+                            "absolute flex items-center text-[13px] font-medium cursor-pointer",
+                            activeFilterAdd === "condition"
+                              ? "text-[#156FE2]"
+                              : "text-[#616670] hover:text-[#1D1F24]"
+                          )}
+                          style={{ left: 16, top: filterFooterTop, gap: 5 }}
+                          onClick={addFilterCondition}
+                        >
+                          <span className="airtable-plus-icon airtable-plus-icon--small" />
+                          <span>Add condition</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={clsx(
+                            "absolute flex items-center text-[13px] font-medium cursor-pointer",
+                            activeFilterAdd === "group"
+                              ? "text-[#156FE2]"
+                              : "text-[#616670] hover:text-[#1D1F24]"
+                          )}
+                          style={{ left: 150, top: filterFooterTop, gap: 5 }}
+                          onClick={addFilterGroup}
+                        >
+                          <span className="airtable-plus-icon airtable-plus-icon--small" />
+                          <span>Add condition group</span>
+                          <span
+                            className="airtable-help-icon"
+                            style={{ width: 14, height: 14, marginLeft: 10 }}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button type="button" className="flex items-center gap-2">
                   <img alt="" className="h-[14px] w-[14px]" src={groupIcon.src} />
                   Group
@@ -2169,12 +3792,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               minWidth: nameColumnWidth,
                               maxWidth: nameColumnWidth,
                               flex: "0 0 auto",
-                              backgroundColor:
-                                sortedColumnIds.has(nameColumn.id)
-                                  ? "var(--airtable-sort-header-bg)"
-                                  : hoveredHeaderId === nameColumn.id
-                                  ? "var(--airtable-hover-bg)"
-                                  : "#ffffff",
+                              backgroundColor: filteredColumnIds.has(nameColumn.id)
+                                ? "#F6FBF9"
+                                : sortedColumnIds.has(nameColumn.id)
+                                ? "var(--airtable-sort-header-bg)"
+                                : hoveredHeaderId === nameColumn.id
+                                ? "var(--airtable-hover-bg)"
+                                : "#ffffff",
                               position: "sticky",
                               left: 0,
                               zIndex: 30,
@@ -2196,7 +3820,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 alt=""
                                 className={clsx(
                                   "h-[13px] w-[13px]",
-                                  sortedColumnIds.has(nameColumn.id) &&
+                                  (sortedColumnIds.has(nameColumn.id) ||
+                                    filteredColumnIds.has(nameColumn.id)) &&
                                     "airtable-column-icon--sorted",
                                   hoveredHeaderId === nameColumn.id &&
                                     "airtable-column-icon--hover"
@@ -2235,8 +3860,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                           const cellStyle = headerCellBorder(column, false);
                           const isSortedColumn =
                             column.type === "data" && sortedColumnIds.has(column.id);
+                          const isFilteredColumn =
+                            column.type === "data" && filteredColumnIds.has(column.id);
                           const backgroundColor =
-                            isSortedColumn
+                            isFilteredColumn
+                              ? "#F6FBF9"
+                              : isSortedColumn
                               ? "var(--airtable-sort-header-bg)"
                               : hoveredHeaderId === column.id
                               ? "var(--airtable-hover-bg)"
@@ -2364,7 +3993,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   alt=""
                                   className={clsx(
                                     "h-[13px] w-[13px]",
-                                    isSortedColumn && "airtable-column-icon--sorted",
+                                    (isSortedColumn || isFilteredColumn) &&
+                                      "airtable-column-icon--sorted",
                                     hoveredHeaderId === column.id &&
                                       "airtable-column-icon--hover"
                                   )}
@@ -2488,16 +4118,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       flex: "0 0 auto",
                                       height: nameExpanded ? LONG_TEXT_HEIGHT : 33,
                                       alignItems: nameExpanded ? "flex-start" : "center",
-                                      backgroundColor:
-                                        sortedColumnIds.has(nameColumn.id)
-                                          ? "var(--airtable-sort-column-bg)"
-                                          : nameIsSelected
-                                          ? "#ffffff"
-                                          : hoveredRowId === row.id
-                                          ? "var(--airtable-hover-bg)"
-                                          : selectedCell?.rowId === row.id
-                                          ? "var(--airtable-hover-bg)"
-                                          : "#ffffff",
+                                      backgroundColor: filteredColumnIds.has(nameColumn.id)
+                                        ? "#E2F1E3"
+                                        : sortedColumnIds.has(nameColumn.id)
+                                        ? "var(--airtable-sort-column-bg)"
+                                        : nameIsSelected
+                                        ? "#ffffff"
+                                        : hoveredRowId === row.id
+                                        ? "var(--airtable-hover-bg)"
+                                        : selectedCell?.rowId === row.id
+                                        ? "var(--airtable-hover-bg)"
+                                        : "#ffffff",
                                       position: "sticky",
                                       left: 0,
                                       zIndex: nameExpanded ? 30 : 25,
@@ -2711,9 +4342,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               const isSortedColumn =
                                 column.type === "data" &&
                                 sortedColumnIds.has(column.id);
+                              const isFilteredColumn =
+                                column.type === "data" &&
+                                filteredColumnIds.has(column.id);
                               const isRowHovered = hoveredRowId === row.id;
                               const rowHasSelection = selectedCell?.rowId === row.id;
-                              const cellBackground = isSortedColumn
+                              const cellBackground = isFilteredColumn
+                                ? "#E2F1E3"
+                                : isSortedColumn
                                 ? "var(--airtable-sort-column-bg)"
                                 : isSelected
                                 ? "#ffffff"
@@ -2781,195 +4417,195 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     }
                                   }}
                                   >
-                                    {isLongText ? (
-                                      <>
-                                        {!isExpanded ? (
-                                          <>
-                                            <input
-                                              value={editedValue}
-                                              onChange={(event) =>
-                                                handleCellChange(
-                                                  row.id,
-                                                  column.id,
-                                                  event.target.value
-                                                )
-                                              }
-                                              onBlur={() => {
-                                                if (!isEditing) return;
-                                                handleCellCommit(
-                                                  row.id,
-                                                  column.id,
-                                                  editedValue
-                                                );
-                                                setEditingCell(null);
-                                              }}
-                                              onFocus={() =>
-                                                setSelectedCell({
-                                                  rowId: row.id,
-                                                  columnId: column.id,
-                                                })
-                                              }
-                                              onDoubleClick={() =>
-                                                beginEditExisting(row.id, column.id)
-                                              }
-                                              onKeyDown={(event) =>
-                                                handleCellKeyDown(
-                                                  event,
-                                                  row.id,
-                                                  column.id,
-                                                  column.fieldType,
-                                                  editedValue
-                                                )
-                                              }
-                                              ref={(node) => {
-                                                const key = `${row.id}-${column.id}`;
-                                                if (node) {
-                                                  cellRefs.current.set(key, node);
-                                                } else {
-                                                  cellRefs.current.delete(key);
+                                      {isLongText ? (
+                                        <>
+                                          {!isExpanded ? (
+                                            <>
+                                              <input
+                                                value={editedValue}
+                                                onChange={(event) =>
+                                                  handleCellChange(
+                                                    row.id,
+                                                    column.id,
+                                                    event.target.value
+                                                  )
                                                 }
-                                              }}
-                                              className={clsx(
-                                                "airtable-long-text-input airtable-long-text-input--collapsed",
-                                                !isEditing && "airtable-cell-input--inactive"
-                                              )}
-                                              readOnly={!isEditing}
-                                              aria-label={`${column.name} cell`}
-                                            />
-                                            <div className="airtable-long-text-display">
-                                              {editedValue}
-                                            </div>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <textarea
-                                              value={editedValue}
-                                              onChange={(event) =>
-                                                handleCellChange(
-                                                  row.id,
-                                                  column.id,
-                                                  event.target.value
-                                                )
-                                              }
-                                              onBlur={() => {
-                                                if (!isEditing) return;
-                                                handleCellCommit(
-                                                  row.id,
-                                                  column.id,
-                                                  editedValue
-                                                );
-                                                setEditingCell(null);
-                                              }}
-                                              onFocus={() =>
-                                                setSelectedCell({
-                                                  rowId: row.id,
-                                                  columnId: column.id,
-                                                })
-                                              }
-                                              onDoubleClick={() =>
-                                                beginEditExisting(row.id, column.id)
-                                              }
-                                              onKeyDown={(event) =>
-                                                handleCellKeyDown(
-                                                  event,
-                                                  row.id,
-                                                  column.id,
-                                                  column.fieldType,
-                                                  editedValue
-                                                )
-                                              }
-                                              ref={(node) => {
-                                                const key = `${row.id}-${column.id}`;
-                                                if (node) {
-                                                  cellRefs.current.set(key, node);
-                                                } else {
-                                                  cellRefs.current.delete(key);
+                                                onBlur={() => {
+                                                  if (!isEditing) return;
+                                                  handleCellCommit(
+                                                    row.id,
+                                                    column.id,
+                                                    editedValue
+                                                  );
+                                                  setEditingCell(null);
+                                                }}
+                                                onFocus={() =>
+                                                  setSelectedCell({
+                                                    rowId: row.id,
+                                                    columnId: column.id,
+                                                  })
                                                 }
-                                              }}
-                                              className={clsx(
-                                                "airtable-long-text-input airtable-long-text-input--expanded",
-                                                !isEditing && "airtable-cell-input--inactive"
-                                              )}
-                                              style={{ height: LONG_TEXT_HEIGHT }}
-                                              readOnly={!isEditing}
-                                              aria-label={`${column.name} cell`}
-                                            />
-                                            <img
-                                              alt=""
-                                              className="airtable-long-text-selection"
-                                              src={longLineSelectionIcon.src}
-                                            />
-                                          </>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <input
-                                        value={editedValue}
-                                        onChange={(event) =>
-                                          handleCellChange(
-                                            row.id,
-                                            column.id,
-                                            event.target.value
-                                          )
-                                        }
-                                        onBlur={() => {
-                                          if (!isEditing) return;
-                                          handleCellCommit(
-                                            row.id,
-                                            column.id,
-                                            editedValue
-                                          );
-                                          setEditingCell(null);
-                                        }}
-                                        onFocus={() =>
-                                          setSelectedCell({
-                                            rowId: row.id,
-                                            columnId: column.id,
-                                          })
-                                        }
-                                        onDoubleClick={() =>
-                                          beginEditExisting(row.id, column.id)
-                                        }
-                                        onKeyDown={(event) =>
-                                          handleCellKeyDown(
-                                            event,
-                                            row.id,
-                                            column.id,
-                                            column.fieldType,
-                                            editedValue
-                                          )
-                                        }
-                                        ref={(node) => {
-                                          const key = `${row.id}-${column.id}`;
-                                          if (node) {
-                                            cellRefs.current.set(key, node);
-                                          } else {
-                                            cellRefs.current.delete(key);
+                                                onDoubleClick={() =>
+                                                  beginEditExisting(row.id, column.id)
+                                                }
+                                                onKeyDown={(event) =>
+                                                  handleCellKeyDown(
+                                                    event,
+                                                    row.id,
+                                                    column.id,
+                                                    column.fieldType,
+                                                    editedValue
+                                                  )
+                                                }
+                                                ref={(node) => {
+                                                  const key = `${row.id}-${column.id}`;
+                                                  if (node) {
+                                                    cellRefs.current.set(key, node);
+                                                  } else {
+                                                    cellRefs.current.delete(key);
+                                                  }
+                                                }}
+                                                className={clsx(
+                                                  "airtable-long-text-input airtable-long-text-input--collapsed",
+                                                  !isEditing && "airtable-cell-input--inactive"
+                                                )}
+                                                readOnly={!isEditing}
+                                                aria-label={`${column.name} cell`}
+                                              />
+                                              <div className="airtable-long-text-display">
+                                                {editedValue}
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <textarea
+                                                value={editedValue}
+                                                onChange={(event) =>
+                                                  handleCellChange(
+                                                    row.id,
+                                                    column.id,
+                                                    event.target.value
+                                                  )
+                                                }
+                                                onBlur={() => {
+                                                  if (!isEditing) return;
+                                                  handleCellCommit(
+                                                    row.id,
+                                                    column.id,
+                                                    editedValue
+                                                  );
+                                                  setEditingCell(null);
+                                                }}
+                                                onFocus={() =>
+                                                  setSelectedCell({
+                                                    rowId: row.id,
+                                                    columnId: column.id,
+                                                  })
+                                                }
+                                                onDoubleClick={() =>
+                                                  beginEditExisting(row.id, column.id)
+                                                }
+                                                onKeyDown={(event) =>
+                                                  handleCellKeyDown(
+                                                    event,
+                                                    row.id,
+                                                    column.id,
+                                                    column.fieldType,
+                                                    editedValue
+                                                  )
+                                                }
+                                                ref={(node) => {
+                                                  const key = `${row.id}-${column.id}`;
+                                                  if (node) {
+                                                    cellRefs.current.set(key, node);
+                                                  } else {
+                                                    cellRefs.current.delete(key);
+                                                  }
+                                                }}
+                                                className={clsx(
+                                                  "airtable-long-text-input airtable-long-text-input--expanded",
+                                                  !isEditing && "airtable-cell-input--inactive"
+                                                )}
+                                                style={{ height: LONG_TEXT_HEIGHT }}
+                                                readOnly={!isEditing}
+                                                aria-label={`${column.name} cell`}
+                                              />
+                                              <img
+                                                alt=""
+                                                className="airtable-long-text-selection"
+                                                src={longLineSelectionIcon.src}
+                                              />
+                                            </>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <input
+                                          value={editedValue}
+                                          onChange={(event) =>
+                                            handleCellChange(
+                                              row.id,
+                                              column.id,
+                                              event.target.value
+                                            )
                                           }
-                                        }}
-                                        className={clsx(
-                                          "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
-                                          !isEditing && "airtable-cell-input--inactive"
-                                        )}
-                                        inputMode={isNumber ? "decimal" : undefined}
-                                        pattern={
-                                          isNumber
-                                            ? "^-?\\d*(?:\\.\\d{0,8})?$"
-                                            : undefined
-                                        }
-                                        style={{
-                                          textAlign: isNumber ? "right" : "left",
-                                        }}
-                                        readOnly={!isEditing}
-                                        aria-label={`${column.name} cell`}
-                                      />
-                                    )}
-                                    {isSelected && !isEditing && (
-                                      <div className="airtable-cell-handle" />
-                                    )}
-                                  </div>
-                                );
-                              })}
+                                          onBlur={() => {
+                                            if (!isEditing) return;
+                                            handleCellCommit(
+                                              row.id,
+                                              column.id,
+                                              editedValue
+                                            );
+                                            setEditingCell(null);
+                                          }}
+                                          onFocus={() =>
+                                            setSelectedCell({
+                                              rowId: row.id,
+                                              columnId: column.id,
+                                            })
+                                          }
+                                          onDoubleClick={() =>
+                                            beginEditExisting(row.id, column.id)
+                                          }
+                                          onKeyDown={(event) =>
+                                            handleCellKeyDown(
+                                              event,
+                                              row.id,
+                                              column.id,
+                                              column.fieldType,
+                                              editedValue
+                                            )
+                                          }
+                                          ref={(node) => {
+                                            const key = `${row.id}-${column.id}`;
+                                            if (node) {
+                                              cellRefs.current.set(key, node);
+                                            } else {
+                                              cellRefs.current.delete(key);
+                                            }
+                                          }}
+                                          className={clsx(
+                                            "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
+                                            !isEditing && "airtable-cell-input--inactive"
+                                          )}
+                                          inputMode={isNumber ? "decimal" : undefined}
+                                          pattern={
+                                            isNumber
+                                              ? "^-?\\d*(?:\\.\\d{0,8})?$"
+                                              : undefined
+                                          }
+                                          style={{
+                                            textAlign: isNumber ? "right" : "left",
+                                          }}
+                                          readOnly={!isEditing}
+                                          aria-label={`${column.name} cell`}
+                                        />
+                                      )}
+                                      {isSelected && !isEditing && (
+                                        <div className="airtable-cell-handle" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
                             {scrollablePaddingRight > 0 && (
                               <div style={{ width: scrollablePaddingRight }} />
                             )}

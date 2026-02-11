@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
@@ -18,6 +18,66 @@ const sortItemSchema = z.object({
 	columnId: z.string().uuid(),
 	direction: z.enum(["asc", "desc"]),
 });
+const filterConnectorSchema = z.enum(["and", "or"]);
+const filterOperatorSchema = z.enum([
+	"contains",
+	"does_not_contain",
+	"is",
+	"is_not",
+	"is_empty",
+	"is_not_empty",
+	"eq",
+	"neq",
+	"lt",
+	"gt",
+	"lte",
+	"gte",
+]);
+const filterConditionSchema = z.object({
+	type: z.literal("condition"),
+	columnId: z.string().uuid(),
+	operator: filterOperatorSchema,
+	value: z.string().optional().default(""),
+});
+const filterGroupSchema = z.object({
+	type: z.literal("group"),
+	connector: filterConnectorSchema,
+	conditions: z.array(filterConditionSchema),
+});
+const filterSchema = z.object({
+	connector: filterConnectorSchema,
+	items: z.array(z.union([filterConditionSchema, filterGroupSchema])),
+});
+const filterTextOperators = new Set([
+	"contains",
+	"does_not_contain",
+	"is",
+	"is_not",
+	"is_empty",
+	"is_not_empty",
+]);
+const filterNumberOperators = new Set([
+	"eq",
+	"neq",
+	"lt",
+	"gt",
+	"lte",
+	"gte",
+	"is_empty",
+	"is_not_empty",
+]);
+const filterOperatorsRequiringValue = new Set([
+	"contains",
+	"does_not_contain",
+	"is",
+	"is_not",
+	"eq",
+	"neq",
+	"lt",
+	"gt",
+	"lte",
+	"gte",
+]);
 const MAX_CELL_CHARS = 100_000;
 const MAX_NUMBER_DECIMALS = 8;
 
@@ -742,6 +802,7 @@ export const baseRouter = createTRPCRouter({
 				sort: z
 					.array(sortItemSchema)
 					.optional(),
+				filter: filterSchema.optional(),
 			}),
 		)
 		.query(async ({ ctx, input }) => {
@@ -809,9 +870,137 @@ export const baseRouter = createTRPCRouter({
 				}
 			}
 
+			type SqlExpression = ReturnType<typeof sql>;
+			let filterExpression: SqlExpression | null = null;
+			if (input.filter && input.filter.items.length > 0) {
+				const filterColumnIds = new Set<string>();
+				input.filter.items.forEach((item) => {
+					if (item.type === "condition") {
+						filterColumnIds.add(item.columnId);
+						return;
+					}
+					item.conditions.forEach((condition) =>
+						filterColumnIds.add(condition.columnId),
+					);
+				});
+
+				const filterColumns = filterColumnIds.size
+					? await ctx.db.query.tableColumn.findMany({
+							where: inArray(tableColumn.id, Array.from(filterColumnIds)),
+						})
+					: [];
+				const filterColumnsById = new Map(
+					filterColumns.map((column) => [column.id, column]),
+				);
+
+				const buildConditionExpression = (
+					condition: z.infer<typeof filterConditionSchema>,
+				): SqlExpression | null => {
+					const column = filterColumnsById.get(condition.columnId);
+					if (!column || column.tableId !== input.tableId) return null;
+					const columnType = column.type ?? "single_line_text";
+					const isNumber = columnType === "number";
+					const operator = condition.operator;
+					if (
+						(isNumber &&
+							!filterNumberOperators.has(operator)) ||
+						(!isNumber && !filterTextOperators.has(operator))
+					) {
+						return null;
+					}
+					const rawValue = condition.value ?? "";
+					const trimmedValue = rawValue.trim();
+					if (
+						filterOperatorsRequiringValue.has(operator) &&
+						!trimmedValue
+					) {
+						return null;
+					}
+
+					const textValue =
+						sql<string>`coalesce(${tableRow.data} ->> ${condition.columnId}, '')`;
+					if (!isNumber) {
+						switch (operator) {
+							case "contains":
+								return sql<boolean>`${textValue} ILIKE ${`%${trimmedValue}%`}`;
+							case "does_not_contain":
+								return sql<boolean>`${textValue} NOT ILIKE ${`%${trimmedValue}%`}`;
+							case "is":
+								return sql<boolean>`${textValue} = ${trimmedValue}`;
+							case "is_not":
+								return sql<boolean>`${textValue} <> ${trimmedValue}`;
+							case "is_empty":
+								return sql<boolean>`${textValue} = ''`;
+							case "is_not_empty":
+								return sql<boolean>`${textValue} <> ''`;
+							default:
+								return null;
+						}
+					}
+
+					const numericValue =
+						sql<number>`nullif(${tableRow.data} ->> ${condition.columnId}, '')::numeric`;
+					if (operator === "is_empty") {
+						return sql<boolean>`${textValue} = ''`;
+					}
+					if (operator === "is_not_empty") {
+						return sql<boolean>`${textValue} <> ''`;
+					}
+					const numericInput = Number(trimmedValue);
+					if (Number.isNaN(numericInput)) return null;
+					switch (operator) {
+						case "eq":
+							return sql<boolean>`${numericValue} = ${numericInput}`;
+						case "neq":
+							return sql<boolean>`${numericValue} <> ${numericInput}`;
+						case "lt":
+							return sql<boolean>`${numericValue} < ${numericInput}`;
+						case "gt":
+							return sql<boolean>`${numericValue} > ${numericInput}`;
+						case "lte":
+							return sql<boolean>`${numericValue} <= ${numericInput}`;
+						case "gte":
+							return sql<boolean>`${numericValue} >= ${numericInput}`;
+						default:
+							return null;
+					}
+				};
+
+				const combineConditions = (
+					conditions: Array<SqlExpression | null>,
+					connector: z.infer<typeof filterConnectorSchema>,
+				): SqlExpression | null => {
+					const validConditions = conditions.filter(Boolean) as SqlExpression[];
+					if (validConditions.length === 0) return null;
+					if (validConditions.length === 1) return validConditions[0];
+					return connector === "or"
+						? or(...validConditions)
+						: and(...validConditions);
+				};
+
+				const topLevelConditions = input.filter.items
+					.map((item) => {
+						if (item.type === "condition") {
+							return buildConditionExpression(item);
+						}
+						const groupConditions = item.conditions.map((condition) =>
+							buildConditionExpression(condition),
+						);
+						return combineConditions(groupConditions, item.connector);
+					})
+					.filter(Boolean) as Array<SqlExpression>;
+
+				filterExpression = combineConditions(
+					topLevelConditions,
+					input.filter.connector,
+				);
+			}
+
 			const offset = input.cursor ?? 0;
 			const rows = await ctx.db.query.tableRow.findMany({
-				where: eq(tableRow.tableId, input.tableId),
+				where: filterExpression
+					? and(eq(tableRow.tableId, input.tableId), filterExpression)
+					: eq(tableRow.tableId, input.tableId),
 				orderBy: (row, { asc, desc }) =>
 					effectiveSorts.length > 0
 						? [

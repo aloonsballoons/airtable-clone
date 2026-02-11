@@ -26,6 +26,7 @@ body {
   --airtable-sort-active-bg: #ffdfcb;
   --airtable-sort-column-bg: #fff3e9;
   --airtable-sort-header-bg: #fffbf9;
+  --airtable-filter-active-bg: #d0f5d1;
 }
 
 .airtable-border {
@@ -217,7 +218,9 @@ body {
   transition: opacity 0.15s ease;
 }
 
-.airtable-table-feature-selection:not(.airtable-table-feature-selection--active):hover::before {
+.airtable-table-feature-selection:not(.airtable-table-feature-selection--active):not(
+    .airtable-table-feature-selection--filter-active
+  ):hover::before {
   opacity: 1;
 }
 
@@ -226,7 +229,9 @@ body {
   z-index: 1;
 }
 
-.airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active)
+.airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active):not(
+    .airtable-table-feature-selection--filter-active
+  )
   img {
   mix-blend-mode: multiply;
 }
@@ -285,6 +290,154 @@ body {
 
 .airtable-table-feature-selection--active::before {
   opacity: 0;
+}
+
+.airtable-table-feature-selection--filter-active {
+  background: var(--airtable-filter-active-bg);
+}
+
+.airtable-table-feature-selection--filter-active::before {
+  opacity: 0;
+}
+
+.airtable-filter-dropdown {
+  border-radius: 3px;
+}
+
+.airtable-filter-menu-item {
+  position: relative;
+  height: 34px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 13px;
+  color: #1d1f24;
+  isolation: isolate;
+}
+
+.airtable-filter-menu-item:hover {
+  background: var(--airtable-hover-bg);
+}
+
+.airtable-filter-menu-item:hover img,
+.airtable-filter-menu-item:hover svg {
+  mix-blend-mode: multiply;
+}
+
+.airtable-filter-menu-item--field {
+  background: transparent;
+  display: block;
+  padding-left: 0;
+  z-index: 0;
+}
+
+.airtable-filter-menu-item--field:hover {
+  background: transparent;
+}
+
+.airtable-filter-menu-item--field::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 162px;
+  height: 34px;
+  border-radius: 4px;
+  background: transparent;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.airtable-filter-menu-item--field .airtable-filter-menu-item-icon,
+.airtable-filter-menu-item--field .airtable-filter-menu-item-label {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.airtable-filter-menu-item--field:hover::before {
+  background: var(--airtable-hover-bg);
+}
+
+.airtable-filter-menu-item img,
+.airtable-filter-menu-item-label,
+.airtable-filter-menu-item-icon {
+  position: relative;
+  z-index: 1;
+}
+
+.airtable-filter-menu-item-label {
+  line-height: 14px;
+  font-size: 13px;
+  display: inline-block;
+}
+
+.airtable-filter-menu-item-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.airtable-filter-menu-item-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.airtable-filter-menu-item--operator {
+  background: transparent;
+  z-index: 0;
+}
+
+.airtable-filter-menu-item--operator:hover {
+  background: transparent;
+}
+
+.airtable-filter-menu-item--operator::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 162px;
+  height: 34px;
+  border-radius: 4px;
+  background: transparent;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.airtable-filter-menu-item--operator:hover::before {
+  background: var(--airtable-hover-bg);
+}
+
+
+.airtable-filter-icon--active {
+  mix-blend-mode: multiply;
+}
+
+.airtable-filter-section {
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.airtable-filter-section:hover {
+  background: var(--airtable-hover-bg);
+}
+
+.airtable-filter-section:hover img {
+  mix-blend-mode: multiply;
 }
 
 .airtable-sort-dropdown {
@@ -771,4 +924,19 @@ body {
   left: 50%;
   top: 0;
   transform: translateX(-50%);
+}
+
+.airtable-plus-icon--small {
+  width: 9px;
+  height: 9px;
+}
+
+.airtable-plus-icon--small::before {
+  width: 9px;
+  height: 1px;
+}
+
+.airtable-plus-icon--small::after {
+  width: 1px;
+  height: 9px;
 }
