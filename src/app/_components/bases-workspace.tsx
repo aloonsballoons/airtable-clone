@@ -252,6 +252,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
   }, [menuBaseId]);
 
   const bases = baseListQuery.data ?? [];
+  const showInitialBaseListLoading =
+    baseListQuery.isLoading && !baseListQuery.isFetched;
   const userInitial = formatUserInitial(userName);
 
   return (
@@ -558,7 +560,7 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
           </div>
 
           <section className="mt-4">
-            {baseListQuery.isLoading ? (
+            {showInitialBaseListLoading ? (
               <div className="airtable-outline rounded-[6px] bg-white px-4 py-6 text-[13px] text-black/70">
                 Loading bases...
               </div>

@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import { Inter } from "next/font/google";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -52,7 +52,8 @@ const MAX_TABLES = 1000;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const BULK_ROWS = 100_000;
-const PAGE_ROWS = 50;
+const PAGE_ROWS = 500;
+const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
 const ROW_HEIGHT = 33;
 const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
@@ -431,11 +432,11 @@ const createFilterGroup = (): FilterGroupItem => ({
 
 const getLastViewedTableKey = (baseId: string) =>
   `airtable:last-viewed-table:${baseId}`;
+const getTableFilterStateKey = (baseId: string, tableId: string) =>
+  `airtable:table-filters:${baseId}:${tableId}`;
 
 export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
   const utils = api.useUtils();
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -465,10 +466,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [isHideFieldsMenuOpen, setIsHideFieldsMenuOpen] = useState(false);
   const [isSearchMenuOpen, setIsSearchMenuOpen] = useState(false);
-  const hasSearchParam = searchParams.has("search");
-  const initialSearchValue = searchParams.get("search") ?? "";
-  const [searchValue, setSearchValue] = useState(initialSearchValue);
-  const [hasInitializedSearch, setHasInitializedSearch] = useState(hasSearchParam);
+  const [searchValue, setSearchValue] = useState("");
   const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
   const [openSortDirectionId, setOpenSortDirectionId] = useState<string | null>(null);
   const [openSortFieldId, setOpenSortFieldId] = useState<string | null>(null);
@@ -531,7 +529,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const dragOffsetRef = useRef(0);
   const dragIndexRef = useRef(0);
   const hasLoadedTableMetaRef = useRef(false);
-  const lastSearchTableIdRef = useRef<string | null>(null);
+  const hydratedFilterTableIdRef = useRef<string | null>(null);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
   useEffect(() => {
@@ -548,22 +546,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [baseId]);
 
   useEffect(() => {
-    if (activeTableId === lastSearchTableIdRef.current) return;
-    lastSearchTableIdRef.current = activeTableId;
-    if (hasSearchParam) {
-      setHasInitializedSearch(true);
-    } else {
-      setHasInitializedSearch(false);
-      setSearchValue("");
-    }
-  }, [activeTableId, hasSearchParam]);
-
-  useEffect(() => {
-    if (!hasSearchParam) return;
-    const nextValue = searchParams.get("search") ?? "";
-    setSearchValue((prev) => (prev === nextValue ? prev : nextValue));
-    setHasInitializedSearch(true);
-  }, [hasSearchParam, searchParams]);
+    if (!activeTableId) return;
+    setSearchValue("");
+  }, [activeTableId]);
   useEffect(() => {
     utils.base.list.prefetch();
   }, [utils.base.list]);
@@ -576,14 +561,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       hasLoadedTableMetaRef.current = true;
     }
   }, [tableMetaQuery.data]);
-  const serverSearchValue = tableMetaQuery.data?.searchQuery ?? "";
-  useEffect(() => {
-    if (hasInitializedSearch) return;
-    if (!tableMetaQuery.data) return;
-    if (hasSearchParam) return;
-    setSearchValue(serverSearchValue);
-    setHasInitializedSearch(true);
-  }, [hasInitializedSearch, hasSearchParam, serverSearchValue, tableMetaQuery.data]);
   const rawSortConfig = tableMetaQuery.data?.sort ?? null;
   const sortConfigList: SortConfig[] = Array.isArray(rawSortConfig)
     ? rawSortConfig.map((item) => ({
@@ -602,25 +579,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeColumns = tableMetaQuery.data?.columns ?? [];
   const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
   const rawSearchQuery = searchValue.trim();
-  const searchQuery = hasInitializedSearch
-    ? rawSearchQuery
-    : serverSearchValue.trim() || rawSearchQuery;
+  const searchQuery = rawSearchQuery;
   const hasSearchQuery = searchQuery.length > 0;
-  useEffect(() => {
-    const currentParam = searchParams.get("search") ?? "";
-    const nextParam = searchQuery;
-    if (currentParam === nextParam) return;
-    const nextParams = new URLSearchParams(searchParams.toString());
-    if (nextParam) {
-      nextParams.set("search", nextParam);
-    } else {
-      nextParams.delete("search");
-    }
-    const nextQuery = nextParams.toString();
-    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
-      scroll: false,
-    });
-  }, [pathname, router, searchParams, searchQuery]);
   const columnById = useMemo(
     () => new Map(activeColumns.map((column) => [column.id, column])),
     [activeColumns]
@@ -812,11 +772,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   };
   const getRowsQueryKey = (tableId: string) =>
     getRowsQueryKeyForSort(tableId, sortParam);
-  const shouldWaitForSearch = !hasInitializedSearch && !hasSearchParam;
   const rowsQuery = api.base.getRows.useInfiniteQuery(
     getRowsQueryKey(activeTableId ?? ""),
     {
-      enabled: Boolean(activeTableId) && !shouldWaitForSearch,
+      enabled: Boolean(activeTableId),
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     }
   );
@@ -1039,7 +998,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (!activeTableId) return;
-    if (!hasInitializedSearch) return;
     const currentSearch = tableMetaQuery.data?.searchQuery ?? "";
     if (rawSearchQuery === currentSearch) return;
     const timeout = window.setTimeout(() => {
@@ -1048,7 +1006,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     return () => window.clearTimeout(timeout);
   }, [
     activeTableId,
-    hasInitializedSearch,
     rawSearchQuery,
     setTableSearch,
     tableMetaQuery.data?.searchQuery,
@@ -1963,6 +1920,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [sortRows]);
 
   useEffect(() => {
+    hydratedFilterTableIdRef.current = null;
     setFilterItems([]);
     setFilterConnector("and");
     setActiveFilterAdd(null);
@@ -1973,6 +1931,126 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setFocusedFilterValueId(null);
     setFilterValueErrorId(null);
   }, [activeTableId]);
+
+  useEffect(() => {
+    if (!activeTableId) return;
+    if (!tableMetaQuery.data) return;
+    if (hydratedFilterTableIdRef.current === activeTableId) return;
+
+    const parseCondition = (value: unknown): FilterConditionItem | null => {
+      if (!value || typeof value !== "object") return null;
+      const condition = value as Partial<FilterConditionItem>;
+      const columnId = typeof condition.columnId === "string" ? condition.columnId : null;
+      if (!columnId || hiddenColumnIdSet.has(columnId)) return null;
+      const column = columnById.get(columnId);
+      if (!column) return null;
+      const columnType = coerceColumnType(column.type);
+      const operatorValue = condition.operator;
+      if (typeof operatorValue !== "string") return null;
+      if (!(operatorValue in FILTER_OPERATOR_LABELS)) return null;
+      const operator = operatorValue as FilterOperator;
+      if (!getFilterOperatorsForType(columnType).includes(operator)) return null;
+      return {
+        id:
+          typeof condition.id === "string" && condition.id.length > 0
+            ? condition.id
+            : crypto.randomUUID(),
+        type: "condition",
+        columnId,
+        operator,
+        value: typeof condition.value === "string" ? condition.value : "",
+      };
+    };
+
+    let nextConnector: FilterConnector = "and";
+    let nextItems: FilterItem[] = [];
+
+    try {
+      const raw = window.localStorage.getItem(
+        getTableFilterStateKey(baseId, activeTableId)
+      );
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          connector?: unknown;
+          items?: unknown;
+        };
+        if (parsed.connector === "and" || parsed.connector === "or") {
+          nextConnector = parsed.connector;
+        }
+        if (Array.isArray(parsed.items)) {
+          nextItems = parsed.items.flatMap<FilterItem>((item) => {
+            if (!item || typeof item !== "object") return [];
+            const rawItem = item as {
+              id?: unknown;
+              type?: unknown;
+              connector?: unknown;
+              conditions?: unknown;
+            };
+            if (rawItem.type === "condition") {
+              const condition = parseCondition(rawItem);
+              return condition ? [condition] : [];
+            }
+            if (rawItem.type !== "group" || !Array.isArray(rawItem.conditions)) {
+              return [];
+            }
+            const conditions = rawItem.conditions
+              .map((condition) => parseCondition(condition))
+              .filter(
+                (condition): condition is FilterConditionItem => Boolean(condition)
+              );
+            if (conditions.length === 0) return [];
+            const connector: FilterConnector =
+              rawItem.connector === "or" ? "or" : "and";
+            return [
+              {
+                id:
+                  typeof rawItem.id === "string" && rawItem.id.length > 0
+                    ? rawItem.id
+                    : crypto.randomUUID(),
+                type: "group",
+                connector,
+                conditions,
+              },
+            ];
+          });
+        }
+      }
+    } catch {
+      try {
+        window.localStorage.removeItem(getTableFilterStateKey(baseId, activeTableId));
+      } catch {
+        // Ignore storage errors.
+      }
+      nextConnector = "and";
+      nextItems = [];
+    }
+
+    setFilterConnector(nextConnector);
+    setFilterItems(nextItems);
+    hydratedFilterTableIdRef.current = activeTableId;
+  }, [activeTableId, baseId, columnById, hiddenColumnIdSet, tableMetaQuery.data]);
+
+  useEffect(() => {
+    if (!activeTableId) return;
+    if (hydratedFilterTableIdRef.current !== activeTableId) return;
+    const storageKey = getTableFilterStateKey(baseId, activeTableId);
+    try {
+      if (filterItems.length === 0 && filterConnector === "and") {
+        window.localStorage.removeItem(storageKey);
+        return;
+      }
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          version: 1,
+          connector: filterConnector,
+          items: filterItems,
+        })
+      );
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [activeTableId, baseId, filterConnector, filterItems]);
 
   useEffect(() => {
     if (hiddenColumnIdSet.size === 0) return;
@@ -2196,6 +2274,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   );
 
   const rowCount = sortedTableData.length;
+  const showRowsInitialLoading = rowsQuery.isLoading && rowCount === 0;
+  const showRowsError = rowsQuery.isError && rowCount === 0;
+  const showRowsEmpty =
+    rowCount === 0 &&
+    !showRowsInitialLoading &&
+    !showRowsError &&
+    !rowsQuery.isFetching;
+  const rowsErrorMessage =
+    rowsQuery.error instanceof Error
+      ? rowsQuery.error.message
+      : "Try refreshing again.";
   const showRowLoader = rowsQuery.hasNextPage && !hasSearchQuery;
   const expandedRowId = useMemo(() => {
     if (!selectedCell) return null;
@@ -2219,7 +2308,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     count: showRowLoader ? rowCount + 1 : rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: estimateRowSize,
-    overscan: 28,
+    overscan: 42,
     getItemKey: (index) => sortedTableData[index]?.id ?? `loader-${index}`,
     isScrollingResetDelay: 100,
     useAnimationFrameWithResizeObserver: true,
@@ -2228,6 +2317,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const virtualItems = rowVirtualizer.getVirtualItems();
   const isScrolling = rowVirtualizer.isScrolling;
+  const rowCanvasHeight = Math.max(
+    rowVirtualizer.getTotalSize(),
+    showRowsInitialLoading || showRowsError || showRowsEmpty ? ROW_HEIGHT * 5 : 0
+  );
   const rowVirtualRange = useMemo(() => {
     if (!virtualItems.length) return { start: 0, end: 0 };
     return {
@@ -2373,18 +2466,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (lastVirtualRowIndex < 0) return;
-    if (
-      lastVirtualRowIndex >= rowCount - 1 &&
-      rowsQuery.hasNextPage &&
-      !rowsQuery.isFetchingNextPage
-    ) {
+    const rowsRemaining = rowCount - lastVirtualRowIndex - 1;
+    const viewportRows = Math.max(
+      1,
+      Math.ceil((parentRef.current?.clientHeight ?? 0) / ROW_HEIGHT)
+    );
+    const minRowsAhead = Math.max(ROW_PREFETCH_AHEAD, viewportRows * 8);
+    const shouldPrefetch = rowsRemaining <= minRowsAhead;
+    if (!shouldPrefetch) return;
+    if (rowsQuery.hasNextPage && !rowsQuery.isFetchingNextPage) {
       rowsQuery.fetchNextPage();
     }
   }, [
     lastVirtualRowIndex,
     rowCount,
-    rowsQuery,
     rowsQuery.hasNextPage,
+    rowsQuery.fetchNextPage,
     rowsQuery.isFetchingNextPage,
   ]);
 
@@ -4578,7 +4675,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       ref={searchInputRef}
                       value={searchValue}
                       onChange={(event) => {
-                        setHasInitializedSearch(true);
                         setSearchValue(event.target.value);
                       }}
                       onKeyDown={(event) => {
@@ -4696,7 +4792,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             <section className="w-[281px] flex-shrink-0 border-r border-[#DDE1E3] bg-white" />
 
             <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
-              {baseDetailsQuery.isLoading && (
+              {baseDetailsQuery.isLoading && !baseDetailsQuery.data && (
                 <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-6 airtable-secondary-font">
                   Loading base...
                 </div>
@@ -4707,6 +4803,26 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   We couldn’t load this base. It may have been deleted or you may not have access.
                 </div>
               )}
+
+              {!baseDetailsQuery.isLoading &&
+                !baseDetailsQuery.isError &&
+                activeTableId &&
+                tableMetaQuery.isLoading &&
+                !activeTable && (
+                  <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-6 airtable-secondary-font">
+                    Loading table...
+                  </div>
+                )}
+
+              {!baseDetailsQuery.isLoading &&
+                !baseDetailsQuery.isError &&
+                activeTableId &&
+                tableMetaQuery.isError &&
+                !activeTable && (
+                  <div className="rounded-[6px] border border-[#FECACA] bg-[#FEF2F2] px-4 py-6 text-[12px] text-[#991b1b]">
+                    We couldn’t load this table. Try refreshing again.
+                  </div>
+                )}
 
               {activeTable && (
                 <div className="h-full">
@@ -5001,7 +5117,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
                       <div
                         className="relative"
-                        style={{ height: rowVirtualizer.getTotalSize() }}
+                        style={{ height: rowCanvasHeight }}
                       >
                         {virtualItems.map((virtualRow) => {
                         const row = sortedTableData[virtualRow.index];
@@ -5032,6 +5148,158 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                           ? "var(--airtable-hover-bg)"
                           : "#ffffff";
                         const rowNumberHoverBg = "var(--airtable-cell-hover-bg)";
+
+                        if (isScrolling) {
+                          const nameHasSearchMatch =
+                            Boolean(nameColumn && hasSearchQuery && rowSearchMatches?.has(nameColumn.id));
+                          const nameIsSelected =
+                            Boolean(
+                              nameColumn &&
+                                selectedCell?.rowId === row.id &&
+                                selectedCell?.columnId === nameColumn.id
+                            );
+                          const nameBaseBackground =
+                            nameColumn && nameHasSearchMatch
+                              ? "#FFF3D3"
+                              : nameColumn && filteredColumnIds.has(nameColumn.id)
+                              ? "#E2F1E3"
+                              : nameColumn && sortedColumnIds.has(nameColumn.id)
+                              ? "var(--airtable-sort-column-bg)"
+                              : nameIsSelected
+                              ? "#ffffff"
+                              : rowHasSelection
+                              ? "var(--airtable-hover-bg)"
+                              : "#ffffff";
+                          const nameValue =
+                            nameColumn && nameColumn.type === "data"
+                              ? cellEdits[row.id]?.[nameColumn.id] ?? row[nameColumn.id] ?? ""
+                              : "";
+
+                          return (
+                            <div
+                              key={row.id}
+                              className="airtable-row absolute left-0 right-0 flex text-[13px] text-[#1d1f24] pointer-events-none"
+                              style={{
+                                transform: `translate3d(0, ${virtualRow.start}px, 0)`,
+                                height: `${virtualRow.size}px`,
+                                width: totalColumnsWidth,
+                                zIndex: rowHasSelection ? 5 : 1,
+                              }}
+                            >
+                              {rowNumberColumn && (
+                                <div
+                                  className="airtable-cell flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
+                                  style={{
+                                    borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
+                                    borderLeft: "none",
+                                    borderRight: "none",
+                                    width: rowNumberColumnWidth,
+                                    minWidth: rowNumberColumnWidth,
+                                    maxWidth: rowNumberColumnWidth,
+                                    flex: "0 0 auto",
+                                    height: 33,
+                                    position: "sticky",
+                                    left: 0,
+                                    zIndex: rowHasSelection ? 20 : 15,
+                                    ["--airtable-cell-base" as string]: rowNumberBaseBg,
+                                    ["--airtable-cell-hover" as string]: rowNumberHoverBg,
+                                  }}
+                                  aria-hidden="true"
+                                >
+                                  <span className="block w-[17px] text-center">
+                                    {virtualRow.index + 1}
+                                  </span>
+                                </div>
+                              )}
+                              {nameColumn && nameColumn.type === "data" && (
+                                <div
+                                  className="airtable-cell flex items-center px-2 text-[13px] text-[#1d1f24]"
+                                  style={{
+                                    ...bodyCellBorder(nameColumn, true, isLastRow),
+                                    width: nameColumnWidth,
+                                    minWidth: nameColumnWidth,
+                                    maxWidth: nameColumnWidth,
+                                    flex: "0 0 auto",
+                                    height: 33,
+                                    position: "sticky",
+                                    left: rowNumberColumnWidth,
+                                    zIndex: rowHasSelection ? 15 : 10,
+                                    backgroundColor: nameBaseBackground,
+                                  }}
+                                >
+                                  <span className="block w-full truncate">{nameValue}</span>
+                                </div>
+                              )}
+                              {scrollablePaddingLeft > 0 && (
+                                <div style={{ width: scrollablePaddingLeft }} />
+                              )}
+                              {scrollableVirtualColumns.map((virtualColumn) => {
+                                const column = columnsWithAdd[virtualColumn.index];
+                                if (!column) return null;
+                                if (column.type === "add") {
+                                  return (
+                                    <div
+                                      key={`${row.id}-${column.id}-scrolling`}
+                                      style={{
+                                        width: virtualColumn.size,
+                                        flex: "0 0 auto",
+                                      }}
+                                      aria-hidden="true"
+                                    />
+                                  );
+                                }
+                                if (column.type !== "data") {
+                                  return null;
+                                }
+                                const value = cellEdits[row.id]?.[column.id] ?? row[column.id] ?? "";
+                                const isNumber = column.fieldType === "number";
+                                const isSelected =
+                                  selectedCell?.rowId === row.id &&
+                                  selectedCell?.columnId === column.id;
+                                const isSortedColumn = sortedColumnIds.has(column.id);
+                                const isFilteredColumn = filteredColumnIds.has(column.id);
+                                const cellHasSearchMatch =
+                                  hasSearchQuery && rowSearchMatches?.has(column.id);
+                                const cellBaseBackground = cellHasSearchMatch
+                                  ? "#FFF3D3"
+                                  : isFilteredColumn
+                                  ? "#E2F1E3"
+                                  : isSortedColumn
+                                  ? "var(--airtable-sort-column-bg)"
+                                  : isSelected
+                                  ? "#ffffff"
+                                  : rowHasSelection
+                                  ? "var(--airtable-hover-bg)"
+                                  : "#ffffff";
+                                return (
+                                  <div
+                                    key={`${row.id}-${column.id}-scrolling`}
+                                    className="airtable-cell flex items-center px-2 text-[13px] text-[#1d1f24]"
+                                    style={{
+                                      ...bodyCellBorder(column, false, isLastRow),
+                                      width: virtualColumn.size,
+                                      flex: "0 0 auto",
+                                      height: 33,
+                                      backgroundColor: cellBaseBackground,
+                                    }}
+                                  >
+                                    <span
+                                      className="block w-full truncate"
+                                      style={{
+                                        textAlign: isNumber ? "right" : "left",
+                                      }}
+                                    >
+                                      {value}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {scrollablePaddingRight > 0 && (
+                                <div style={{ width: scrollablePaddingRight }} />
+                              )}
+                            </div>
+                          );
+                        }
 
                         return (
                           <div
@@ -5720,6 +5988,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                           </div>
                         );
                       })}
+                        {(showRowsInitialLoading || showRowsError || showRowsEmpty) && (
+                          <div className="absolute inset-0 z-40 flex items-center justify-center px-4">
+                            <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-3 text-[12px] text-[#616670] shadow-sm">
+                              {showRowsInitialLoading && <span>Loading rows...</span>}
+                              {showRowsError && (
+                                <span>
+                                  We couldn&apos;t load table rows. {rowsErrorMessage}
+                                </span>
+                              )}
+                              {showRowsEmpty && hasSearchQuery && (
+                                <div className="flex items-center gap-3">
+                                  <span>No rows match &quot;{searchQuery}&quot;.</span>
+                                  <button
+                                    type="button"
+                                    className="rounded-[4px] border border-[#DDE1E3] px-2 py-1 text-[11px] font-medium text-[#1D1F24] hover:bg-[#F7F8FC]"
+                                    onClick={() => {
+                                      setSearchValue("");
+                                    }}
+                                  >
+                                    Clear search
+                                  </button>
+                                </div>
+                              )}
+                              {showRowsEmpty && !hasSearchQuery && <span>No rows yet.</span>}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div
