@@ -16,6 +16,7 @@ body {
   --airtable-button-shadow: 0 0 6.5px rgba(0, 0, 0, 0.0578);
   --airtable-selection-shadow: 0 1px 6.5px rgba(199, 200, 201, 0.5);
   --airtable-hover-bg: #f2f2f2;
+  --airtable-cell-hover-bg: #f8f8f8;
   --airtable-secondary-color: #616670;
   --airtable-secondary-font-size: 13px;
   --airtable-secondary-font-weight: 500;
@@ -58,6 +59,10 @@ body {
 
 .airtable-hover-bg {
   background: var(--airtable-hover-bg);
+}
+
+.airtable-cell-hover-bg {
+  background: var(--airtable-cell-hover-bg);
 }
 
 .airtable-secondary-font {
@@ -160,6 +165,14 @@ body {
   line-height: 13px;
 }
 
+.airtable-find-field-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: #757575;
+  font-family: inherit;
+  line-height: 13px;
+}
+
 .airtable-dropdown-body {
   font-size: 13px;
   font-weight: 400;
@@ -208,6 +221,36 @@ body {
   padding: 0 8px;
 }
 
+.airtable-search-trigger {
+  min-width: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  --search-icon-color: #1d1f24;
+}
+
+.airtable-search-trigger::before {
+  border-radius: 6px;
+}
+
+.airtable-search-trigger:hover {
+  --search-icon-color: #616670;
+}
+
+.airtable-x-trigger {
+  min-width: 0;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  --airtable-hover-bg: #f2f4f8;
+}
+
+.airtable-x-trigger::before {
+  border-radius: 6px;
+}
+
 .airtable-table-feature-selection::before {
   content: "";
   position: absolute;
@@ -220,7 +263,7 @@ body {
 
 .airtable-table-feature-selection:not(.airtable-table-feature-selection--active):not(
     .airtable-table-feature-selection--filter-active
-  ):hover::before {
+  ):not(.airtable-table-feature-selection--hide-active):hover::before {
   opacity: 1;
 }
 
@@ -231,8 +274,7 @@ body {
 
 .airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active):not(
     .airtable-table-feature-selection--filter-active
-  )
-  img {
+  ):not(.airtable-table-feature-selection--hide-active) img {
   mix-blend-mode: multiply;
 }
 
@@ -300,8 +342,96 @@ body {
   opacity: 0;
 }
 
+.airtable-table-feature-selection--hide-active {
+  background: #c3ebff;
+  isolation: isolate;
+}
+
+.airtable-table-feature-selection--hide-active::before {
+  opacity: 0;
+}
+
+.airtable-hide-fields-icon--active {
+  mix-blend-mode: multiply;
+}
+
 .airtable-filter-dropdown {
   border-radius: 3px;
+}
+
+.airtable-hide-fields-dropdown {
+  border-radius: 3px;
+}
+
+.airtable-hide-fields-row {
+  position: absolute;
+  left: 16px;
+  height: 18px;
+  border-radius: 3px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.airtable-hide-fields-row:hover {
+  background: #f2f2f2;
+}
+
+.airtable-hide-fields-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: #1d1f24;
+  font-family: inherit;
+  line-height: 13px;
+}
+
+.airtable-hide-fields-icon {
+  display: block;
+  object-fit: contain;
+}
+
+.airtable-hide-fields-row:hover .airtable-hide-fields-icon {
+  mix-blend-mode: multiply;
+}
+
+.airtable-hide-fields-toggle {
+  display: block;
+}
+
+.airtable-hide-fields-action {
+  width: 136px;
+  height: 26px;
+  border-radius: 3px;
+  background: #f5f5f5;
+  border: none;
+  font-size: 11px;
+  font-weight: 400;
+  color: #55565d;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.airtable-hide-fields-action:hover {
+  background: #f2f2f2;
+  color: #1d1f24;
+}
+
+.airtable-hide-fields-reorder {
+  display: inline-block;
+  background-color: #8d8e92;
+  mask-image: url("../assets/reorder.svg");
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("../assets/reorder.svg");
+  -webkit-mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
 }
 
 .airtable-filter-menu-item {
@@ -498,7 +628,7 @@ body {
   resize: none;
   box-sizing: border-box;
   line-height: 18px;
-  padding: 6px 8px;
+  padding: 7.5px 8px;
   overflow-y: auto;
 }
 
@@ -533,6 +663,71 @@ body {
 .airtable-cell--selected,
 .airtable-cell--editing {
   position: relative;
+}
+
+.airtable-row {
+  --airtable-cell-base: transparent;
+  --airtable-cell-hover: var(--airtable-cell-hover-bg);
+  overflow: visible;
+}
+
+.airtable-cell {
+  background-color: var(--airtable-cell-base, transparent);
+  transition: background-color 0.08s ease;
+}
+
+.airtable-row:hover .airtable-cell {
+  background-color: var(--airtable-cell-hover, var(--airtable-cell-base, transparent));
+}
+
+.airtable-search-highlight {
+  background: #fed76a;
+  border-radius: 2px;
+  padding: 0 1px;
+  color: inherit;
+}
+
+.airtable-search-overlay {
+  position: absolute;
+  inset: 0;
+  padding: 0 8px;
+  line-height: 33px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.airtable-search-overlay--expanded {
+  padding: 7.5px 16px;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+
+.airtable-search-input--hidden {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-fill-color: transparent;
+}
+
+.airtable-row-hover-show {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.08s ease;
+}
+
+.airtable-row-hover-hide {
+  opacity: 1;
+  transition: opacity 0.08s ease;
+}
+
+.airtable-row:hover .airtable-row-hover-show {
+  opacity: 1;
+}
+
+.airtable-row:hover .airtable-row-hover-hide {
+  opacity: 0;
 }
 
 .airtable-cell--selected::after,
@@ -779,6 +974,38 @@ body {
 .airtable-search-icon {
   mask-image: url("../assets/search.svg");
   -webkit-mask-image: url("../assets/search.svg");
+}
+
+.airtable-search-spinner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: 50% 50%;
+  color: #8e8f92;
+  animation: airtable-search-spin 2s linear infinite;
+}
+
+.airtable-search-no-results {
+  position: absolute;
+  font-family: "Inter", sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: #8e8f92;
+}
+
+@keyframes airtable-search-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(180deg);
+  }
+  100% {
+    transform: rotate(1260deg);
+  }
 }
 
 .airtable-open-data-frame {

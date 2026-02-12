@@ -68,6 +68,11 @@ export const baseTable = createTable(
 			.$type<Array<{ columnId: string; direction: "asc" | "desc" }>>()
 			.notNull()
 			.default(sql`'[]'::jsonb`),
+		hiddenColumnIds: jsonb("hidden_column_ids")
+			.$type<string[]>()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
+		searchQuery: d.text("search_query"),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())
@@ -115,6 +120,7 @@ export const tableRow = createTable(
 			.$type<Record<string, string>>()
 			.notNull()
 			.default(sql`'{}'::jsonb`),
+		searchText: d.text("search_text").notNull().default(""),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())

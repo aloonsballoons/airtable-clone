@@ -104,6 +104,12 @@ const normalizeNumberValue = (value: string) => {
 	return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
 };
 
+const buildSearchText = (data: Record<string, string> | null | undefined) =>
+	Object.values(data ?? {})
+		.map((value) => String(value ?? "").trim())
+		.filter(Boolean)
+		.join(" ");
+
 export const baseRouter = createTRPCRouter({
 	list: protectedProcedure.query(async ({ ctx }) => {
 		const bases = await ctx.db.query.base.findMany({
@@ -579,6 +585,20 @@ export const baseRouter = createTRPCRouter({
 					})
 					.where(eq(baseTable.id, columnRecord.tableId));
 			}
+			const currentHiddenColumnIds = Array.isArray(
+				columnRecord.table.hiddenColumnIds,
+			)
+				? columnRecord.table.hiddenColumnIds
+				: [];
+			const nextHiddenColumnIds = currentHiddenColumnIds.filter(
+				(columnId) => columnId !== input.columnId,
+			);
+			if (nextHiddenColumnIds.length !== currentHiddenColumnIds.length) {
+				await ctx.db
+					.update(baseTable)
+					.set({ hiddenColumnIds: nextHiddenColumnIds })
+					.where(eq(baseTable.id, columnRecord.tableId));
+			}
 			return { success: true };
 		}),
 
@@ -600,6 +620,14 @@ export const baseRouter = createTRPCRouter({
 			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
+			const rawHiddenColumnIds = Array.isArray(tableRecord.hiddenColumnIds)
+				? tableRecord.hiddenColumnIds
+				: [];
+			const hiddenColumnIdSet = new Set(
+				rawHiddenColumnIds.filter((columnId): columnId is string =>
+					typeof columnId === "string",
+				),
+			);
 
 			const providedSort = input.sort ?? [];
 			const uniqueSort: Array<{ columnId: string; direction: "asc" | "desc" }> = [];
@@ -612,34 +640,121 @@ export const baseRouter = createTRPCRouter({
 					direction: item.direction === "desc" ? "desc" : "asc",
 				});
 			}
+			const filteredSort = uniqueSort.filter(
+				(sort) => !hiddenColumnIdSet.has(sort.columnId),
+			);
 
-			if (uniqueSort.length > 0) {
+			if (filteredSort.length > 0) {
 				const columnRecords = await ctx.db.query.tableColumn.findMany({
 					where: inArray(
 						tableColumn.id,
-						uniqueSort.map((sort) => sort.columnId),
+						filteredSort.map((sort) => sort.columnId),
 					),
 				});
 				if (
-					columnRecords.length !== uniqueSort.length ||
+					columnRecords.length !== filteredSort.length ||
 					columnRecords.some((column) => column.tableId !== input.tableId)
 				) {
 					throw new TRPCError({ code: "NOT_FOUND" });
 				}
 			}
 
-			const primarySort = uniqueSort[0] ?? null;
+			const primarySort = filteredSort[0] ?? null;
 
 			await ctx.db
 				.update(baseTable)
 				.set({
-					sortConfig: uniqueSort,
+					sortConfig: filteredSort,
 					sortColumnId: primarySort?.columnId ?? null,
 					sortDirection: primarySort?.direction ?? null,
 				})
 				.where(eq(baseTable.id, input.tableId));
 
-			return { sort: uniqueSort.length ? uniqueSort : null };
+			return { sort: filteredSort.length ? filteredSort : null };
+		}),
+
+	setTableSearch: protectedProcedure
+		.input(
+			z.object({
+				tableId: z.string().uuid(),
+				search: z.string().nullable(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const nextSearch = (input.search ?? "").trim();
+			await ctx.db
+				.update(baseTable)
+				.set({
+					searchQuery: nextSearch ? nextSearch : null,
+					updatedAt: new Date(),
+				})
+				.where(eq(baseTable.id, input.tableId));
+
+			return { searchQuery: nextSearch };
+		}),
+
+	setHiddenColumns: protectedProcedure
+		.input(
+			z.object({
+				tableId: z.string().uuid(),
+				hiddenColumnIds: z.array(z.string().uuid()),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const columns = await ctx.db.query.tableColumn.findMany({
+				where: eq(tableColumn.tableId, input.tableId),
+			});
+			const columnsById = new Map(columns.map((column) => [column.id, column]));
+			const uniqueHidden = Array.from(new Set(input.hiddenColumnIds));
+			const nextHidden = uniqueHidden.filter((columnId) => {
+				const column = columnsById.get(columnId);
+				return Boolean(column && column.name !== "Name");
+			});
+
+			const currentSortConfig = Array.isArray(tableRecord.sortConfig)
+				? tableRecord.sortConfig
+				: [];
+			const nextSortConfig = currentSortConfig.filter(
+				(sort) => !nextHidden.includes(sort.columnId),
+			);
+			const nextPrimary = nextSortConfig[0] ?? null;
+
+			await ctx.db
+				.update(baseTable)
+				.set({
+					hiddenColumnIds: nextHidden,
+					sortConfig: nextSortConfig,
+					sortColumnId: nextPrimary?.columnId ?? null,
+					sortDirection: nextPrimary?.direction ?? null,
+				})
+				.where(eq(baseTable.id, input.tableId));
+
+			return {
+				hiddenColumnIds: nextHidden,
+				sort: nextSortConfig.length ? nextSortConfig : null,
+			};
 		}),
 
 	deleteRow: protectedProcedure
@@ -729,10 +844,11 @@ export const baseRouter = createTRPCRouter({
 				...(rowRecord.data ?? {}),
 				[input.columnId]: normalizedValue,
 			};
+			const nextSearchText = buildSearchText(nextData);
 
 			await ctx.db
 				.update(tableRow)
-				.set({ data: nextData, updatedAt: new Date() })
+				.set({ data: nextData, searchText: nextSearchText, updatedAt: new Date() })
 				.where(eq(tableRow.id, input.rowId));
 
 			return { success: true };
@@ -791,8 +907,23 @@ export const baseRouter = createTRPCRouter({
 				ctx.db
 					.select({ count: sql<number>`count(*)::int` })
 					.from(tableRow)
-					.where(eq(tableRow.tableId, input.tableId)),
+				.where(eq(tableRow.tableId, input.tableId)),
 			]);
+			const columnIdSet = new Set(columns.map((column) => column.id));
+			const nameColumnId =
+				columns.find((column) => column.name === "Name")?.id ?? null;
+			const rawHiddenColumnIds = Array.isArray(tableRecord.hiddenColumnIds)
+				? tableRecord.hiddenColumnIds
+				: [];
+			const hiddenColumnIds = rawHiddenColumnIds.filter(
+				(columnId): columnId is string =>
+					typeof columnId === "string" &&
+					columnIdSet.has(columnId) &&
+					columnId !== nameColumnId,
+			);
+			const visibleSort = sort
+				? sort.filter((item) => !hiddenColumnIds.includes(item.columnId))
+				: null;
 
 			return {
 				table: { id: tableRecord.id, name: tableRecord.name },
@@ -802,7 +933,9 @@ export const baseRouter = createTRPCRouter({
 					type: column.type ?? "single_line_text",
 				})),
 				rowCount: Number(rowCount[0]?.count ?? 0),
-				sort,
+				sort: visibleSort && visibleSort.length > 0 ? visibleSort : null,
+				hiddenColumnIds,
+				searchQuery: tableRecord.searchQuery ?? "",
 			};
 		}),
 
@@ -816,6 +949,7 @@ export const baseRouter = createTRPCRouter({
 					.array(sortItemSchema)
 					.optional(),
 				filter: filterSchema.optional(),
+				search: z.string().optional(),
 			}),
 		)
 		.query(async ({ ctx, input }) => {
@@ -829,6 +963,14 @@ export const baseRouter = createTRPCRouter({
 			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
+			const rawHiddenColumnIds = Array.isArray(tableRecord.hiddenColumnIds)
+				? tableRecord.hiddenColumnIds
+				: [];
+			const hiddenColumnIdSet = new Set(
+				rawHiddenColumnIds.filter((columnId): columnId is string =>
+					typeof columnId === "string",
+				),
+			);
 
 			const providedSort = input.sort ?? null;
 			const legacySort =
@@ -855,6 +997,9 @@ export const baseRouter = createTRPCRouter({
 				seenColumns.add(sort.columnId);
 				return true;
 			});
+			effectiveSorts = effectiveSorts.filter(
+				(sort) => !hiddenColumnIdSet.has(sort.columnId),
+			);
 
 			let sortColumnsById = new Map<
 				string,
@@ -889,12 +1034,16 @@ export const baseRouter = createTRPCRouter({
 				const filterColumnIds = new Set<string>();
 				input.filter.items.forEach((item) => {
 					if (item.type === "condition") {
-						filterColumnIds.add(item.columnId);
+						if (!hiddenColumnIdSet.has(item.columnId)) {
+							filterColumnIds.add(item.columnId);
+						}
 						return;
 					}
-					item.conditions.forEach((condition) =>
-						filterColumnIds.add(condition.columnId),
-					);
+					item.conditions.forEach((condition) => {
+						if (!hiddenColumnIdSet.has(condition.columnId)) {
+							filterColumnIds.add(condition.columnId);
+						}
+					});
 				});
 
 				const filterColumns = filterColumnIds.size
@@ -909,6 +1058,7 @@ export const baseRouter = createTRPCRouter({
 				const buildConditionExpression = (
 					condition: z.infer<typeof filterConditionSchema>,
 				): SqlExpression | null => {
+					if (hiddenColumnIdSet.has(condition.columnId)) return null;
 					const column = filterColumnsById.get(condition.columnId);
 					if (!column || column.tableId !== input.tableId) return null;
 					const columnType = column.type ?? "single_line_text";
@@ -1011,11 +1161,28 @@ export const baseRouter = createTRPCRouter({
 				);
 			}
 
+			const rawSearch = input.search ?? "";
+			const trimmedSearch = rawSearch.trim();
+			let searchExpression: SqlExpression | null = null;
+			if (trimmedSearch) {
+				searchExpression = sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${trimmedSearch}%`}`;
+			}
+
 			const offset = input.cursor ?? 0;
 			const rows = await ctx.db.query.tableRow.findMany({
-				where: filterExpression
-					? and(eq(tableRow.tableId, input.tableId), filterExpression)
-					: eq(tableRow.tableId, input.tableId),
+				where: (() => {
+					const baseWhere = eq(tableRow.tableId, input.tableId);
+					if (filterExpression && searchExpression) {
+						return and(baseWhere, filterExpression, searchExpression);
+					}
+					if (filterExpression) {
+						return and(baseWhere, filterExpression);
+					}
+					if (searchExpression) {
+						return and(baseWhere, searchExpression);
+					}
+					return baseWhere;
+				})(),
 				orderBy: (row, { asc, desc }) =>
 					effectiveSorts.length > 0
 						? [
@@ -1094,8 +1261,20 @@ export const baseRouter = createTRPCRouter({
 				ctx.db
 					.select({ count: sql<number>`count(*)::int` })
 					.from(tableRow)
-					.where(eq(tableRow.tableId, input.tableId)),
+				.where(eq(tableRow.tableId, input.tableId)),
 			]);
+			const columnIdSet = new Set(columns.map((column) => column.id));
+			const nameColumnId =
+				columns.find((column) => column.name === "Name")?.id ?? null;
+			const rawHiddenColumnIds = Array.isArray(tableRecord.hiddenColumnIds)
+				? tableRecord.hiddenColumnIds
+				: [];
+			const hiddenColumnIds = rawHiddenColumnIds.filter(
+				(columnId): columnId is string =>
+					typeof columnId === "string" &&
+					columnIdSet.has(columnId) &&
+					columnId !== nameColumnId,
+			);
 
 			return {
 				table: { id: tableRecord.id, name: tableRecord.name },
@@ -1109,6 +1288,7 @@ export const baseRouter = createTRPCRouter({
 					data: row.data ?? {},
 				})),
 				rowCount: Number(rowCount[0]?.count ?? 0),
+				hiddenColumnIds,
 			};
 		}),
 });

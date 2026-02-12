@@ -66,6 +66,7 @@ const rowTable = pgTable("table_row", {
   id: uuid("id").primaryKey(),
   tableId: uuid("table_id").notNull(),
   data: jsonb("data").notNull(),
+  searchText: text("search_text").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 });
@@ -308,10 +309,15 @@ for (let batchIndex = 0; batchIndex < batches; batchIndex += 1) {
     for (const col of columns) {
       data[col.id] = valueForColumnName(col.name);
     }
+    const searchText = Object.values(data)
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
     return {
       id: crypto.randomUUID(),
       tableId: tableRecord.id,
       data,
+      searchText,
       createdAt: now,
       updatedAt: now,
     };

@@ -2,12 +2,12 @@
 
 import clsx from "clsx";
 import { Inter } from "next/font/google";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import arrowIcon from "~/assets/arrow.svg";
@@ -16,6 +16,7 @@ import attachmentsIcon from "~/assets/attachments.svg";
 import bellIcon from "~/assets/bell.svg";
 import colourIcon from "~/assets/colour.svg";
 import deleteIcon from "~/assets/delete.svg";
+import expandIcon from "~/assets/expand.svg";
 import filterIcon from "~/assets/filter.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
 import groupIcon from "~/assets/group.svg";
@@ -32,6 +33,7 @@ import pinkIcon from "~/assets/pink.svg";
 import refreshIcon from "~/assets/refresh.svg";
 import reorderIcon from "~/assets/reorder.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
+import searchIcon from "~/assets/search.svg";
 import shareSyncIcon from "~/assets/share-and-sync.svg";
 import sortIcon from "~/assets/sort.svg";
 import statusIcon from "~/assets/status.svg";
@@ -51,6 +53,7 @@ const MAX_ROWS = 2_000_000;
 const BULK_ROWS = 100_000;
 const PAGE_ROWS = 50;
 const ROW_HEIGHT = 33;
+const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
 const MAX_COLUMN_WIDTH = 420;
@@ -62,6 +65,38 @@ const MAX_NUMBER_DECIMALS = 8;
 const STATUS_ICON_SCALE = 1.1;
 const STATUS_MENU_ICON_SIZE = 15 * STATUS_ICON_SCALE;
 const STATUS_HEADER_ICON_SIZE = 13 * STATUS_ICON_SCALE;
+const HIDE_FIELDS_DROPDOWN_WIDTH = 320;
+const HIDE_FIELDS_HEADER_LEFT = 16;
+const HIDE_FIELDS_HEADER_TOP = 18;
+const HIDE_FIELDS_HELP_LEFT = 289;
+const HIDE_FIELDS_HELP_TOP = 18;
+const HIDE_FIELDS_SEPARATOR_LEFT = 16;
+const HIDE_FIELDS_SEPARATOR_TOP = 44;
+const HIDE_FIELDS_SEPARATOR_WIDTH = 288;
+const HIDE_FIELDS_SEPARATOR_HEIGHT = 2;
+const HIDE_FIELDS_TEXT_LEFT = 73;
+const HIDE_FIELDS_FIRST_TEXT_TOP = 61;
+const HIDE_FIELDS_TEXT_HEIGHT = 13;
+const HIDE_FIELDS_TEXT_ROW_GAP = HIDE_FIELDS_TEXT_HEIGHT + 13;
+const HIDE_FIELDS_HOVER_LEFT = 16;
+const HIDE_FIELDS_HOVER_WIDTH = 272;
+const HIDE_FIELDS_HOVER_HEIGHT = 18;
+const HIDE_FIELDS_TOGGLE_LEFT = 20;
+const HIDE_FIELDS_TOGGLE_WIDTH = 13;
+const HIDE_FIELDS_TOGGLE_HEIGHT = 8;
+const HIDE_FIELDS_REORDER_WIDTH = 9;
+const HIDE_FIELDS_REORDER_HEIGHT = 12;
+const HIDE_FIELDS_REORDER_RIGHT_OFFSET = 20;
+const HIDE_FIELDS_REORDER_LEFT =
+  HIDE_FIELDS_DROPDOWN_WIDTH -
+  HIDE_FIELDS_REORDER_RIGHT_OFFSET -
+  HIDE_FIELDS_REORDER_WIDTH;
+const HIDE_FIELDS_REORDER_TOP = 62;
+const HIDE_FIELDS_REORDER_ROW_GAP = HIDE_FIELDS_REORDER_HEIGHT + 14;
+const HIDE_FIELDS_BUTTON_WIDTH = 136;
+const HIDE_FIELDS_BUTTON_HEIGHT = 26;
+const HIDE_FIELDS_BUTTON_GAP = 24;
+const HIDE_FIELDS_BUTTON_BOTTOM_PADDING = 10;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
@@ -121,6 +156,32 @@ const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
   return (
     sortAddMenuIconSpecByName[name] ?? sortAddMenuIconSpecByType[resolvedType]
   );
+};
+
+const hideFieldsIconSpecByName: Record<
+  string,
+  { src: string; width: number; height: number; gap: number }
+> = {
+  Assignee: { src: assigneeIcon.src, width: 15, height: 16, gap: 9 },
+  Status: { src: statusIcon.src, width: 17, height: 17, gap: 7 },
+  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, gap: 9 },
+  Name: { src: nameIcon.src, width: 12.6, height: 12.6, gap: 10 },
+  Notes: { src: notesIcon.src, width: 15, height: 13, gap: 8 },
+  Number: { src: numberIcon.src, width: 13, height: 13, gap: 9.5 },
+};
+
+const hideFieldsIconSpecByType: Record<
+  ColumnFieldType,
+  { src: string; width: number; height: number; gap: number }
+> = {
+  single_line_text: hideFieldsIconSpecByName.Name,
+  long_text: hideFieldsIconSpecByName.Notes,
+  number: hideFieldsIconSpecByName.Number,
+};
+
+const getHideFieldsIconSpec = (name: string, type?: string | null) => {
+  const resolvedType = coerceColumnType(type);
+  return hideFieldsIconSpecByName[name] ?? hideFieldsIconSpecByType[resolvedType];
 };
 
 const addColumnTypeOptions: Array<{
@@ -257,6 +318,38 @@ const normalizeNumberInput = (value: string) => {
   return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
 };
 
+const renderSearchHighlight = (value: string, query: string) => {
+  if (!query) return value;
+  const normalizedValue = value.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  const firstMatch = normalizedValue.indexOf(normalizedQuery);
+  if (firstMatch === -1) return value;
+  const parts: Array<string | JSX.Element> = [];
+  let startIndex = 0;
+  let matchIndex = firstMatch;
+  let matchCount = 0;
+  while (matchIndex !== -1) {
+    if (matchIndex > startIndex) {
+      parts.push(value.slice(startIndex, matchIndex));
+    }
+    parts.push(
+      <mark
+        key={`${matchIndex}-${matchCount}`}
+        className="airtable-search-highlight"
+      >
+        {value.slice(matchIndex, matchIndex + query.length)}
+      </mark>
+    );
+    startIndex = matchIndex + query.length;
+    matchIndex = normalizedValue.indexOf(normalizedQuery, startIndex);
+    matchCount += 1;
+  }
+  if (startIndex < value.length) {
+    parts.push(value.slice(startIndex));
+  }
+  return parts;
+};
+
 const FILTER_CONNECTORS: FilterConnector[] = ["and", "or"];
 const FILTER_TEXT_OPERATORS: FilterOperator[] = [
   "contains",
@@ -330,12 +423,21 @@ const createFilterGroup = (): FilterGroupItem => ({
   conditions: [createFilterCondition()],
 });
 
+const getLastViewedTableKey = (baseId: string) =>
+  `airtable:last-viewed-table:${baseId}`;
+
 export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const utils = api.useUtils();
   const parentRef = useRef<HTMLDivElement>(null);
 
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
+  const [preferredTableId, setPreferredTableId] = useState<string | null>(null);
+  const [preferredTableBaseId, setPreferredTableBaseId] = useState<string | null>(
+    null
+  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [resizing, setResizing] = useState<ColumnResizeState | null>(null);
@@ -343,7 +445,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     {}
   );
   const [ensuredTableId, setEnsuredTableId] = useState<string | null>(null);
-  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
   const [hoveredHeaderId, setHoveredHeaderId] = useState<string | null>(null);
   const [selectedCell, setSelectedCell] = useState<{
     rowId: string;
@@ -356,6 +457,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [addRowHover, setAddRowHover] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
+  const [isHideFieldsMenuOpen, setIsHideFieldsMenuOpen] = useState(false);
+  const [isSearchMenuOpen, setIsSearchMenuOpen] = useState(false);
+  const hasSearchParam = searchParams.has("search");
+  const initialSearchValue = searchParams.get("search") ?? "";
+  const [searchValue, setSearchValue] = useState(initialSearchValue);
+  const [hasInitializedSearch, setHasInitializedSearch] = useState(hasSearchParam);
   const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
   const [openSortDirectionId, setOpenSortDirectionId] = useState<string | null>(null);
   const [openSortFieldId, setOpenSortFieldId] = useState<string | null>(null);
@@ -386,14 +493,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [draggingFilterTop, setDraggingFilterTop] = useState<number | null>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
+  const hideFieldsMenuRef = useRef<HTMLDivElement>(null);
+  const searchMenuRef = useRef<HTMLDivElement>(null);
   const sortFieldMenuRef = useRef<HTMLDivElement>(null);
   const filterFieldMenuListRef = useRef<HTMLDivElement>(null);
   const filterOperatorMenuListRef = useRef<HTMLDivElement>(null);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const sortAddMenuListRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchMaskId = useId().replace(/:/g, "");
+  const closeMaskId = useId().replace(/:/g, "");
   const cellRefs = useRef<
     Map<string, HTMLInputElement | HTMLTextAreaElement | null>
   >(new Map());
@@ -411,8 +525,39 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const dragOffsetRef = useRef(0);
   const dragIndexRef = useRef(0);
   const hasLoadedTableMetaRef = useRef(false);
+  const lastSearchTableIdRef = useRef<string | null>(null);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
+  useEffect(() => {
+    setPreferredTableId(null);
+    setPreferredTableBaseId(null);
+    try {
+      const storedId = window.localStorage.getItem(getLastViewedTableKey(baseId));
+      setPreferredTableId(storedId);
+    } catch {
+      setPreferredTableId(null);
+    } finally {
+      setPreferredTableBaseId(baseId);
+    }
+  }, [baseId]);
+
+  useEffect(() => {
+    if (activeTableId === lastSearchTableIdRef.current) return;
+    lastSearchTableIdRef.current = activeTableId;
+    if (hasSearchParam) {
+      setHasInitializedSearch(true);
+    } else {
+      setHasInitializedSearch(false);
+      setSearchValue("");
+    }
+  }, [activeTableId, hasSearchParam]);
+
+  useEffect(() => {
+    if (!hasSearchParam) return;
+    const nextValue = searchParams.get("search") ?? "";
+    setSearchValue((prev) => (prev === nextValue ? prev : nextValue));
+    setHasInitializedSearch(true);
+  }, [hasSearchParam, searchParams]);
   useEffect(() => {
     utils.base.list.prefetch();
   }, [utils.base.list]);
@@ -425,6 +570,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       hasLoadedTableMetaRef.current = true;
     }
   }, [tableMetaQuery.data]);
+  const serverSearchValue = tableMetaQuery.data?.searchQuery ?? "";
+  useEffect(() => {
+    if (hasInitializedSearch) return;
+    if (!tableMetaQuery.data) return;
+    if (hasSearchParam) return;
+    setSearchValue(serverSearchValue);
+    setHasInitializedSearch(true);
+  }, [hasInitializedSearch, hasSearchParam, serverSearchValue, tableMetaQuery.data]);
   const rawSortConfig = tableMetaQuery.data?.sort ?? null;
   const sortConfigList: SortConfig[] = Array.isArray(rawSortConfig)
     ? rawSortConfig.map((item) => ({
@@ -432,18 +585,41 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         direction: normalizeSortDirection(item.direction),
       }))
     : [];
-  const activeColumnIdSet = new Set(
-    tableMetaQuery.data?.columns?.map((column) => column.id) ?? []
+  const hiddenColumnIds = tableMetaQuery.data?.hiddenColumnIds ?? [];
+  const hiddenColumnIdSet = useMemo(
+    () => new Set(hiddenColumnIds),
+    [hiddenColumnIds]
   );
+  const hiddenFieldCount = hiddenColumnIdSet.size;
   const activeTables = baseDetailsQuery.data?.tables ?? [];
   const activeTable = tableMetaQuery.data?.table ?? null;
   const activeColumns = tableMetaQuery.data?.columns ?? [];
   const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
+  const rawSearchQuery = searchValue.trim();
+  const searchQuery = hasInitializedSearch
+    ? rawSearchQuery
+    : serverSearchValue.trim() || rawSearchQuery;
+  const hasSearchQuery = searchQuery.length > 0;
+  useEffect(() => {
+    const currentParam = searchParams.get("search") ?? "";
+    const nextParam = searchQuery;
+    if (currentParam === nextParam) return;
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (nextParam) {
+      nextParams.set("search", nextParam);
+    } else {
+      nextParams.delete("search");
+    }
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
+      scroll: false,
+    });
+  }, [pathname, router, searchParams, searchQuery]);
   const columnById = useMemo(
     () => new Map(activeColumns.map((column) => [column.id, column])),
     [activeColumns]
   );
-  const orderedColumns = useMemo(() => {
+  const orderedAllColumns = useMemo(() => {
     const nameCol = activeColumns.find((column) => column.name === "Name");
     if (!nameCol) return activeColumns;
     return [
@@ -451,6 +627,58 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       ...activeColumns.filter((column) => column.id !== nameCol.id),
     ];
   }, [activeColumns]);
+  const orderedColumns = useMemo(
+    () =>
+      orderedAllColumns.filter(
+        (column) => column.name === "Name" || !hiddenColumnIdSet.has(column.id)
+      ),
+    [hiddenColumnIdSet, orderedAllColumns]
+  );
+  const visibleColumnIdSet = useMemo(
+    () => new Set(orderedColumns.map((column) => column.id)),
+    [orderedColumns]
+  );
+  const hideFieldColumns = useMemo(
+    () => orderedAllColumns.filter((column) => column.name !== "Name"),
+    [orderedAllColumns]
+  );
+  const hideFieldsLayout = useMemo(() => {
+    const rows = hideFieldColumns.map((column, index) => {
+      const textTop = HIDE_FIELDS_FIRST_TEXT_TOP + index * HIDE_FIELDS_TEXT_ROW_GAP;
+      const hoverTop =
+        textTop - (HIDE_FIELDS_HOVER_HEIGHT - HIDE_FIELDS_TEXT_HEIGHT) / 2;
+      const toggleTop =
+        hoverTop + (HIDE_FIELDS_HOVER_HEIGHT - HIDE_FIELDS_TOGGLE_HEIGHT) / 2;
+      const reorderTop = HIDE_FIELDS_REORDER_TOP + index * HIDE_FIELDS_REORDER_ROW_GAP;
+      const iconSpec = getHideFieldsIconSpec(column.name, column.type);
+      const iconLeft = HIDE_FIELDS_TEXT_LEFT - iconSpec.gap - iconSpec.width;
+      const iconTop = textTop - (iconSpec.height - HIDE_FIELDS_TEXT_HEIGHT) / 2;
+      return {
+        column,
+        hoverTop,
+        textOffset: textTop - hoverTop,
+        iconSpec,
+        iconLeftOffset: iconLeft - HIDE_FIELDS_HOVER_LEFT,
+        iconTopOffset: iconTop - hoverTop,
+        toggleOffset: toggleTop - hoverTop,
+        reorderOffset: reorderTop - hoverTop,
+      };
+    });
+    const lastTextTop =
+      hideFieldColumns.length > 0
+        ? HIDE_FIELDS_FIRST_TEXT_TOP +
+          (hideFieldColumns.length - 1) * HIDE_FIELDS_TEXT_ROW_GAP
+        : HIDE_FIELDS_FIRST_TEXT_TOP;
+    const buttonTop =
+      lastTextTop + HIDE_FIELDS_TEXT_HEIGHT + HIDE_FIELDS_BUTTON_GAP;
+    const dropdownHeight =
+      buttonTop + HIDE_FIELDS_BUTTON_HEIGHT + HIDE_FIELDS_BUTTON_BOTTOM_PADDING;
+    return {
+      rows,
+      buttonTop,
+      dropdownHeight,
+    };
+  }, [hideFieldColumns]);
   const filterInput: RouterInputs["base"]["getRows"]["filter"] = useMemo(() => {
     const items: Array<
       | { type: "condition"; columnId: string; operator: FilterOperator; value: string }
@@ -470,6 +698,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       condition: FilterConditionItem
     ): { type: "condition"; columnId: string; operator: FilterOperator; value: string } | null => {
       if (!condition.columnId) return null;
+      if (hiddenColumnIdSet.has(condition.columnId)) return null;
       const column = columnById.get(condition.columnId);
       if (!column) return null;
       const columnType = coerceColumnType(column.type);
@@ -517,7 +746,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       connector: filterConnector,
       items,
     };
-  }, [columnById, filterConnector, filterItems]);
+  }, [columnById, filterConnector, filterItems, hiddenColumnIdSet]);
 
   const activeFilterConditions = useMemo(() => {
     if (!filterInput) return [];
@@ -545,8 +774,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [activeFilterConditions, columnById]);
   const hasActiveFilters = activeFilterConditions.length > 0;
   const filterActiveSorts = (sorts: SortConfig[]) => {
-    if (activeColumnIdSet.size === 0) return sorts;
-    return sorts.filter((sort) => activeColumnIdSet.has(sort.columnId));
+    if (visibleColumnIdSet.size === 0) return sorts;
+    return sorts.filter((sort) => visibleColumnIdSet.has(sort.columnId));
   };
   const sortParamSource = sortOverride ?? sortConfigList;
   const sortParam = filterActiveSorts(sortParamSource);
@@ -562,6 +791,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       limit: number;
       sort?: SortConfig[];
       filter?: RouterInputs["base"]["getRows"]["filter"];
+      search?: string;
     } = { tableId, limit: PAGE_ROWS };
     if (shouldIncludeSortInQuery) {
       key.sort = sort;
@@ -569,14 +799,18 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (filterInput) {
       key.filter = filterInput;
     }
+    if (hasSearchQuery) {
+      key.search = searchQuery;
+    }
     return key;
   };
   const getRowsQueryKey = (tableId: string) =>
     getRowsQueryKeyForSort(tableId, sortParam);
+  const shouldWaitForSearch = !hasInitializedSearch && !hasSearchParam;
   const rowsQuery = api.base.getRows.useInfiniteQuery(
     getRowsQueryKey(activeTableId ?? ""),
     {
-      enabled: Boolean(activeTableId),
+      enabled: Boolean(activeTableId) && !shouldWaitForSearch,
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     }
   );
@@ -770,6 +1004,82 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
   });
 
+  const setTableSearch = api.base.setTableSearch.useMutation({
+    onMutate: async ({ tableId, search }) => {
+      await utils.base.getTableMeta.cancel({ tableId });
+      const previous = utils.base.getTableMeta.getData({ tableId });
+      const nextSearch = search ?? "";
+      utils.base.getTableMeta.setData({ tableId }, (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          searchQuery: nextSearch,
+        };
+      });
+      return { previous, tableId };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        utils.base.getTableMeta.setData(
+          { tableId: context.tableId },
+          context.previous
+        );
+      }
+    },
+    onSettled: async (_data, _error, variables) => {
+      await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+    },
+  });
+
+  useEffect(() => {
+    if (!activeTableId) return;
+    if (!hasInitializedSearch) return;
+    const currentSearch = tableMetaQuery.data?.searchQuery ?? "";
+    if (rawSearchQuery === currentSearch) return;
+    const timeout = window.setTimeout(() => {
+      setTableSearch.mutate({ tableId: activeTableId, search: rawSearchQuery });
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [
+    activeTableId,
+    hasInitializedSearch,
+    rawSearchQuery,
+    setTableSearch,
+    tableMetaQuery.data?.searchQuery,
+  ]);
+
+  const setHiddenColumns = api.base.setHiddenColumns.useMutation({
+    onMutate: async ({ tableId, hiddenColumnIds }) => {
+      await utils.base.getTableMeta.cancel({ tableId });
+      const previous = utils.base.getTableMeta.getData({ tableId });
+      utils.base.getTableMeta.setData({ tableId }, (current) => {
+        if (!current) return current;
+        const normalizedHidden = Array.from(new Set(hiddenColumnIds));
+        const nextSort = (current.sort ?? []).filter(
+          (item) => !normalizedHidden.includes(item.columnId)
+        );
+        return {
+          ...current,
+          hiddenColumnIds: normalizedHidden,
+          sort: nextSort.length > 0 ? nextSort : null,
+        };
+      });
+      return { previous, tableId };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        utils.base.getTableMeta.setData(
+          { tableId: context.tableId },
+          context.previous
+        );
+      }
+    },
+    onSettled: async (_data, _error, variables) => {
+      await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+      await utils.base.getRows.invalidate(getRowsQueryKey(variables.tableId));
+    },
+  });
+
   const deleteRow = api.base.deleteRow.useMutation({
     onSuccess: async () => {
       if (activeTableId) {
@@ -827,7 +1137,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     setActiveTableId(null);
     setEnsuredTableId(null);
-    setHoveredRowId(null);
     setHoveredHeaderId(null);
     setSelectedCell(null);
     setEditingCell(null);
@@ -836,14 +1145,36 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     const tables = baseDetailsQuery.data?.tables ?? [];
-    if (!tables.length) return;
+    if (!tables.length || preferredTableBaseId !== baseId) return;
     if (activeTableId && tables.some((table) => table.id === activeTableId)) {
+      return;
+    }
+    if (preferredTableId && tables.some((table) => table.id === preferredTableId)) {
+      setActiveTableId(preferredTableId);
       return;
     }
     const firstTable = tables[0];
     if (!firstTable) return;
     setActiveTableId(firstTable.id);
-  }, [activeTableId, baseDetailsQuery.data?.tables]);
+  }, [
+    activeTableId,
+    baseDetailsQuery.data?.tables,
+    baseId,
+    preferredTableId,
+    preferredTableBaseId,
+  ]);
+
+  useEffect(() => {
+    if (!activeTableId || preferredTableBaseId !== baseId) return;
+    try {
+      window.localStorage.setItem(
+        getLastViewedTableKey(baseId),
+        activeTableId
+      );
+    } catch {
+      // Ignore storage failures (private mode, blocked storage, etc).
+    }
+  }, [activeTableId, baseId, preferredTableBaseId]);
 
   useEffect(() => {
     if (!activeTableId) return;
@@ -956,6 +1287,53 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       document.removeEventListener("keydown", handleKey);
     };
   }, [isFilterMenuOpen]);
+
+  useEffect(() => {
+    if (!isHideFieldsMenuOpen) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (hideFieldsMenuRef.current?.contains(target)) return;
+      if (hideFieldsButtonRef.current?.contains(target)) return;
+      setIsHideFieldsMenuOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsHideFieldsMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("scroll", handleClick, true);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("scroll", handleClick, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [isHideFieldsMenuOpen]);
+
+  useEffect(() => {
+    if (!isSearchMenuOpen) return;
+    const handleClick = (event: Event) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (searchMenuRef.current?.contains(target)) return;
+      if (searchButtonRef.current?.contains(target)) return;
+      setIsSearchMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [isSearchMenuOpen]);
+
+  useEffect(() => {
+    if (!isSearchMenuOpen) return;
+    const frame = requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isSearchMenuOpen]);
 
   useEffect(() => {
     if (!openFilterFieldId) return;
@@ -1381,6 +1759,39 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     [activeTableId, setTableSort]
   );
 
+  const toggleHiddenColumn = useCallback(
+    (columnId: string) => {
+      if (!activeTableId) return;
+      const nextHidden = new Set(hiddenColumnIdSet);
+      if (nextHidden.has(columnId)) {
+        nextHidden.delete(columnId);
+      } else {
+        nextHidden.add(columnId);
+      }
+      setHiddenColumns.mutate({
+        tableId: activeTableId,
+        hiddenColumnIds: Array.from(nextHidden),
+      });
+    },
+    [activeTableId, hiddenColumnIdSet, setHiddenColumns]
+  );
+
+  const hideAllColumns = useCallback(() => {
+    if (!activeTableId) return;
+    setHiddenColumns.mutate({
+      tableId: activeTableId,
+      hiddenColumnIds: hideFieldColumns.map((column) => column.id),
+    });
+  }, [activeTableId, hideFieldColumns, setHiddenColumns]);
+
+  const showAllColumns = useCallback(() => {
+    if (!activeTableId) return;
+    setHiddenColumns.mutate({
+      tableId: activeTableId,
+      hiddenColumnIds: [],
+    });
+  }, [activeTableId, setHiddenColumns]);
+
   const updateFilterCondition = useCallback(
     (
       conditionId: string,
@@ -1533,14 +1944,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (sortConfigList.length === 0) return;
-    const activeIds = new Set(activeColumns.map((column) => column.id));
     const nextSorts = sortConfigList.filter((sort) =>
-      activeIds.has(sort.columnId)
+      visibleColumnIdSet.has(sort.columnId)
     );
     if (nextSorts.length !== sortConfigList.length) {
       applySorts(nextSorts.length ? nextSorts : null);
     }
-  }, [activeColumns, applySorts, sortConfigList]);
+  }, [applySorts, sortConfigList, visibleColumnIdSet]);
 
   useEffect(() => {
     sortRowsRef.current = sortRows;
@@ -1557,6 +1967,38 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setFocusedFilterValueId(null);
     setFilterValueErrorId(null);
   }, [activeTableId]);
+
+  useEffect(() => {
+    if (hiddenColumnIdSet.size === 0) return;
+    setFilterItems((prev) => {
+      let changed = false;
+      const next: FilterItem[] = [];
+      prev.forEach((item) => {
+        if (item.type === "condition") {
+          if (item.columnId && hiddenColumnIdSet.has(item.columnId)) {
+            changed = true;
+            return;
+          }
+          next.push(item);
+          return;
+        }
+        const nextConditions = item.conditions.filter(
+          (condition) =>
+            !condition.columnId ||
+            !hiddenColumnIdSet.has(condition.columnId)
+        );
+        if (nextConditions.length !== item.conditions.length) {
+          changed = true;
+        }
+        if (nextConditions.length > 0) {
+          next.push({ ...item, conditions: nextConditions });
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [hiddenColumnIdSet]);
 
   useEffect(() => {
     if (!sortOverride) return;
@@ -1662,7 +2104,41 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     });
   }, [activeTable, orderedColumns, rows]);
 
-  const sortedTableData = useMemo(() => tableData, [tableData]);
+  const normalizedSearch = searchQuery.toLowerCase();
+  const isSearchLoading = hasSearchQuery && rowsQuery.isFetching;
+  const searchMatchesByRow = useMemo(() => {
+    if (!normalizedSearch) return new Map<string, Set<string>>();
+    const matches = new Map<string, Set<string>>();
+    tableData.forEach((row) => {
+      const rowEdits = cellEdits[row.id];
+      let rowMatches: Set<string> | null = null;
+      orderedColumns.forEach((column) => {
+        const value = rowEdits?.[column.id] ?? row[column.id] ?? "";
+        if (String(value).toLowerCase().includes(normalizedSearch)) {
+          if (!rowMatches) {
+            rowMatches = new Set();
+          }
+          rowMatches.add(column.id);
+        }
+      });
+      if (rowMatches && rowMatches.size > 0) {
+        matches.set(row.id, rowMatches);
+      }
+    });
+    return matches;
+  }, [cellEdits, normalizedSearch, orderedColumns, tableData]);
+
+  const sortedTableData = useMemo(() => {
+    if (!normalizedSearch) return tableData;
+    return tableData.filter((row) => searchMatchesByRow.has(row.id));
+  }, [normalizedSearch, searchMatchesByRow, tableData]);
+  const showSearchSpinner = isSearchLoading;
+  const showNoSearchResults =
+    hasSearchQuery &&
+    !rowsQuery.isFetching &&
+    !rowsQuery.isFetchingNextPage &&
+    !rowsQuery.hasNextPage &&
+    sortedTableData.length === 0;
 
   const rowOrder = useMemo(
     () => sortedTableData.map((row) => row.id),
@@ -1671,6 +2147,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const columnsWithAdd = useMemo(
     () => [
+      {
+        id: "__row-number__",
+        name: "Row",
+        width: ROW_NUMBER_COLUMN_WIDTH,
+        type: "row-number" as const,
+      },
       ...orderedColumns.map((column) => ({
         id: column.id,
         name: column.name,
@@ -1696,26 +2178,69 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     () => columnsWithAdd.find((column) => column.type === "add")?.width ?? ADD_COLUMN_WIDTH,
     [columnsWithAdd]
   );
-  const dataColumnsWidth = Math.max(0, totalColumnsWidth - addColumnWidth);
+  const rowNumberColumnIndex = columnsWithAdd.findIndex(
+    (column) => column.type === "row-number"
+  );
+  const rowNumberColumn =
+    rowNumberColumnIndex >= 0 ? columnsWithAdd[rowNumberColumnIndex] : null;
+  const rowNumberColumnWidth = rowNumberColumn?.width ?? ROW_NUMBER_COLUMN_WIDTH;
+  const dataColumnsWidth = Math.max(
+    0,
+    totalColumnsWidth - addColumnWidth - rowNumberColumnWidth
+  );
 
   const rowCount = sortedTableData.length;
+  const showRowLoader = rowsQuery.hasNextPage && !hasSearchQuery;
+  const expandedRowId = useMemo(() => {
+    if (!selectedCell) return null;
+    const selectedColumn = orderedColumns.find(
+      (column) => column.id === selectedCell.columnId
+    );
+    const selectedType = coerceColumnType(selectedColumn?.type);
+    return selectedType === "long_text" ? selectedCell.rowId : null;
+  }, [orderedColumns, selectedCell]);
+  const estimateRowSize = useCallback(
+    (index: number) => {
+      const row = sortedTableData[index];
+      if (!row) return ROW_HEIGHT;
+      // Always return ROW_HEIGHT so expanded cells overlay instead of pushing rows down
+      return ROW_HEIGHT;
+    },
+    [sortedTableData]
+  );
 
   const rowVirtualizer = useVirtualizer({
-    count: rowsQuery.hasNextPage ? rowCount + 1 : rowCount,
+    count: showRowLoader ? rowCount + 1 : rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 10,
+    estimateSize: estimateRowSize,
+    overscan: 28,
+    getItemKey: (index) => sortedTableData[index]?.id ?? `loader-${index}`,
+    isScrollingResetDelay: 100,
+    useAnimationFrameWithResizeObserver: true,
+    useFlushSync: true,
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
+  const isScrolling = rowVirtualizer.isScrolling;
+  const rowVirtualRange = useMemo(() => {
+    if (!virtualItems.length) return { start: 0, end: 0 };
+    return {
+      start: virtualItems[0]?.index ?? 0,
+      end: virtualItems[virtualItems.length - 1]?.index ?? 0,
+    };
+  }, [virtualItems]);
+  const lastVirtualRowIndex = virtualItems.length
+    ? virtualItems[virtualItems.length - 1]!.index
+    : -1;
 
   const columnVirtualizer = useVirtualizer({
     horizontal: true,
     count: columnsWithAdd.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => columnsWithAdd[index]?.width ?? DEFAULT_COLUMN_WIDTH,
-    overscan: 2,
+    overscan: 6,
     getItemKey: (index) => columnsWithAdd[index]?.id ?? index,
+    useFlushSync: true,
   });
 
   const sortAddVirtualizer = useVirtualizer({
@@ -1746,25 +2271,42 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     filterFieldVirtualizer.getTotalSize();
 
   const virtualColumns = columnVirtualizer.getVirtualItems();
+  const columnVirtualRange = useMemo(() => {
+    if (!virtualColumns.length) return { start: 0, end: 0 };
+    return {
+      start: virtualColumns[0]?.index ?? 0,
+      end: virtualColumns[virtualColumns.length - 1]?.index ?? 0,
+    };
+  }, [virtualColumns]);
   const nameColumnIndex = columnsWithAdd.findIndex(
     (column) => column.type === "data" && column.name === "Name"
   );
   const nameColumn = nameColumnIndex >= 0 ? columnsWithAdd[nameColumnIndex] : null;
   const nameColumnWidth = nameColumn?.width ?? 0;
-  const scrollableVirtualColumns = nameColumn
-    ? virtualColumns.filter((virtualColumn) => virtualColumn.index !== nameColumnIndex)
-    : virtualColumns;
-  const scrollablePaddingLeft = nameColumn
-    ? Math.max(0, (scrollableVirtualColumns[0]?.start ?? nameColumnWidth) - nameColumnWidth)
-    : virtualColumns[0]?.start ?? 0;
-  const totalScrollableWidth = Math.max(0, totalColumnsWidth - nameColumnWidth);
-  const lastScrollableEnd = nameColumn
-    ? Math.max(
-        0,
-        (scrollableVirtualColumns.at(-1)?.end ?? nameColumnWidth) - nameColumnWidth
-      )
-    : virtualColumns.at(-1)?.end ?? 0;
+  const stickyColumnsWidth = rowNumberColumnWidth + nameColumnWidth;
+  const scrollableVirtualColumns = virtualColumns.filter((virtualColumn) => {
+    if (rowNumberColumnIndex >= 0 && virtualColumn.index === rowNumberColumnIndex) {
+      return false;
+    }
+    if (nameColumnIndex >= 0 && virtualColumn.index === nameColumnIndex) {
+      return false;
+    }
+    return true;
+  });
+  const scrollablePaddingLeft = Math.max(
+    0,
+    (scrollableVirtualColumns[0]?.start ?? stickyColumnsWidth) - stickyColumnsWidth
+  );
+  const totalScrollableWidth = Math.max(0, totalColumnsWidth - stickyColumnsWidth);
+  const lastScrollableEnd = Math.max(
+    0,
+    (scrollableVirtualColumns.at(-1)?.end ?? stickyColumnsWidth) - stickyColumnsWidth
+  );
   const scrollablePaddingRight = Math.max(0, totalScrollableWidth - lastScrollableEnd);
+
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [rowVirtualizer, expandedRowId]);
 
   useEffect(() => {
     columnVirtualizer.measure();
@@ -1813,19 +2355,32 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
       lastFocusedRef.current = { key, mode };
     });
-  }, [editingCell, isFilterMenuOpen, selectedCell, virtualItems, virtualColumns]);
+  }, [
+    editingCell,
+    isFilterMenuOpen,
+    selectedCell,
+    rowVirtualRange.start,
+    rowVirtualRange.end,
+    columnVirtualRange.start,
+    columnVirtualRange.end,
+  ]);
 
   useEffect(() => {
-    const lastItem = virtualItems[virtualItems.length - 1];
-    if (!lastItem) return;
+    if (lastVirtualRowIndex < 0) return;
     if (
-      lastItem.index >= rowCount - 1 &&
+      lastVirtualRowIndex >= rowCount - 1 &&
       rowsQuery.hasNextPage &&
       !rowsQuery.isFetchingNextPage
     ) {
       rowsQuery.fetchNextPage();
     }
-  }, [rowCount, rowsQuery, rowsQuery.hasNextPage, rowsQuery.isFetchingNextPage, virtualItems]);
+  }, [
+    lastVirtualRowIndex,
+    rowCount,
+    rowsQuery,
+    rowsQuery.hasNextPage,
+    rowsQuery.isFetchingNextPage,
+  ]);
 
   const handleAddTable = () => {
     addTable.mutate({ baseId });
@@ -2308,26 +2863,28 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const userInitial = formatUserInitial(userName);
 
   const headerCellBorder = (
-    column: { name: string; type: "data" | "add" },
+    column: { name: string; type: "data" | "add" | "row-number" },
     isFirst: boolean
   ) => ({
     borderTop: "none",
     borderBottom: "0.5px solid #CBCBCB",
     borderRight:
-      column.type === "data" && column.name === "Name"
+      column.type === "row-number" ||
+      (column.type === "data" && column.name === "Name")
         ? "none"
         : "0.5px solid #DDE1E3",
     borderLeft: "none",
   });
 
   const bodyCellBorder = (
-    column: { name: string; type: "data" | "add" },
+    column: { name: string; type: "data" | "add" | "row-number" },
     isFirst: boolean,
     isLastRow: boolean
   ) => ({
     borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
     borderRight:
-      column.type === "data" && column.name === "Name"
+      column.type === "row-number" ||
+      (column.type === "data" && column.name === "Name")
         ? "none"
         : "0.5px solid #DDE1E3",
     borderLeft: "none",
@@ -2438,7 +2995,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             </div>
           </header>
 
-          <section className="border-b border-[#DDE1E3] bg-white px-4 sm:px-6">
+          <section className="border-b border-[#DEDEDE] bg-white px-4 sm:px-6">
             <div className="flex flex-wrap items-center justify-between gap-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 {activeTables.map((tableItem) => (
@@ -2479,197 +3036,386 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               </button>
             </div>
 
-            <div className="flex flex-wrap items-center gap-4 pb-0 airtable-secondary-font-regular">
-              <button type="button" className="flex items-center gap-2">
-                <img alt="" className="h-[14px] w-[14px]" src={gridViewIcon.src} />
-                Grid view
-              </button>
-              <div className="ml-auto flex flex-wrap items-center gap-4">
-                <button type="button" className="flex items-center gap-2">
-                  <img alt="" className="h-[14px] w-[14px]" src={hideFieldsIcon.src} />
-                  Hide fields
-                </button>
-                <div className="relative">
-                  <button
-                    ref={filterButtonRef}
-                    type="button"
-                    className={clsx(
-                      "airtable-table-feature-selection gap-2 font-normal",
-                      hasActiveFilters &&
-                        "airtable-table-feature-selection--filter-active text-[#1d1f24]"
-                    )}
-                    onClick={() =>
-                      setIsFilterMenuOpen((prev) => {
-                        const next = !prev;
-                        if (!next) {
-                          setOpenFilterFieldId(null);
-                          setOpenFilterOperatorId(null);
-                          setOpenFilterConnectorId(null);
-                        }
-                        return next;
-                      })
-                    }
-                    aria-haspopup="menu"
-                    aria-expanded={isFilterMenuOpen}
-                  >
+            <div className="relative -mx-4 sm:-mx-6">
+              <div className="flex flex-wrap items-center pb-[8.5px] pl-4 pr-[8.5px] sm:pl-6 airtable-secondary-font-regular">
+                <div className="flex flex-wrap items-center gap-4">
+                  <button type="button" className="flex items-center gap-2">
                     <img
                       alt=""
-                      className={clsx(
-                        "h-[14px] w-[14px]",
-                        hasActiveFilters && "airtable-filter-icon--active"
-                      )}
-                      src={filterIcon.src}
+                      className="h-[14px] w-[14px]"
+                      src={gridViewIcon.src}
                     />
-                    <span>
-                      {hasActiveFilters
-                        ? `Filtered by ${filteredColumnNames.join(", ")}`
-                        : "Filter"}
-                    </span>
+                    Grid view
                   </button>
-                  {isFilterMenuOpen && (
-                    <div
-                      ref={filterMenuRef}
-                      className="airtable-filter-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
-                      style={{
-                        width: filterDropdownWidth,
-                        height: filterDropdownHeight,
-                      }}
-                      onClick={(event) => event.stopPropagation()}
+                  <button
+                    type="button"
+                    onClick={handleAddBulkRows}
+                    disabled={bulkRowsDisabled}
+                    className={clsx(
+                      "rounded-[6px] border px-3 py-1 text-[13px]",
+                      bulkRowsDisabled
+                        ? "cursor-not-allowed border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
+                        : "border-[#DDE1E3] text-[#1d1f24]"
+                    )}
+                  >
+                    Add 100k rows
+                  </button>
+                </div>
+                <div className="ml-auto flex flex-wrap items-center">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="relative">
+                      <button
+                        ref={hideFieldsButtonRef}
+                        type="button"
+                        className={clsx(
+                          "airtable-table-feature-selection gap-2 font-normal",
+                        hiddenFieldCount > 0 &&
+                          "airtable-table-feature-selection--hide-active"
+                      )}
+                      onClick={() => setIsHideFieldsMenuOpen((prev) => !prev)}
+                      aria-haspopup="menu"
+                      aria-expanded={isHideFieldsMenuOpen}
                     >
-                      <div className="relative h-full w-full">
-                        <div
-                          className="absolute flex items-center gap-[3px] airtable-secondary-font"
-                          style={{
-                            left: filterDropdownHeaderLeft,
-                            top: filterDropdownHeaderTop,
-                          }}
-                        >
-                          <span>Filter</span>
-                        </div>
-                        <div
-                          className="absolute flex items-center border border-[#F2F2F2] bg-white text-[13px] font-normal text-[#757575]"
-                          style={{
-                            left: filterInputLeft,
-                            top: filterInputTop,
-                            width: filterInputWidth,
-                            height: filterInputHeight,
-                            borderRadius: filterInputRadius,
-                            paddingLeft: 7.5,
-                            gap: 7,
-                          }}
-                        >
-                          <img
-                            alt=""
-                            className="h-[21px] w-[21px]"
-                            src={pinkIcon.src}
+                      <img
+                        alt=""
+                        className={clsx(
+                          "h-[14px] w-[14px]",
+                          hiddenFieldCount > 0 && "airtable-hide-fields-icon--active"
+                        )}
+                        src={hideFieldsIcon.src}
+                      />
+                      <span>
+                        {hiddenFieldCount > 0
+                          ? `${hiddenFieldCount} hidden field${
+                              hiddenFieldCount === 1 ? "" : "s"
+                            }`
+                          : "Hide fields"}
+                      </span>
+                    </button>
+                    {isHideFieldsMenuOpen && (
+                      <div
+                        ref={hideFieldsMenuRef}
+                        className="airtable-hide-fields-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                        style={{
+                          width: HIDE_FIELDS_DROPDOWN_WIDTH,
+                          height: hideFieldsLayout.dropdownHeight,
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="relative h-full w-full">
+                          <div
+                            className="absolute airtable-find-field-label"
+                            style={{
+                              left: HIDE_FIELDS_HEADER_LEFT,
+                              top: HIDE_FIELDS_HEADER_TOP,
+                            }}
+                          >
+                            Find a field
+                          </div>
+                          <span
+                            className="airtable-help-icon absolute text-[#878B94]"
+                            style={{
+                              left: HIDE_FIELDS_HELP_LEFT,
+                              top: HIDE_FIELDS_HELP_TOP,
+                              width: 14,
+                              height: 14,
+                            }}
+                            aria-hidden="true"
                           />
-                          <span>Describe what you want to see</span>
-                        </div>
-                        {!hasFilterItems ? (
-                          <>
-                            <div
-                              className="absolute flex items-center text-[13px] font-normal text-[#8E8F92]"
-                              style={{ left: 16, top: filterEmptyMessageTop }}
-                            >
-                              <span>No filter conditions are applied</span>
+                          <div
+                            className="absolute bg-[#E4E4E4]"
+                            style={{
+                              left: HIDE_FIELDS_SEPARATOR_LEFT,
+                              top: HIDE_FIELDS_SEPARATOR_TOP,
+                              width: HIDE_FIELDS_SEPARATOR_WIDTH,
+                              height: HIDE_FIELDS_SEPARATOR_HEIGHT,
+                            }}
+                            aria-hidden="true"
+                          />
+                          {hideFieldsLayout.rows.map((row) => {
+                            const isHidden = hiddenColumnIdSet.has(row.column.id);
+                            return (
+                              <button
+                                key={row.column.id}
+                                type="button"
+                                className="airtable-hide-fields-row"
+                                style={{
+                                  top: row.hoverTop,
+                                  width: HIDE_FIELDS_HOVER_WIDTH,
+                                }}
+                                onClick={() => toggleHiddenColumn(row.column.id)}
+                                aria-pressed={!isHidden}
+                              >
+                                <svg
+                                  className="airtable-hide-fields-toggle absolute"
+                                  width={HIDE_FIELDS_TOGGLE_WIDTH}
+                                  height={HIDE_FIELDS_TOGGLE_HEIGHT}
+                                  viewBox={`0 0 ${HIDE_FIELDS_TOGGLE_WIDTH} ${HIDE_FIELDS_TOGGLE_HEIGHT}`}
+                                  style={{
+                                    left:
+                                      HIDE_FIELDS_TOGGLE_LEFT -
+                                      HIDE_FIELDS_HOVER_LEFT,
+                                    top: row.toggleOffset,
+                                  }}
+                                  aria-hidden="true"
+                                >
+                                  <rect
+                                    x="0"
+                                    y="0"
+                                    width={HIDE_FIELDS_TOGGLE_WIDTH}
+                                    height={HIDE_FIELDS_TOGGLE_HEIGHT}
+                                    rx="4"
+                                    fill={isHidden ? "#D9D9D9" : "#09890E"}
+                                  />
+                                  <rect
+                                    x={isHidden ? 2 : 7}
+                                    y={2}
+                                    width={4}
+                                    height={4}
+                                    rx={2}
+                                    fill="#FFFFFF"
+                                  />
+                                </svg>
+                              <img
+                                alt=""
+                                className="airtable-hide-fields-icon absolute"
+                                style={{
+                                  left: row.iconLeftOffset,
+                                  top: row.iconTopOffset,
+                                  width: row.iconSpec.width,
+                                  height: row.iconSpec.height,
+                                }}
+                                src={row.iconSpec.src}
+                              />
                               <span
-                                className="airtable-help-icon ml-[6px] text-[#8E8F92]"
-                                style={{ width: 14, height: 14 }}
+                                className="airtable-hide-fields-label absolute"
+                                style={{
+                                  left: HIDE_FIELDS_TEXT_LEFT - HIDE_FIELDS_HOVER_LEFT,
+                                  top: row.textOffset,
+                                }}
+                              >
+                                {row.column.name}
+                              </span>
+                              <span
+                                className="airtable-hide-fields-reorder absolute"
+                                style={{
+                                  left: HIDE_FIELDS_REORDER_LEFT - HIDE_FIELDS_HOVER_LEFT,
+                                  top: row.reorderOffset,
+                                  width: HIDE_FIELDS_REORDER_WIDTH,
+                                  height: HIDE_FIELDS_REORDER_HEIGHT,
+                                }}
                                 aria-hidden="true"
                               />
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div
-                              className="absolute text-[13px] font-normal text-[#616670]"
-                              style={{ left: 16, top: filterExpandedMessageTop }}
-                            >
-                              In this view, show records
-                            </div>
-                            <div
-                              className="absolute text-[13px] font-normal text-[#1D1F24]"
-                              style={{
-                                left: filterRowLeft,
-                                top: filterWhereTop,
-                                width: filterConnectorWidth,
-                                textAlign: "center",
-                              }}
-                            >
-                              Where
-                            </div>
-                            {filterLayout.rows.map((row) => {
-                              const columnId = row.condition.columnId;
-                              const column = columnId ? columnById.get(columnId) : null;
-                              const columnType = coerceColumnType(column?.type);
-                              const operatorLabel = formatFilterOperatorLabel(
-                                FILTER_OPERATOR_LABELS[row.condition.operator]
-                              );
-                              const operatorOptions = getFilterOperatorsForType(columnType);
-                              const operatorListHeight =
-                                operatorOptions.length > 0
-                                  ? (operatorOptions.length - 1) *
-                                      filterOperatorMenuRowStride +
-                                    filterOperatorMenuRowHeight
-                                  : 0;
-                              const operatorMenuContentHeight =
-                                filterOperatorMenuFirstRowTop +
-                                operatorListHeight +
-                                filterOperatorMenuBottomPadding;
-                              const operatorMenuHeight = Math.min(
-                                filterOperatorMenuMaxHeight,
-                                operatorMenuContentHeight
-                              );
-                              const operatorMenuListHeight = Math.max(
-                                0,
-                                operatorMenuHeight -
-                                  filterOperatorMenuFirstRowTop -
-                                  filterOperatorMenuBottomPadding
-                              );
-                              const isFieldMenuOpen = openFilterFieldId === row.condition.id;
-                              const isOperatorMenuOpen =
-                                openFilterOperatorId === row.condition.id;
-                              const isNumber = columnType === "number";
-                              const isFocused = focusedFilterValueId === row.condition.id;
-                              const hasError = filterValueErrorId === row.condition.id;
-                              const connectorLabel = row.connector;
-                              const showConnectorControl = row.showConnectorControl;
-                              const connectorKey = row.connectorKey;
-                              const isConnectorOpen = openFilterConnectorId === connectorKey;
-                              const fieldValue = row.condition.value;
-                              const scopeGroupId = row.scope === "group" ? row.groupId : undefined;
-                              const isDraggingRow = draggingFilterId === row.condition.id;
-                              const dragOffset =
-                                isDraggingRow && draggingFilterTop !== null
-                                  ? draggingFilterTop - row.top
-                                  : 0;
-                              const fieldTop =
-                                (filterRowHeight - filterFieldHeight) / 2 + dragOffset;
-                              const fieldMenuTop = fieldTop + filterFieldHeight + 2;
-                              const operatorMenuTop = fieldMenuTop;
-                              const rowZIndex = isOperatorMenuOpen
-                                ? 40
-                                : isDraggingRow
-                                ? 30
-                                : isFieldMenuOpen || isConnectorOpen
-                                ? 25
-                                : 10;
-                              const hideConnectorControl =
-                                showConnectorControl && isDraggingRow;
-                              return (
-                                <div
-                                  key={row.condition.id}
-                                  className="absolute"
-                                  style={{
-                                    left: row.left,
-                                    top: row.top,
-                                    width: filterFieldLeft + filterFieldWidth,
-                                    height: filterRowHeight,
-                                    zIndex: rowZIndex,
-                                    transition: isDraggingRow ? "none" : "top 0.15s ease",
-                                    overflow: "visible",
-                                  }}
-                                >
+                            </button>
+                          );
+                          })}
+                          <button
+                            type="button"
+                            className="airtable-hide-fields-action absolute"
+                            style={{ left: 16, top: hideFieldsLayout.buttonTop }}
+                            onClick={hideAllColumns}
+                          >
+                            Hide all
+                          </button>
+                          <button
+                            type="button"
+                            className="airtable-hide-fields-action absolute"
+                            style={{
+                              left:
+                                HIDE_FIELDS_DROPDOWN_WIDTH -
+                                16 -
+                                HIDE_FIELDS_BUTTON_WIDTH,
+                              top: hideFieldsLayout.buttonTop,
+                            }}
+                            onClick={showAllColumns}
+                          >
+                            Show all
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <button
+                      ref={filterButtonRef}
+                      type="button"
+                      className={clsx(
+                        "airtable-table-feature-selection gap-2 font-normal",
+                        hasActiveFilters &&
+                          "airtable-table-feature-selection--filter-active text-[#1d1f24]"
+                      )}
+                      onClick={() =>
+                        setIsFilterMenuOpen((prev) => {
+                          const next = !prev;
+                          if (!next) {
+                            setOpenFilterFieldId(null);
+                            setOpenFilterOperatorId(null);
+                            setOpenFilterConnectorId(null);
+                          }
+                          return next;
+                        })
+                      }
+                      aria-haspopup="menu"
+                      aria-expanded={isFilterMenuOpen}
+                    >
+                      <img
+                        alt=""
+                        className={clsx(
+                          "h-[14px] w-[14px]",
+                          hasActiveFilters && "airtable-filter-icon--active"
+                        )}
+                        src={filterIcon.src}
+                      />
+                      <span>
+                        {hasActiveFilters
+                          ? `Filtered by ${filteredColumnNames.join(", ")}`
+                          : "Filter"}
+                      </span>
+                    </button>
+                    {isFilterMenuOpen && (
+                      <div
+                        ref={filterMenuRef}
+                        className="airtable-filter-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                        style={{
+                          width: filterDropdownWidth,
+                          height: filterDropdownHeight,
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="relative h-full w-full">
+                          <div
+                            className="absolute flex items-center gap-[3px] airtable-secondary-font"
+                            style={{
+                              left: filterDropdownHeaderLeft,
+                              top: filterDropdownHeaderTop,
+                            }}
+                          >
+                            <span>Filter</span>
+                          </div>
+                          <div
+                            className="absolute flex items-center border border-[#F2F2F2] bg-white text-[13px] font-normal text-[#757575]"
+                            style={{
+                              left: filterInputLeft,
+                              top: filterInputTop,
+                              width: filterInputWidth,
+                              height: filterInputHeight,
+                              borderRadius: filterInputRadius,
+                              paddingLeft: 7.5,
+                              gap: 7,
+                            }}
+                          >
+                            <img
+                              alt=""
+                              className="h-[21px] w-[21px]"
+                              src={pinkIcon.src}
+                            />
+                            <span>Describe what you want to see</span>
+                          </div>
+                          {!hasFilterItems ? (
+                            <>
+                              <div
+                                className="absolute flex items-center text-[13px] font-normal text-[#8E8F92]"
+                                style={{ left: 16, top: filterEmptyMessageTop }}
+                              >
+                                <span>No filter conditions are applied</span>
+                                <span
+                                  className="airtable-help-icon ml-[6px] text-[#8E8F92]"
+                                  style={{ width: 14, height: 14 }}
+                                  aria-hidden="true"
+                                />
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div
+                                className="absolute text-[13px] font-normal text-[#616670]"
+                                style={{ left: 16, top: filterExpandedMessageTop }}
+                              >
+                                In this view, show records
+                              </div>
+                              <div
+                                className="absolute text-[13px] font-normal text-[#1D1F24]"
+                                style={{
+                                  left: filterRowLeft,
+                                  top: filterWhereTop,
+                                  width: filterConnectorWidth,
+                                  textAlign: "center",
+                                }}
+                              >
+                                Where
+                              </div>
+                              {filterLayout.rows.map((row) => {
+                                const columnId = row.condition.columnId;
+                                const column = columnId ? columnById.get(columnId) : null;
+                                const columnType = coerceColumnType(column?.type);
+                                const operatorLabel = formatFilterOperatorLabel(
+                                  FILTER_OPERATOR_LABELS[row.condition.operator]
+                                );
+                                const operatorOptions = getFilterOperatorsForType(columnType);
+                                const operatorListHeight =
+                                  operatorOptions.length > 0
+                                    ? (operatorOptions.length - 1) *
+                                        filterOperatorMenuRowStride +
+                                      filterOperatorMenuRowHeight
+                                    : 0;
+                                const operatorMenuContentHeight =
+                                  filterOperatorMenuFirstRowTop +
+                                  operatorListHeight +
+                                  filterOperatorMenuBottomPadding;
+                                const operatorMenuHeight = Math.min(
+                                  filterOperatorMenuMaxHeight,
+                                  operatorMenuContentHeight
+                                );
+                                const operatorMenuListHeight = Math.max(
+                                  0,
+                                  operatorMenuHeight -
+                                    filterOperatorMenuFirstRowTop -
+                                    filterOperatorMenuBottomPadding
+                                );
+                                const isFieldMenuOpen = openFilterFieldId === row.condition.id;
+                                const isOperatorMenuOpen =
+                                  openFilterOperatorId === row.condition.id;
+                                const isNumber = columnType === "number";
+                                const isFocused = focusedFilterValueId === row.condition.id;
+                                const hasError = filterValueErrorId === row.condition.id;
+                                const connectorLabel = row.connector;
+                                const showConnectorControl = row.showConnectorControl;
+                                const connectorKey = row.connectorKey;
+                                const isConnectorOpen = openFilterConnectorId === connectorKey;
+                                const fieldValue = row.condition.value;
+                                const scopeGroupId = row.scope === "group" ? row.groupId : undefined;
+                                const isDraggingRow = draggingFilterId === row.condition.id;
+                                const dragOffset =
+                                  isDraggingRow && draggingFilterTop !== null
+                                    ? draggingFilterTop - row.top
+                                    : 0;
+                                const fieldTop =
+                                  (filterRowHeight - filterFieldHeight) / 2 + dragOffset;
+                                const fieldMenuTop = fieldTop + filterFieldHeight + 2;
+                                const operatorMenuTop = fieldMenuTop;
+                                const rowZIndex = isOperatorMenuOpen
+                                  ? 40
+                                  : isDraggingRow
+                                  ? 30
+                                  : isFieldMenuOpen || isConnectorOpen
+                                  ? 25
+                                  : 10;
+                                const hideConnectorControl =
+                                  showConnectorControl && isDraggingRow;
+                                return (
+                                  <div
+                                    key={row.condition.id}
+                                    className="absolute"
+                                    style={{
+                                      left: row.left,
+                                      top: row.top,
+                                      width: filterFieldLeft + filterFieldWidth,
+                                      height: filterRowHeight,
+                                      zIndex: rowZIndex,
+                                      transition: isDraggingRow ? "none" : "top 0.15s ease",
+                                      overflow: "visible",
+                                    }}
+                                  >
                                   {row.showConnector && !hideConnectorControl && (
                                     <>
                                       {showConnectorControl ? (
@@ -2836,7 +3582,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         }}
                                       >
                                         <div
-                                          className="absolute text-[13px] font-normal text-[#757575]"
+                                          className="absolute airtable-find-field-label"
                                           style={{
                                             left: filterFieldMenuHeaderLeft,
                                             top: filterFieldMenuTopPadding,
@@ -3381,7 +4127,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       }}
                                     >
                                       <div
-                                        className="absolute text-[13px] font-normal text-[#757575]"
+                                        className="absolute airtable-find-field-label"
                                         style={{ left: 9, top: sortFieldMenuPadding }}
                                       >
                                         Find a field
@@ -3579,7 +4325,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                   }}
                                 >
                                   <div
-                                    className="absolute text-[13px] font-normal text-[#757575]"
+                                    className="absolute airtable-find-field-label"
                                     style={{ left: 10, top: 10 }}
                                   >
                                     Find a field
@@ -3732,36 +4478,212 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             })}
                           </>
                         )}
+                        </div>
                       </div>
+                    )}
                     </div>
-                  )}
+                    <button type="button" className="flex items-center gap-2">
+                      <img
+                        alt=""
+                        className="h-[14px] w-[14px]"
+                        src={colourIcon.src}
+                      />
+                      Colour
+                    </button>
+                    <button
+                      type="button"
+                      className="flex items-center"
+                      aria-label="Row height"
+                    >
+                      <img
+                        alt=""
+                        className="h-[14px] w-[14px]"
+                        src={rowHeightIcon.src}
+                      />
+                    </button>
+                    <button type="button" className="flex items-center gap-2">
+                      <img
+                        alt=""
+                        className="h-[14px] w-[14px]"
+                        src={shareSyncIcon.src}
+                      />
+                      Share and sync
+                    </button>
+                  </div>
+                  <button
+                    ref={searchButtonRef}
+                    type="button"
+                    className="airtable-table-feature-selection airtable-search-trigger ml-[21px]"
+                    onClick={() => setIsSearchMenuOpen((prev) => !prev)}
+                    aria-haspopup="dialog"
+                    aria-expanded={isSearchMenuOpen}
+                    aria-label="Search"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 30 30.000001"
+                      className="block"
+                      aria-hidden="true"
+                    >
+                      <defs>
+                        <filter id={`${searchMaskId}-invert`}>
+                          <feColorMatrix
+                            type="matrix"
+                            values="-1 0 0 0 1 0 -1 0 0 1 0 0 -1 0 1 0 0 0 1 0"
+                          />
+                        </filter>
+                        <mask
+                          id={`${searchMaskId}-mask`}
+                          maskUnits="userSpaceOnUse"
+                          x="0"
+                          y="0"
+                          width="30"
+                          height="30"
+                          maskContentUnits="userSpaceOnUse"
+                        >
+                          <image
+                            href={searchIcon.src}
+                            width="30"
+                            height="30"
+                            filter={`url(#${searchMaskId}-invert)`}
+                            preserveAspectRatio="xMidYMid meet"
+                          />
+                        </mask>
+                      </defs>
+                      <rect
+                        width="30"
+                        height="30"
+                        style={{ fill: "var(--search-icon-color)" }}
+                        mask={`url(#${searchMaskId}-mask)`}
+                      />
+                    </svg>
+                  </button>
                 </div>
-                <button type="button" className="flex items-center gap-2">
-                  <img alt="" className="h-[14px] w-[14px]" src={colourIcon.src} />
-                  Colour
-                </button>
-                <button type="button" className="flex items-center" aria-label="Row height">
-                  <img alt="" className="h-[14px] w-[14px]" src={rowHeightIcon.src} />
-                </button>
-                <button type="button" className="flex items-center gap-2">
-                  <img alt="" className="h-[14px] w-[14px]" src={shareSyncIcon.src} />
-                  Share and sync
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddBulkRows}
-                  disabled={bulkRowsDisabled}
-                  className={clsx(
-                    "rounded-[6px] border px-3 py-1 text-[13px]",
-                    bulkRowsDisabled
-                      ? "cursor-not-allowed border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
-                      : "border-[#DDE1E3] text-[#1d1f24]"
-                  )}
-                >
-                  Add 100k rows
-                </button>
               </div>
-            </div>
+              {isSearchMenuOpen && (
+                <div
+                  ref={searchMenuRef}
+                  className="absolute right-[8px] top-[calc(100%+1px)] z-50 h-[41px] w-[370px] rounded-b-[5px] rounded-t-none border-[2px] border-[#E5E5E5] border-t-0 bg-white"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="relative h-full w-full">
+                    <input
+                      ref={searchInputRef}
+                      value={searchValue}
+                      onChange={(event) => {
+                        setHasInitializedSearch(true);
+                        setSearchValue(event.target.value);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          setIsSearchMenuOpen(false);
+                        }
+                      }}
+                      placeholder="Find in view..."
+                      className="absolute bg-transparent text-[13px] font-normal text-[#1D1F24] placeholder:text-[#A9A9A9] focus:outline-none"
+                      style={{ left: 12, top: 12, right: 101 }}
+                      aria-label="Find in view"
+                    />
+                    {showSearchSpinner && (
+                      <span
+                        className="airtable-search-spinner"
+                        style={{ right: 111, top: 13 }}
+                        aria-hidden="true"
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 14 14"
+                          aria-hidden="true"
+                        >
+                          <circle
+                            cx="7"
+                            cy="7"
+                            r="6.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1"
+                            strokeLinecap="round"
+                            strokeDasharray="0.5 0.5"
+                            pathLength="3"
+                          />
+                        </svg>
+                      </span>
+                    )}
+                    {showNoSearchResults && (
+                      <span
+                        className="airtable-search-no-results"
+                        style={{ right: 110, top: 14 }}
+                      >
+                        No results
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="absolute flex items-center justify-center rounded-[6px] bg-[#1D1F24] text-[11px] font-medium text-white"
+                      style={{
+                        left: 269,
+                        top: 8,
+                        width: 67,
+                        height: 24,
+                        boxShadow: "var(--airtable-button-shadow)",
+                      }}
+                    >
+                      Ask Omni
+                    </button>
+                  <button
+                    type="button"
+                    className="airtable-table-feature-selection airtable-x-trigger absolute"
+                    style={{ left: 340, top: 9 }}
+                    onClick={() => setIsSearchMenuOpen(false)}
+                    aria-label="Close search"
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                        viewBox="0 0 10 10"
+                        className="block"
+                        aria-hidden="true"
+                      >
+                      <defs>
+                        <filter id={`${closeMaskId}-invert`}>
+                          <feColorMatrix
+                            type="matrix"
+                            values="-1 0 0 0 1 0 -1 0 0 1 0 0 -1 0 1 0 0 0 1 0"
+                          />
+                        </filter>
+                        <mask
+                          id={`${closeMaskId}-mask`}
+                          maskUnits="userSpaceOnUse"
+                          x="0"
+                          y="0"
+                          width="10"
+                          height="10"
+                          maskContentUnits="userSpaceOnUse"
+                        >
+                          <image
+                            href={xIcon.src}
+                            width="10"
+                            height="10"
+                            filter={`url(#${closeMaskId}-invert)`}
+                            preserveAspectRatio="xMidYMid meet"
+                          />
+                        </mask>
+                      </defs>
+                      <rect
+                        width="10"
+                        height="10"
+                        fill="#1D1F24"
+                        mask={`url(#${closeMaskId}-mask)`}
+                      />
+                    </svg>
+                  </button>
+                </div>
+                </div>
+              )}
+          </div>
           </section>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -3792,7 +4714,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         className="relative"
                         style={{ minWidth: totalColumnsWidth, minHeight: "100%" }}
                         onMouseLeave={() => {
-                          setHoveredRowId(null);
                           setHoveredHeaderId(null);
                         }}
                       >
@@ -3800,6 +4721,28 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         className="sticky top-0 z-10 flex text-[13px] font-medium text-[#1d1f24] relative"
                         style={{ width: totalColumnsWidth }}
                       >
+                        {rowNumberColumn && (
+                          <div
+                            className="relative flex h-[33px] items-center px-2 text-[12px] font-normal text-[#606570]"
+                            style={{
+                              borderTop: "none",
+                              borderBottom: "0.5px solid #CBCBCB",
+                              borderLeft: "none",
+                              borderRight: "none",
+                              width: rowNumberColumnWidth,
+                              minWidth: rowNumberColumnWidth,
+                              maxWidth: rowNumberColumnWidth,
+                              flex: "0 0 auto",
+                              backgroundColor: "#ffffff",
+                              position: "sticky",
+                              left: 0,
+                              zIndex: 35,
+                            }}
+                            aria-hidden="true"
+                          >
+                            <div className="airtable-outline flex h-[17px] w-[17px] items-center justify-center rounded-[4px] bg-white" />
+                          </div>
+                        )}
                         {nameColumn && (
                           <div
                             className="relative flex h-[33px] items-center gap-2 px-2"
@@ -3814,10 +4757,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 : sortedColumnIds.has(nameColumn.id)
                                 ? "var(--airtable-sort-header-bg)"
                                 : hoveredHeaderId === nameColumn.id
-                                ? "var(--airtable-hover-bg)"
+                                ? "var(--airtable-cell-hover-bg)"
                                 : "#ffffff",
                               position: "sticky",
-                              left: 0,
+                              left: rowNumberColumnWidth,
                               zIndex: 30,
                             }}
                             onMouseEnter={() => setHoveredHeaderId(nameColumn.id)}
@@ -3885,7 +4828,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               : isSortedColumn
                               ? "var(--airtable-sort-header-bg)"
                               : hoveredHeaderId === column.id
-                              ? "var(--airtable-hover-bg)"
+                              ? "var(--airtable-cell-hover-bg)"
                               : "#ffffff";
 
                           if (column.type === "add") {
@@ -3910,7 +4853,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     setIsAddColumnMenuOpen((prev) => !prev);
                                   }}
                                   disabled={activeColumns.length >= MAX_COLUMNS}
-                                  className="flex h-[33px] w-full cursor-pointer items-center justify-center airtable-secondary-font transition-colors disabled:cursor-not-allowed"
+                                  className="flex h-[33px] w-full cursor-pointer items-center justify-center text-[#1d1f24] transition-colors disabled:cursor-not-allowed"
                                   aria-label="Add column"
                                 >
                                   <span className="airtable-plus-icon" aria-hidden="true" />
@@ -4055,14 +4998,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         style={{ height: rowVirtualizer.getTotalSize() }}
                       >
                         {virtualItems.map((virtualRow) => {
-                          const row = sortedTableData[virtualRow.index];
+                        const row = sortedTableData[virtualRow.index];
                           if (!row) {
                             return (
                               <div
                                 key={`loader-${virtualRow.index}`}
                                 className="absolute left-0 right-0 flex items-center px-3 text-[12px] text-[#616670]"
                                 style={{
-                                  transform: `translateY(${virtualRow.start}px)`,
+                                  transform: `translate3d(0, ${virtualRow.start}px, 0)`,
                                   height: `${virtualRow.size}px`,
                                   width: totalColumnsWidth,
                                 }}
@@ -4074,21 +5017,29 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             );
                           }
 
+                        const rowSearchMatches = hasSearchQuery
+                          ? searchMatchesByRow.get(row.id)
+                          : null;
                         const isLastRow = virtualRow.index === rowCount - 1;
                         const rowHasSelection = selectedCell?.rowId === row.id;
+                        const rowNumberBaseBg = rowHasSelection
+                          ? "var(--airtable-hover-bg)"
+                          : "#ffffff";
+                        const rowNumberHoverBg = "var(--airtable-cell-hover-bg)";
 
                         return (
                           <div
                             key={row.id}
-                            className="absolute left-0 right-0 flex text-[13px] text-[#1d1f24]"
+                            className={clsx(
+                              "airtable-row absolute left-0 right-0 flex text-[13px] text-[#1d1f24]",
+                              isScrolling && "pointer-events-none"
+                            )}
                             style={{
-                              transform: `translateY(${virtualRow.start}px)`,
+                              transform: `translate3d(0, ${virtualRow.start}px, 0)`,
                               height: `${virtualRow.size}px`,
                               width: totalColumnsWidth,
                               zIndex: rowHasSelection ? 5 : 1,
                             }}
-                            onMouseEnter={() => setHoveredRowId(row.id)}
-                            onMouseLeave={() => setHoveredRowId(null)}
                             onContextMenu={(event) =>
                               handleOpenContextMenu(
                                 event,
@@ -4098,6 +5049,43 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               )
                             }
                           >
+                            {rowNumberColumn && (
+                              <div
+                                className="airtable-cell relative flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
+                                style={{
+                                  borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
+                                  borderLeft: "none",
+                                  borderRight: "none",
+                                  width: rowNumberColumnWidth,
+                                  minWidth: rowNumberColumnWidth,
+                                  maxWidth: rowNumberColumnWidth,
+                                  flex: "0 0 auto",
+                                  height: 33,
+                                  position: "sticky",
+                                  left: 0,
+                                  zIndex: rowHasSelection ? 20 : 15,
+                                  ["--airtable-cell-base" as string]: rowNumberBaseBg,
+                                  ["--airtable-cell-hover" as string]: rowNumberHoverBg,
+                                }}
+                                aria-hidden="true"
+                              >
+                                <div className="relative flex h-full w-full items-center">
+                                  <span className="airtable-row-hover-hide block w-[17px] text-center">
+                                    {virtualRow.index + 1}
+                                  </span>
+                                  <div className="airtable-row-hover-show absolute inset-0 flex items-center">
+                                    <div className="airtable-outline h-[17px] w-[17px] rounded-[4px] bg-white" />
+                                    <div className="airtable-outline ml-auto flex h-[25px] w-[25px] items-center justify-center rounded-[4px] bg-white">
+                                      <img
+                                        alt=""
+                                        className="h-[13px] w-[12px]"
+                                        src={expandIcon.src}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                             {nameColumn && nameColumn.type === "data" && (
                               (() => {
                                 const nameOriginalValue = row[nameColumn.id] ?? "";
@@ -4114,14 +5102,38 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 const nameIsEditing =
                                   editingCell?.rowId === row.id &&
                                   editingCell?.columnId === nameColumn.id;
+                                const nameHasSearchMatch =
+                                  hasSearchQuery && rowSearchMatches?.has(nameColumn.id);
+                                const showNameSearchOverlay =
+                                  nameHasSearchMatch && !nameIsEditing;
                                 const nameExpanded =
                                   nameIsLongText &&
                                   selectedCell?.rowId === row.id &&
                                   selectedCell?.columnId === nameColumn.id;
+                                const nameBaseBackground = nameHasSearchMatch
+                                  ? "#FFF3D3"
+                                  : filteredColumnIds.has(nameColumn.id)
+                                  ? "#E2F1E3"
+                                  : sortedColumnIds.has(nameColumn.id)
+                                  ? "var(--airtable-sort-column-bg)"
+                                  : nameIsSelected
+                                  ? "#ffffff"
+                                  : rowHasSelection
+                                  ? "var(--airtable-hover-bg)"
+                                  : "#ffffff";
+                                const nameHoverBackground = nameHasSearchMatch
+                                  ? "#FFF3D3"
+                                  : filteredColumnIds.has(nameColumn.id)
+                                  ? "#E5F4E6"
+                                  : sortedColumnIds.has(nameColumn.id)
+                                  ? "#F8EDE4"
+                                  : nameIsSelected
+                                  ? "#ffffff"
+                                  : "var(--airtable-cell-hover-bg)";
                                 return (
                                   <div
                                     className={clsx(
-                                      "relative flex overflow-visible px-2",
+                                      "airtable-cell relative flex overflow-visible px-2",
                                       nameIsSelected &&
                                         (nameIsEditing
                                           ? "airtable-cell--editing"
@@ -4135,20 +5147,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       flex: "0 0 auto",
                                       height: nameExpanded ? LONG_TEXT_HEIGHT : 33,
                                       alignItems: nameExpanded ? "flex-start" : "center",
-                                      backgroundColor: filteredColumnIds.has(nameColumn.id)
-                                        ? "#E2F1E3"
-                                        : sortedColumnIds.has(nameColumn.id)
-                                        ? "var(--airtable-sort-column-bg)"
-                                        : nameIsSelected
-                                        ? "#ffffff"
-                                        : hoveredRowId === row.id
-                                        ? "var(--airtable-hover-bg)"
-                                        : selectedCell?.rowId === row.id
-                                        ? "var(--airtable-hover-bg)"
-                                        : "#ffffff",
                                       position: "sticky",
-                                      left: 0,
+                                      left: rowNumberColumnWidth,
                                       zIndex: nameExpanded ? 30 : 25,
+                                      ["--airtable-cell-base" as string]:
+                                        nameBaseBackground,
+                                      ["--airtable-cell-hover" as string]:
+                                        nameHoverBackground,
                                     }}
                                     onClick={() => {
                                       if (!nameIsEditing) {
@@ -4212,7 +5217,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                               aria-label={`${nameColumn.name} cell`}
                                             />
                                             <div className="airtable-long-text-display">
-                                              {nameEditedValue}
+                                              {renderSearchHighlight(
+                                                nameEditedValue,
+                                                searchQuery
+                                              )}
                                             </div>
                                           </>
                                         ) : (
@@ -4263,12 +5271,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                               }}
                                               className={clsx(
                                                 "airtable-long-text-input airtable-long-text-input--expanded",
-                                                !nameIsEditing && "airtable-cell-input--inactive"
+                                                !nameIsEditing && "airtable-cell-input--inactive",
+                                                showNameSearchOverlay &&
+                                                  "airtable-search-input--hidden"
                                               )}
                                               style={{ height: LONG_TEXT_HEIGHT }}
                                               readOnly={!nameIsEditing}
                                               aria-label={`${nameColumn.name} cell`}
                                             />
+                                            {showNameSearchOverlay && (
+                                              <div className="airtable-search-overlay airtable-search-overlay--expanded">
+                                                {renderSearchHighlight(
+                                                  nameEditedValue,
+                                                  searchQuery
+                                                )}
+                                              </div>
+                                            )}
                                             <img
                                               alt=""
                                               className="airtable-long-text-selection"
@@ -4278,66 +5296,84 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                         )}
                                       </>
                                     ) : (
-                                      <input
-                                        value={nameEditedValue}
-                                        onChange={(event) =>
-                                          handleCellChange(
-                                            row.id,
-                                            nameColumn.id,
-                                            event.target.value
-                                          )
-                                        }
-                                        onBlur={() => {
-                                          if (!nameIsEditing) return;
-                                          handleCellCommit(
-                                            row.id,
-                                            nameColumn.id,
-                                            nameEditedValue
-                                          );
-                                          setEditingCell(null);
-                                        }}
-                                        onFocus={() =>
-                                          setSelectedCell({
-                                            rowId: row.id,
-                                            columnId: nameColumn.id,
-                                          })
-                                        }
-                                        onDoubleClick={() =>
-                                          beginEditExisting(row.id, nameColumn.id)
-                                        }
-                                        onKeyDown={(event) =>
-                                          handleCellKeyDown(
-                                            event,
-                                            row.id,
-                                            nameColumn.id,
-                                            nameColumn.fieldType,
-                                            nameEditedValue
-                                          )
-                                        }
-                                        ref={(node) => {
-                                          const key = `${row.id}-${nameColumn.id}`;
-                                          if (node) {
-                                            cellRefs.current.set(key, node);
-                                          } else {
-                                            cellRefs.current.delete(key);
+                                      <>
+                                        <input
+                                          value={nameEditedValue}
+                                          onChange={(event) =>
+                                            handleCellChange(
+                                              row.id,
+                                              nameColumn.id,
+                                              event.target.value
+                                            )
                                           }
-                                        }}
-                                        className={clsx(
-                                          "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
-                                          !nameIsEditing && "airtable-cell-input--inactive"
+                                          onBlur={() => {
+                                            if (!nameIsEditing) return;
+                                            handleCellCommit(
+                                              row.id,
+                                              nameColumn.id,
+                                              nameEditedValue
+                                            );
+                                            setEditingCell(null);
+                                          }}
+                                          onFocus={() =>
+                                            setSelectedCell({
+                                              rowId: row.id,
+                                              columnId: nameColumn.id,
+                                            })
+                                          }
+                                          onDoubleClick={() =>
+                                            beginEditExisting(row.id, nameColumn.id)
+                                          }
+                                          onKeyDown={(event) =>
+                                            handleCellKeyDown(
+                                              event,
+                                              row.id,
+                                              nameColumn.id,
+                                              nameColumn.fieldType,
+                                              nameEditedValue
+                                            )
+                                          }
+                                          ref={(node) => {
+                                            const key = `${row.id}-${nameColumn.id}`;
+                                            if (node) {
+                                              cellRefs.current.set(key, node);
+                                            } else {
+                                              cellRefs.current.delete(key);
+                                            }
+                                          }}
+                                          className={clsx(
+                                            "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
+                                            !nameIsEditing &&
+                                              "airtable-cell-input--inactive",
+                                            showNameSearchOverlay &&
+                                              "airtable-search-input--hidden"
+                                          )}
+                                          inputMode={nameIsNumber ? "decimal" : undefined}
+                                          pattern={
+                                            nameIsNumber
+                                              ? "^-?\\d*(?:\\.\\d{0,8})?$"
+                                              : undefined
+                                          }
+                                          style={{
+                                            textAlign: nameIsNumber ? "right" : "left",
+                                          }}
+                                          readOnly={!nameIsEditing}
+                                          aria-label={`${nameColumn.name} cell`}
+                                        />
+                                        {showNameSearchOverlay && (
+                                          <div
+                                            className="airtable-search-overlay"
+                                            style={{
+                                              textAlign: nameIsNumber ? "right" : "left",
+                                            }}
+                                          >
+                                            {renderSearchHighlight(
+                                              nameEditedValue,
+                                              searchQuery
+                                            )}
+                                          </div>
                                         )}
-                                        inputMode={nameIsNumber ? "decimal" : undefined}
-                                        pattern={
-                                          nameIsNumber
-                                            ? "^-?\\d*(?:\\.\\d{0,8})?$"
-                                            : undefined
-                                        }
-                                        style={{
-                                          textAlign: nameIsNumber ? "right" : "left",
-                                        }}
-                                        readOnly={!nameIsEditing}
-                                        aria-label={`${nameColumn.name} cell`}
-                                      />
+                                      </>
                                     )}
                                     {nameIsSelected && !nameIsEditing && (
                                       <div className="airtable-cell-handle" />
@@ -4362,17 +5398,29 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               const isFilteredColumn =
                                 column.type === "data" &&
                                 filteredColumnIds.has(column.id);
-                              const isRowHovered = hoveredRowId === row.id;
+                              const cellHasSearchMatch =
+                                hasSearchQuery && rowSearchMatches?.has(column.id);
                               const rowHasSelection = selectedCell?.rowId === row.id;
-                              const cellBackground = isFilteredColumn
+                              const cellBaseBackground = cellHasSearchMatch
+                                ? "#FFF3D3"
+                                : isFilteredColumn
                                 ? "#E2F1E3"
                                 : isSortedColumn
                                 ? "var(--airtable-sort-column-bg)"
                                 : isSelected
                                 ? "#ffffff"
-                                : isRowHovered || rowHasSelection
+                                : rowHasSelection
                                 ? "var(--airtable-hover-bg)"
                                 : "#ffffff";
+                              const cellHoverBackground = cellHasSearchMatch
+                                ? "#FFF3D3"
+                                : isFilteredColumn
+                                ? "#E5F4E6"
+                                : isSortedColumn
+                                ? "#F8EDE4"
+                                : isSelected
+                                ? "#ffffff"
+                                : "var(--airtable-cell-hover-bg)";
                               const cellStyle = bodyCellBorder(column, false, isLastRow);
 
                                 if (column.type === "add") {
@@ -4398,6 +5446,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               const isEditing =
                                 editingCell?.rowId === row.id &&
                                 editingCell?.columnId === column.id;
+                              const showSearchOverlay =
+                                cellHasSearchMatch && !isEditing;
                               const isExpanded =
                                 isLongText &&
                                 selectedCell?.rowId === row.id &&
@@ -4407,7 +5457,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 <div
                                   key={`${row.id}-${column.id}`}
                                   className={clsx(
-                                    "relative flex overflow-visible px-2",
+                                    "airtable-cell relative flex overflow-visible px-2",
                                     isSelected &&
                                       (isEditing
                                         ? "airtable-cell--editing"
@@ -4419,7 +5469,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                     flex: "0 0 auto",
                                     height: isExpanded ? LONG_TEXT_HEIGHT : 33,
                                     alignItems: isExpanded ? "flex-start" : "center",
-                                    backgroundColor: cellBackground,
                                     zIndex: isExpanded ? 20 : undefined,
                                     ...(isSelected
                                       ? ({ ["--cell-outline-left" as string]: "0px" } as Record<
@@ -4427,6 +5476,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           string
                                         >)
                                       : null),
+                                    ["--airtable-cell-base" as string]: cellBaseBackground,
+                                    ["--airtable-cell-hover" as string]: cellHoverBackground,
                                     }}
                                   onClick={() => {
                                     if (!isEditing) {
@@ -4490,7 +5541,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                 aria-label={`${column.name} cell`}
                                               />
                                               <div className="airtable-long-text-display">
-                                                {editedValue}
+                                                {renderSearchHighlight(
+                                                  editedValue,
+                                                  searchQuery
+                                                )}
                                               </div>
                                             </>
                                           ) : (
@@ -4541,12 +5595,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                                 }}
                                                 className={clsx(
                                                   "airtable-long-text-input airtable-long-text-input--expanded",
-                                                  !isEditing && "airtable-cell-input--inactive"
+                                                  !isEditing && "airtable-cell-input--inactive",
+                                                  showSearchOverlay &&
+                                                    "airtable-search-input--hidden"
                                                 )}
                                                 style={{ height: LONG_TEXT_HEIGHT }}
                                                 readOnly={!isEditing}
                                                 aria-label={`${column.name} cell`}
                                               />
+                                              {showSearchOverlay && (
+                                                <div className="airtable-search-overlay airtable-search-overlay--expanded">
+                                                  {renderSearchHighlight(
+                                                    editedValue,
+                                                    searchQuery
+                                                  )}
+                                                </div>
+                                              )}
                                               <img
                                                 alt=""
                                                 className="airtable-long-text-selection"
@@ -4556,66 +5620,84 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                           )}
                                         </>
                                       ) : (
-                                        <input
-                                          value={editedValue}
-                                          onChange={(event) =>
-                                            handleCellChange(
-                                              row.id,
-                                              column.id,
-                                              event.target.value
-                                            )
-                                          }
-                                          onBlur={() => {
-                                            if (!isEditing) return;
-                                            handleCellCommit(
-                                              row.id,
-                                              column.id,
-                                              editedValue
-                                            );
-                                            setEditingCell(null);
-                                          }}
-                                          onFocus={() =>
-                                            setSelectedCell({
-                                              rowId: row.id,
-                                              columnId: column.id,
-                                            })
-                                          }
-                                          onDoubleClick={() =>
-                                            beginEditExisting(row.id, column.id)
-                                          }
-                                          onKeyDown={(event) =>
-                                            handleCellKeyDown(
-                                              event,
-                                              row.id,
-                                              column.id,
-                                              column.fieldType,
-                                              editedValue
-                                            )
-                                          }
-                                          ref={(node) => {
-                                            const key = `${row.id}-${column.id}`;
-                                            if (node) {
-                                              cellRefs.current.set(key, node);
-                                            } else {
-                                              cellRefs.current.delete(key);
+                                        <>
+                                          <input
+                                            value={editedValue}
+                                            onChange={(event) =>
+                                              handleCellChange(
+                                                row.id,
+                                                column.id,
+                                                event.target.value
+                                              )
                                             }
-                                          }}
-                                          className={clsx(
-                                            "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
-                                            !isEditing && "airtable-cell-input--inactive"
+                                            onBlur={() => {
+                                              if (!isEditing) return;
+                                              handleCellCommit(
+                                                row.id,
+                                                column.id,
+                                                editedValue
+                                              );
+                                              setEditingCell(null);
+                                            }}
+                                            onFocus={() =>
+                                              setSelectedCell({
+                                                rowId: row.id,
+                                                columnId: column.id,
+                                              })
+                                            }
+                                            onDoubleClick={() =>
+                                              beginEditExisting(row.id, column.id)
+                                            }
+                                            onKeyDown={(event) =>
+                                              handleCellKeyDown(
+                                                event,
+                                                row.id,
+                                                column.id,
+                                                column.fieldType,
+                                                editedValue
+                                              )
+                                            }
+                                            ref={(node) => {
+                                              const key = `${row.id}-${column.id}`;
+                                              if (node) {
+                                                cellRefs.current.set(key, node);
+                                              } else {
+                                                cellRefs.current.delete(key);
+                                              }
+                                            }}
+                                            className={clsx(
+                                              "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
+                                              !isEditing &&
+                                                "airtable-cell-input--inactive",
+                                              showSearchOverlay &&
+                                                "airtable-search-input--hidden"
+                                            )}
+                                            inputMode={isNumber ? "decimal" : undefined}
+                                            pattern={
+                                              isNumber
+                                                ? "^-?\\d*(?:\\.\\d{0,8})?$"
+                                                : undefined
+                                            }
+                                            style={{
+                                              textAlign: isNumber ? "right" : "left",
+                                            }}
+                                            readOnly={!isEditing}
+                                            aria-label={`${column.name} cell`}
+                                          />
+                                          {showSearchOverlay && (
+                                            <div
+                                              className="airtable-search-overlay"
+                                              style={{
+                                                textAlign: isNumber ? "right" : "left",
+                                              }}
+                                            >
+                                              {renderSearchHighlight(
+                                                editedValue,
+                                                searchQuery
+                                              )}
+                                            </div>
                                           )}
-                                          inputMode={isNumber ? "decimal" : undefined}
-                                          pattern={
-                                            isNumber
-                                              ? "^-?\\d*(?:\\.\\d{0,8})?$"
-                                              : undefined
-                                          }
-                                          style={{
-                                            textAlign: isNumber ? "right" : "left",
-                                          }}
-                                          readOnly={!isEditing}
-                                          aria-label={`${column.name} cell`}
-                                        />
+                                        </>
                                       )}
                                       {isSelected && !isEditing && (
                                         <div className="airtable-cell-handle" />
@@ -4637,6 +5719,54 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         onMouseEnter={() => setAddRowHover(true)}
                         onMouseLeave={() => setAddRowHover(false)}
                       >
+                        {rowNumberColumn && (
+                          <button
+                            type="button"
+                            onClick={handleAddRow}
+                            disabled={addRowDisabled}
+                            className="flex h-[33px] cursor-pointer items-center px-2 text-[#606570] disabled:cursor-not-allowed"
+                            style={{
+                              width: rowNumberColumnWidth,
+                              minWidth: rowNumberColumnWidth,
+                              maxWidth: rowNumberColumnWidth,
+                              flex: "0 0 auto",
+                              backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
+                              borderTop: "0.5px solid #DDE1E3",
+                              borderBottom: "0.5px solid #DDE1E3",
+                              borderLeft: "none",
+                              borderRight: "none",
+                              position: "sticky",
+                              left: 0,
+                              zIndex: 30,
+                            }}
+                            aria-label="Add row"
+                          >
+                            <span className="flex h-[17px] w-[17px] items-center justify-center">
+                              <svg
+                                aria-hidden="true"
+                                className="h-[13px] w-[13px]"
+                                viewBox="0 0 13 13"
+                              >
+                                <rect
+                                  x="0"
+                                  y="6"
+                                  width="13"
+                                  height="1"
+                                  rx="0.5"
+                                  fill="currentColor"
+                                />
+                                <rect
+                                  x="6"
+                                  y="0"
+                                  width="1"
+                                  height="13"
+                                  rx="0.5"
+                                  fill="currentColor"
+                                />
+                              </svg>
+                            </span>
+                          </button>
+                        )}
                         {nameColumn ? (
                           <>
                             <button
@@ -4649,28 +5779,23 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                 minWidth: nameColumnWidth,
                                 maxWidth: nameColumnWidth,
                                 flex: "0 0 auto",
-                                backgroundColor: addRowHover
-                                  ? "var(--airtable-hover-bg)"
-                                  : "#ffffff",
+                                backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
                                 borderTop: "0.5px solid #DDE1E3",
                                 borderBottom: "0.5px solid #DDE1E3",
                                 borderLeft: "none",
                                 borderRight: "none",
                                 position: "sticky",
-                                left: 0,
+                                left: rowNumberColumnWidth,
                                 zIndex: 30,
                               }}
                               aria-label="Add row"
                             >
-                              <span className="airtable-plus-icon" aria-hidden="true" />
                             </button>
                             <div
                               style={{
                                 width: Math.max(0, dataColumnsWidth - nameColumnWidth),
                                 flex: "0 0 auto",
-                                backgroundColor: addRowHover
-                                  ? "var(--airtable-hover-bg)"
-                                  : "#ffffff",
+                                backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
                                 borderTop: "0.5px solid #DDE1E3",
                                 borderBottom: "0.5px solid #DDE1E3",
                                 borderRight: "0.5px solid #DDE1E3",
@@ -4687,27 +5812,32 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             style={{
                               width: dataColumnsWidth,
                               flex: "0 0 auto",
-                              backgroundColor: addRowHover
-                                ? "var(--airtable-hover-bg)"
-                                : "#ffffff",
+                              backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
                               borderTop: "0.5px solid #DDE1E3",
                               borderBottom: "0.5px solid #DDE1E3",
                               borderLeft: "none",
                               borderRight: "0.5px solid #DDE1E3",
+                              position: "sticky",
+                              left: rowNumberColumnWidth,
                             }}
                             aria-label="Add row"
                           >
-                            <span className="airtable-plus-icon" aria-hidden="true" />
                           </button>
                         )}
-                        <div style={{ width: addColumnWidth }} aria-hidden="true" />
+                        <div
+                          style={{
+                            width: addColumnWidth,
+                            backgroundColor: addRowHover ? "#F7F8FC" : "transparent",
+                          }}
+                          aria-hidden="true"
+                        />
                       </div>
                     </div>
                     </div>
                     {nameColumn && nameColumnWidth > 0 && (
                       <div
                         className="pointer-events-none absolute top-0 bottom-0 z-40 w-px bg-[#CBCBCB]"
-                        style={{ left: `${nameColumnWidth}px` }}
+                        style={{ left: `${rowNumberColumnWidth + nameColumnWidth}px` }}
                         aria-hidden="true"
                       />
                     )}

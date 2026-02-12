@@ -1,0 +1,2 @@
+ALTER TABLE "base_table" ADD COLUMN "sort_config" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "base_table" ADD COLUMN "hidden_column_ids" jsonb DEFAULT '[]'::jsonb NOT NULL;

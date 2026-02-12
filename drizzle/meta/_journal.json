@@ -15,6 +15,13 @@
       "when": 1770620659014,
       "tag": "0001_sort_config",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1770885712373,
+      "tag": "0002_heavy_patriot",
+      "breakpoints": true
     }
   ]
 }
