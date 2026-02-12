@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
 } from "react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -174,14 +175,19 @@ const hideFieldsIconSpecByType: Record<
   ColumnFieldType,
   { src: string; width: number; height: number; gap: number }
 > = {
-  single_line_text: hideFieldsIconSpecByName.Name,
-  long_text: hideFieldsIconSpecByName.Notes,
-  number: hideFieldsIconSpecByName.Number,
+  // Non-null assertions are safe here: these keys are defined in hideFieldsIconSpecByName.
+  single_line_text: hideFieldsIconSpecByName["Name"]!,
+  long_text: hideFieldsIconSpecByName["Notes"]!,
+  number: hideFieldsIconSpecByName["Number"]!,
 };
 
 const getHideFieldsIconSpec = (name: string, type?: string | null) => {
   const resolvedType = coerceColumnType(type);
-  return hideFieldsIconSpecByName[name] ?? hideFieldsIconSpecByType[resolvedType];
+  return (
+    hideFieldsIconSpecByName[name] ??
+    hideFieldsIconSpecByType[resolvedType] ??
+    hideFieldsIconSpecByName["Name"]!
+  );
 };
 
 const addColumnTypeOptions: Array<{
@@ -324,7 +330,7 @@ const renderSearchHighlight = (value: string, query: string) => {
   const normalizedQuery = query.toLowerCase();
   const firstMatch = normalizedValue.indexOf(normalizedQuery);
   if (firstMatch === -1) return value;
-  const parts: Array<string | JSX.Element> = [];
+  const parts: ReactNode[] = [];
   let startIndex = 0;
   let matchIndex = firstMatch;
   let matchCount = 0;
@@ -2112,15 +2118,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     tableData.forEach((row) => {
       const rowEdits = cellEdits[row.id];
       let rowMatches: Set<string> | null = null;
-      orderedColumns.forEach((column) => {
+      for (const column of orderedColumns) {
         const value = rowEdits?.[column.id] ?? row[column.id] ?? "";
         if (String(value).toLowerCase().includes(normalizedSearch)) {
           if (!rowMatches) {
-            rowMatches = new Set();
+            rowMatches = new Set<string>();
           }
           rowMatches.add(column.id);
         }
-      });
+      }
       if (rowMatches && rowMatches.size > 0) {
         matches.set(row.id, rowMatches);
       }
@@ -5434,6 +5440,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                                       aria-hidden="true"
                                     />
                                   );
+                                }
+                                if (column.type !== "data") {
+                                  return null;
                                 }
 
                                 const originalValue = row[column.id] ?? "";
