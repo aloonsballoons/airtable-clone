@@ -460,34 +460,31 @@ export const baseRouter = createTRPCRouter({
 				});
 			}
 
-		// Use PostgreSQL unnest/generate_series for bulk insert in a single query
-		// This is significantly faster than multiple batch inserts
-		if (input.ids) {
-			// Use provided IDs with unnest
-			await ctx.db.execute(sql`
-				INSERT INTO table_row (id, table_id, data, created_at, updated_at)
-				SELECT 
-					unnest(${input.ids}::uuid[]),
-					${input.tableId}::uuid,
-					'{}'::jsonb,
-					NOW(),
-					NOW()
-			`);
-		} else {
-			// Let PostgreSQL generate UUIDs - even faster
-			await ctx.db.execute(sql`
-				INSERT INTO table_row (id, table_id, data, created_at, updated_at)
-				SELECT 
-					gen_random_uuid(),
-					${input.tableId}::uuid,
-					'{}'::jsonb,
-					NOW(),
-					NOW()
-				FROM generate_series(1, ${input.count})
-			`);
-		}
+			// Use PostgreSQL generate_series for bulk insert in a single query.
+			// For explicit IDs, prefer a typed insert to avoid uuid[] array-literal casts.
+			if (input.ids) {
+				await ctx.db.insert(tableRow).values(
+					input.ids.map((id) => ({
+						id,
+						tableId: input.tableId,
+						data: {},
+					})),
+				);
+			} else {
+				// Let PostgreSQL generate UUIDs - even faster
+				await ctx.db.execute(sql`
+					INSERT INTO table_row (id, table_id, data, created_at, updated_at)
+					SELECT 
+						gen_random_uuid(),
+						${input.tableId}::uuid,
+						'{}'::jsonb,
+						NOW(),
+						NOW()
+					FROM generate_series(1, ${input.count})
+				`);
+			}
 
-		return { added: input.count };
+			return { added: input.count };
 		}),
 
 	deleteBase: protectedProcedure
