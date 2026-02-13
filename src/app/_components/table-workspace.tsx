@@ -24,6 +24,7 @@ import groupIcon from "~/assets/group.svg";
 import helpIcon from "~/assets/help.svg";
 import hideFieldsIcon from "~/assets/hide fields.svg";
 import launchIcon from "~/assets/launch.svg";
+import lightArrowIcon from "~/assets/light-arrow.svg";
 import longLineSelectionIcon from "~/assets/long-line-selection.svg";
 import logoIcon from "~/assets/logo.svg";
 import nameIcon from "~/assets/name.svg";
@@ -31,6 +32,7 @@ import notesIcon from "~/assets/notes.svg";
 import numberIcon from "~/assets/number.svg";
 import omniIcon from "~/assets/omni.svg";
 import pinkIcon from "~/assets/pink.svg";
+import plusIcon from "~/assets/plus.svg";
 import refreshIcon from "~/assets/refresh.svg";
 import reorderIcon from "~/assets/reorder.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
@@ -453,6 +455,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   );
   const [ensuredTableId, setEnsuredTableId] = useState<string | null>(null);
   const [hoveredHeaderId, setHoveredHeaderId] = useState<string | null>(null);
+  const [hoveredTableTabId, setHoveredTableTabId] = useState<string | null>(null);
   const [selectedCell, setSelectedCell] = useState<{
     rowId: string;
     columnId: string;
@@ -2961,6 +2964,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     !activeTableId || addRows.isPending || activeRowCount + BULK_ROWS > MAX_ROWS;
   const addRowDisabled =
     !activeTableId || activeRowCount >= MAX_ROWS;
+  const addTableDisabled = activeTables.length >= MAX_TABLES || addTable.isPending;
 
   const baseName = baseDetailsQuery.data?.name ?? "Base";
   const userInitial = formatUserInitial(userName);
@@ -3040,7 +3044,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="border-b border-[#DDE1E3] bg-white">
+          <header className="bg-white">
             <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6">
               <div className="flex items-center gap-3">
                 <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[6px] bg-[#8c3f78]">
@@ -3098,50 +3102,155 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             </div>
           </header>
 
-          <section className="border-b border-[#DEDEDE] bg-white px-4 sm:px-6">
-            <div className="flex flex-wrap items-center justify-between gap-3 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                {activeTables.map((tableItem) => (
-                  <button
-                    key={tableItem.id}
-                    type="button"
-                    onClick={() => handleSelectTable(tableItem.id)}
-                    onContextMenu={(event) =>
-                      handleOpenContextMenu(event, "table", tableItem.id, canDeleteTable)
-                    }
-                    className={clsx(
-                      "flex items-center gap-2 rounded-[6px] border px-3 py-1 text-[13px]",
-                      tableItem.id === activeTableId
-                        ? "border-[#1d1f24] text-[#1d1f24]"
-                        : "border-[#DDE1E3] airtable-secondary-font"
-                    )}
+          <section className="border-t border-[#DEDEDE] bg-white">
+            <div className="h-[31px] border-b border-[#E5DAE5] bg-[#FFF0FF]">
+              <div className="flex h-full min-w-0 items-stretch">
+                <div className="min-w-0 flex-1 overflow-x-auto">
+                  <div
+                    className="flex h-full w-max min-w-full items-stretch pr-[12px]"
+                    onMouseLeave={() => setHoveredTableTabId(null)}
                   >
-                    {tableItem.name}
+                    {activeTables.map((tableItem, index) => {
+                      const isActive = tableItem.id === activeTableId;
+                      const previousTable = activeTables[index - 1];
+                      const nextTable = activeTables[index + 1];
+                      const isHovered = hoveredTableTabId === tableItem.id;
+                      const previousIsActive = previousTable?.id === activeTableId;
+                      const previousIsHovered = previousTable?.id === hoveredTableTabId;
+                      const nextIsActive = nextTable?.id === activeTableId;
+                      const showLeftDivider =
+                        index > 0 &&
+                        !isActive &&
+                        !previousIsActive &&
+                        !isHovered &&
+                        !previousIsHovered;
+                      return (
+                        <div key={tableItem.id} className="flex h-full items-stretch">
+                          <span
+                            className={clsx(
+                              "h-[12px] self-center bg-[#E5DAE5]",
+                              index === 0 ? "w-0" : "w-px",
+                              showLeftDivider ? "opacity-100" : "opacity-0"
+                            )}
+                            aria-hidden="true"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSelectTable(tableItem.id)}
+                            onMouseEnter={() => {
+                              setHoveredTableTabId(tableItem.id);
+                            }}
+                            onMouseLeave={() => {
+                              setHoveredTableTabId((current) =>
+                                current === tableItem.id ? null : current
+                              );
+                            }}
+                            onContextMenu={(event) =>
+                              handleOpenContextMenu(
+                                event,
+                                "table",
+                                tableItem.id,
+                                canDeleteTable
+                              )
+                            }
+                            className={clsx(
+                              "relative flex h-[31px] items-start whitespace-nowrap rounded-t-[3px] rounded-b-none px-[12px] pt-[8px] text-[13px] leading-[13px]",
+                              isActive
+                                ? "airtable-table-tab-active z-[2] -mb-px border-b-0 bg-white text-[#1D1F24]"
+                                : "text-[#595359] hover:bg-[#EBDEEB] hover:text-[#1D1F24]",
+                              isActive && index === 0 && "airtable-table-tab-active--first"
+                            )}
+                            style={
+                              isActive
+                                ? {
+                                    border: "0.5px solid #D7CBD6",
+                                    borderBottom: "none",
+                                    borderLeft: index === 0 ? "none" : undefined,
+                                  }
+                                : undefined
+                            }
+                          >
+                            {isActive && (
+                              <span
+                                className="airtable-table-tab-active__bridge"
+                                aria-hidden="true"
+                              />
+                            )}
+                            {!isActive && isHovered && (
+                              <span
+                                className={clsx(
+                                  "pointer-events-none absolute bottom-0 top-0 rounded-t-[3px] bg-[#EBDEEB]",
+                                  previousIsActive ? "-left-[8px] right-0" : "left-0 right-0",
+                                  nextIsActive && "left-0 -right-[8px]"
+                                )}
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span
+                              className={clsx(
+                                "relative z-[1]",
+                                isActive ? "font-medium" : "font-normal"
+                              )}
+                            >
+                              {tableItem.name}
+                            </span>
+                            {isActive && (
+                              <img
+                                alt=""
+                                className="relative z-[1] ml-[6px] mt-[5px] h-[5.8px] w-[10.02px] mix-blend-multiply"
+                                src={lightArrowIcon.src}
+                              />
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <span
+                      className={clsx(
+                        "h-[12px] w-px self-center bg-[#E5DAE5]",
+                        hoveredTableTabId === activeTables[activeTables.length - 1]?.id &&
+                          "opacity-0"
+                      )}
+                      aria-hidden="true"
+                    />
+                    <img
+                      alt=""
+                      className="ml-[15px] mt-[13px] h-[5.8px] w-[10.02px] flex-shrink-0 mix-blend-multiply"
+                      src={lightArrowIcon.src}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddTable}
+                      disabled={addTableDisabled}
+                      className={clsx(
+                        "ml-[30px] mt-[10px] h-[12px] w-[12px] flex-shrink-0",
+                        addTableDisabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"
+                      )}
+                      aria-label="Add table"
+                    >
+                      <img alt="" className="h-[12px] w-[12px]" src={plusIcon.src} />
+                    </button>
+                  </div>
+                </div>
+                <div className="relative flex h-full flex-shrink-0 pr-[19px]">
+                  <button
+                    type="button"
+                    className="mt-[8px] h-[13px] text-[13px] font-normal leading-[13px] text-[#595359] hover:text-[#1D1F24]"
+                  >
+                    Tools
                   </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={handleAddTable}
-                  disabled={activeTables.length >= MAX_TABLES || addTable.isPending}
-                  className={clsx(
-                    "rounded-[6px] border px-3 py-1 text-[13px]",
-                    activeTables.length >= MAX_TABLES
-                      ? "cursor-not-allowed border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
-                      : "border-[#DDE1E3] text-[#1d1f24]"
-                  )}
-                >
-                  {addTable.isPending ? "Adding..." : "+ Add table"}
-                </button>
+                  <img
+                    alt=""
+                    className="ml-[7px] mt-[13px] h-[5.8px] w-[10.02px] mix-blend-multiply"
+                    src={lightArrowIcon.src}
+                  />
+                </div>
               </div>
-              <button type="button" className="flex items-center gap-2 text-[13px] text-[#595459]">
-                Tools
-                <span className="airtable-nav-chevron rotate-90 text-[#595459]" />
-              </button>
             </div>
 
-            <div className="relative -mx-4 sm:-mx-6">
-              <div className="flex flex-wrap items-center pb-[8.5px] pl-4 pr-[8.5px] sm:pl-6 airtable-secondary-font-regular">
-                <div className="flex flex-wrap items-center gap-4">
+            <div className="relative h-[46px] bg-white">
+              <div className="flex h-full items-center pl-4 pr-[8.5px] sm:pl-6 airtable-secondary-font-regular">
+                <div className="flex items-center gap-4">
                   <button type="button" className="flex items-center gap-2">
                     <img
                       alt=""
@@ -3164,8 +3273,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     Add 100k rows
                   </button>
                 </div>
-                <div className="ml-auto flex flex-wrap items-center">
-                  <div className="flex flex-wrap items-center gap-4">
+                <div className="ml-auto flex items-center">
+                  <div className="flex items-center gap-4">
                     <div className="relative">
                       <button
                         ref={hideFieldsButtonRef}

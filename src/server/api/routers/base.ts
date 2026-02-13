@@ -146,7 +146,9 @@ export const baseRouter = createTRPCRouter({
 			const found = await ctx.db.query.base.findFirst({
 				where: and(eq(base.id, input.baseId), eq(base.ownerId, ctx.session.user.id)),
 				with: {
-					tables: true,
+					tables: {
+						orderBy: (table, { asc }) => [asc(table.createdAt)],
+					},
 				},
 			});
 
