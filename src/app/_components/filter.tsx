@@ -392,7 +392,7 @@ function removeConditionFromGroupTree(
   targetGroupId: string,
   conditionId: string
 ): FilterItem[] {
-  return items.flatMap((item) => {
+  return items.flatMap((item): FilterItem[] => {
     if (item.type === "condition") return [item];
 
     if (item.id === targetGroupId) {
