@@ -36,10 +36,10 @@ import plusIcon from "~/assets/plus.svg";
 import refreshIcon from "~/assets/refresh.svg";
 import reorderIcon from "~/assets/reorder.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
-import searchIcon from "~/assets/search.svg";
 import shareSyncIcon from "~/assets/share-and-sync.svg";
 import sortIcon from "~/assets/sort.svg";
 import statusIcon from "~/assets/status.svg";
+import threeLineIcon from "~/assets/three-line.svg";
 import toggleIcon from "~/assets/toggle.svg";
 import xIcon from "~/assets/x.svg";
 import { authClient } from "~/server/better-auth/client";
@@ -54,9 +54,12 @@ const MAX_TABLES = 1000;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const BULK_ROWS = 100_000;
-const PAGE_ROWS = 500;
+const PAGE_ROWS = 1000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
+const MAX_PREFETCH_PAGES_PER_BURST = 3;
 const ROW_HEIGHT = 33;
+const ROW_VIRTUAL_OVERSCAN = 80;
+const ROW_SCROLLING_RESET_DELAY_MS = 500;
 const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
@@ -910,10 +913,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         });
       }
     },
-    onSuccess: async (_data, variables) => {
+    onSuccess: (_data, variables) => {
       if (variables.ids?.length) return;
-      await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
-      await utils.base.getRows.invalidate(getRowsQueryKey(variables.tableId));
+      void utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+      void utils.base.getRows.invalidate(getRowsQueryKey(variables.tableId));
     },
   });
 
@@ -2311,28 +2314,35 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     count: showRowLoader ? rowCount + 1 : rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: estimateRowSize,
-    overscan: 42,
+    overscan: ROW_VIRTUAL_OVERSCAN,
     getItemKey: (index) => sortedTableData[index]?.id ?? `loader-${index}`,
-    isScrollingResetDelay: 100,
+    isScrollingResetDelay: ROW_SCROLLING_RESET_DELAY_MS,
     useAnimationFrameWithResizeObserver: true,
-    useFlushSync: true,
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
+  const lastNonEmptyVirtualItemsRef = useRef(virtualItems);
+  useEffect(() => {
+    if (virtualItems.length > 0) {
+      lastNonEmptyVirtualItemsRef.current = virtualItems;
+    }
+  }, [virtualItems]);
+  const rowVirtualItems =
+    virtualItems.length > 0 ? virtualItems : lastNonEmptyVirtualItemsRef.current;
   const isScrolling = rowVirtualizer.isScrolling;
   const rowCanvasHeight = Math.max(
     rowVirtualizer.getTotalSize(),
     showRowsInitialLoading || showRowsError || showRowsEmpty ? ROW_HEIGHT * 5 : 0
   );
   const rowVirtualRange = useMemo(() => {
-    if (!virtualItems.length) return { start: 0, end: 0 };
+    if (!rowVirtualItems.length) return { start: 0, end: 0 };
     return {
-      start: virtualItems[0]?.index ?? 0,
-      end: virtualItems[virtualItems.length - 1]?.index ?? 0,
+      start: rowVirtualItems[0]?.index ?? 0,
+      end: rowVirtualItems[rowVirtualItems.length - 1]?.index ?? 0,
     };
-  }, [virtualItems]);
-  const lastVirtualRowIndex = virtualItems.length
-    ? virtualItems[virtualItems.length - 1]!.index
+  }, [rowVirtualItems]);
+  const lastVirtualRowIndex = rowVirtualItems.length
+    ? rowVirtualItems[rowVirtualItems.length - 1]?.index ?? -1
     : -1;
 
   const columnVirtualizer = useVirtualizer({
@@ -2342,7 +2352,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     estimateSize: (index) => columnsWithAdd[index]?.width ?? DEFAULT_COLUMN_WIDTH,
     overscan: 6,
     getItemKey: (index) => columnsWithAdd[index]?.id ?? index,
-    useFlushSync: true,
   });
 
   const sortAddVirtualizer = useVirtualizer({
@@ -2418,6 +2427,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     null
   );
   const focusTokenRef = useRef(0);
+  const prefetchingRowsRef = useRef(false);
 
   useEffect(() => {
     const focusTarget = editingCell ?? selectedCell;
@@ -2469,17 +2479,49 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (lastVirtualRowIndex < 0) return;
-    const rowsRemaining = rowCount - lastVirtualRowIndex - 1;
+    if (!rowsQuery.hasNextPage) return;
+    if (rowsQuery.isFetchingNextPage) return;
+    if (prefetchingRowsRef.current) return;
+
     const viewportRows = Math.max(
       1,
       Math.ceil((parentRef.current?.clientHeight ?? 0) / ROW_HEIGHT)
     );
-    const minRowsAhead = Math.max(ROW_PREFETCH_AHEAD, viewportRows * 8);
-    const shouldPrefetch = rowsRemaining <= minRowsAhead;
-    if (!shouldPrefetch) return;
-    if (rowsQuery.hasNextPage && !rowsQuery.isFetchingNextPage) {
-      rowsQuery.fetchNextPage();
-    }
+    const minRowsAhead = Math.max(ROW_PREFETCH_AHEAD, viewportRows * 12);
+    const targetRowsAhead = minRowsAhead + PAGE_ROWS * 2;
+    const rowsRemaining = rowCount - lastVirtualRowIndex - 1;
+
+    if (rowsRemaining > minRowsAhead) return;
+
+    prefetchingRowsRef.current = true;
+
+    const prefetchRowsAhead = async () => {
+      try {
+        let pagesFetched = 0;
+        let bufferedRowCount = rowCount;
+        let hasNextPage = rowsQuery.hasNextPage;
+
+        while (
+          hasNextPage &&
+          pagesFetched < MAX_PREFETCH_PAGES_PER_BURST &&
+          bufferedRowCount - lastVirtualRowIndex - 1 < targetRowsAhead
+        ) {
+          const result = await rowsQuery.fetchNextPage();
+          pagesFetched += 1;
+
+          const pages = result.data?.pages ?? [];
+          const nextRowCount = pages.reduce((total, page) => total + page.rows.length, 0);
+          if (nextRowCount <= bufferedRowCount) break;
+
+          bufferedRowCount = nextRowCount;
+          hasNextPage = (pages[pages.length - 1]?.nextCursor ?? null) !== null;
+        }
+      } finally {
+        prefetchingRowsRef.current = false;
+      }
+    };
+
+    void prefetchRowsAhead();
   }, [
     lastVirtualRowIndex,
     rowCount,
@@ -2529,7 +2571,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const handleAddBulkRows = () => {
     if (!activeTableId) return;
-    addRows.mutate({ tableId: activeTableId, count: BULK_ROWS });
+    addRows.mutate({
+      tableId: activeTableId,
+      count: BULK_ROWS,
+      populateWithFaker: true,
+    });
   };
 
   const handleDeleteRow = (rowId: string) => {
@@ -3249,41 +3295,54 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             </div>
 
             <div className="relative h-[46px] bg-white">
-              <div className="flex h-full items-center pl-4 pr-[8.5px] sm:pl-6 airtable-secondary-font-regular">
-                <div className="flex items-center gap-4">
-                  <button type="button" className="flex items-center gap-2">
-                    <img
-                      alt=""
-                      className="h-[14px] w-[14px]"
-                      src={gridViewIcon.src}
-                    />
-                    Grid view
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleAddBulkRows}
-                    disabled={bulkRowsDisabled}
-                    className={clsx(
-                      "rounded-[6px] border px-3 py-1 text-[13px]",
-                      bulkRowsDisabled
-                        ? "cursor-not-allowed border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
-                        : "border-[#DDE1E3] text-[#1d1f24]"
-                    )}
+              <div className="relative h-full min-w-[940px] airtable-secondary-font-regular">
+                <img
+                  alt=""
+                  className="absolute left-[20px] top-[16px] h-[15px] w-[16px]"
+                  src={threeLineIcon.src}
+                />
+                <button type="button" className="absolute left-[54px] top-0 h-full w-[108px]">
+                  <img
+                    alt=""
+                    className="absolute left-0 top-[15px] h-[16px] w-[18px]"
+                    src={gridViewIcon.src}
+                  />
+                  <span
+                    className="absolute left-[26px] top-[17px] block w-[66px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
+                    style={{ fontFamily: "Inter, sans-serif" }}
                   >
-                    Add 100k rows
-                  </button>
-                </div>
-                <div className="ml-auto flex items-center">
-                  <div className="flex items-center gap-4">
-                    <div className="relative">
+                    Grid view
+                  </span>
+                  <img
+                    alt=""
+                    className="absolute left-[95px] top-[17.5px] h-[16px] w-[10px]"
+                    src={arrowIcon.src}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddBulkRows}
+                  disabled={bulkRowsDisabled}
+                  className={clsx(
+                    "absolute left-[175px] top-[10px] flex h-[26px] items-center justify-center rounded-[6px] px-3 text-[13px] leading-[13px]",
+                    bulkRowsDisabled
+                      ? "cursor-not-allowed border border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
+                      : "airtable-outline airtable-selection-hover bg-white text-[#1d1f24] cursor-pointer"
+                  )}
+                >
+                  Add 100k rows
+                </button>
+                <div className="absolute right-[8.5px] top-0 flex h-full items-center">
+                  <div className="relative h-full w-[643px]">
+                    <div className="absolute left-[68px] top-0">
                       <button
                         ref={hideFieldsButtonRef}
                         type="button"
                         className={clsx(
-                          "airtable-table-feature-selection gap-2 font-normal",
-                        hiddenFieldCount > 0 &&
-                          "airtable-table-feature-selection--hide-active"
-                      )}
+                          "airtable-table-feature-selection airtable-function-hover-pad relative mt-[10px] h-[26px] !min-w-0 w-[101px] !px-0",
+                          hiddenFieldCount > 0 &&
+                            "airtable-table-feature-selection--hide-active"
+                        )}
                       onClick={() => setIsHideFieldsMenuOpen((prev) => !prev)}
                       aria-haspopup="menu"
                       aria-expanded={isHideFieldsMenuOpen}
@@ -3291,12 +3350,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       <img
                         alt=""
                         className={clsx(
-                          "h-[14px] w-[14px]",
+                          "absolute left-[4px] top-[5px] h-[16px] w-[19px]",
                           hiddenFieldCount > 0 && "airtable-hide-fields-icon--active"
                         )}
                         src={hideFieldsIcon.src}
                       />
-                      <span>
+                      <span className="absolute left-[25px] top-[5px] block h-[16px] w-[72px] truncate text-[13px] leading-[16px]">
                         {hiddenFieldCount > 0
                           ? `${hiddenFieldCount} hidden field${
                               hiddenFieldCount === 1 ? "" : "s"
@@ -3307,7 +3366,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     {isHideFieldsMenuOpen && (
                       <div
                         ref={hideFieldsMenuRef}
-                        className="airtable-hide-fields-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                        className="airtable-hide-fields-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
                         style={{
                           width: HIDE_FIELDS_DROPDOWN_WIDTH,
                           height: hideFieldsLayout.dropdownHeight,
@@ -3447,12 +3506,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       </div>
                     )}
                   </div>
-                  <div className="relative">
+                  <div className="absolute left-[178px] top-0">
                     <button
                       ref={filterButtonRef}
                       type="button"
                       className={clsx(
-                        "airtable-table-feature-selection gap-2 font-normal",
+                        "airtable-table-feature-selection airtable-function-hover-pad relative mt-[10px] h-[26px] !min-w-0 w-[77px] !px-0",
                         hasActiveFilters &&
                           "airtable-table-feature-selection--filter-active text-[#1d1f24]"
                       )}
@@ -3473,12 +3532,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       <img
                         alt=""
                         className={clsx(
-                          "h-[14px] w-[14px]",
+                          "absolute left-[4px] top-[6px] h-[12px] w-[18px]",
                           hasActiveFilters && "airtable-filter-icon--active"
                         )}
                         src={filterIcon.src}
                       />
-                      <span>
+                      <span className="absolute left-[13px] top-[5px] block h-[16px] w-[60px] truncate text-[13px] leading-[16px]">
                         {hasActiveFilters
                           ? `Filtered by ${filteredColumnNames.join(", ")}`
                           : "Filter"}
@@ -3487,7 +3546,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     {isFilterMenuOpen && (
                       <div
                         ref={filterMenuRef}
-                        className="airtable-filter-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                        className="airtable-filter-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
                         style={{
                           width: filterDropdownWidth,
                           height: filterDropdownHeight,
@@ -4190,16 +4249,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     </div>
                   )}
                 </div>
-                <button type="button" className="flex items-center gap-2">
-                  <img alt="" className="h-[14px] w-[14px]" src={groupIcon.src} />
-                  Group
+                <button
+                  type="button"
+                  className="absolute left-[261px] top-[10px] h-[26px] w-[60px] text-left"
+                >
+                  <img alt="" className="absolute left-0 top-[6px] h-[14px] w-[16px]" src={groupIcon.src} />
+                  <span className="absolute left-[20px] top-[5px] block h-[16px] w-[40px] text-[13px] leading-[16px]">
+                    Group
+                  </span>
                 </button>
-                <div className="relative">
+                <div className="absolute left-[338px] top-0">
                   <button
                     ref={sortButtonRef}
                     type="button"
                     className={clsx(
-                      "airtable-table-feature-selection gap-2 font-normal",
+                      "airtable-table-feature-selection airtable-function-hover-pad relative mt-[10px] h-[26px] !min-w-0 w-[66px] !px-0",
                       hasSort &&
                         "airtable-table-feature-selection--active text-[#1d1f24]"
                     )}
@@ -4217,11 +4281,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     aria-haspopup="menu"
                     aria-expanded={isSortMenuOpen}
                   >
-                    <span className="relative inline-flex h-[14px] w-[14px]">
+                    <span className="absolute left-[4px] top-[6px] inline-flex h-[14px] w-[13px]">
                       <img
                         alt=""
                         className={clsx(
-                          "h-[14px] w-[14px]",
+                          "h-[14px] w-[13px]",
                           hasSort && "airtable-sort-icon--active"
                         )}
                         src={sortIcon.src}
@@ -4240,7 +4304,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         </>
                       )}
                     </span>
-                    <span>
+                    <span className="absolute left-[10px] top-[5px] block h-[16px] w-[52px] truncate text-[13px] leading-[16px]">
                       {hasSort
                         ? `Sorted by ${sortRows.length} ${
                             sortRows.length === 1 ? "field" : "fields"
@@ -4251,7 +4315,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   {isSortMenuOpen && (
                     <div
                       ref={sortMenuRef}
-                      className="airtable-sort-dropdown airtable-dropdown-surface absolute right-[-8px] top-[calc(100%+4px)] z-50"
+                      className="airtable-sort-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
                       style={{
                         width: hasSort ? sortConfiguredWidth : 320,
                         height: hasSort ? sortConfiguredHeight : sortListHeight,
@@ -4694,32 +4758,42 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       </div>
                     )}
                     </div>
-                    <button type="button" className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="absolute left-[410px] top-[10px] h-[26px] w-[68px] text-left"
+                    >
                       <img
                         alt=""
-                        className="h-[14px] w-[14px]"
+                        className="absolute left-0 top-[3px] h-[19px] w-[20px]"
                         src={colourIcon.src}
                       />
-                      Colour
+                      <span className="absolute left-[20px] top-[5px] block h-[16px] w-[48px] text-[13px] leading-[16px]">
+                        Color
+                      </span>
                     </button>
                     <button
                       type="button"
-                      className="flex items-center"
+                      className="absolute left-[485px] top-0 h-full w-[19px]"
                       aria-label="Row height"
                     >
                       <img
                         alt=""
-                        className="h-[14px] w-[14px]"
+                        className="absolute left-0 top-[16px] h-[15px] w-[19px]"
                         src={rowHeightIcon.src}
                       />
                     </button>
-                    <button type="button" className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="absolute left-[528px] top-[10px] h-[26px] w-[114px] text-left"
+                    >
                       <img
                         alt=""
-                        className="h-[14px] w-[14px]"
+                        className="absolute left-0 top-[6px] h-[15px] w-[15px]"
                         src={shareSyncIcon.src}
                       />
-                      Share and sync
+                      <span className="absolute left-[19px] top-[5px] block h-[16px] w-[95px] whitespace-nowrap text-[13px] leading-[16px]">
+                        Share and sync
+                      </span>
                     </button>
                   </div>
                   <button
@@ -4737,42 +4811,39 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       viewBox="0 0 30 30.000001"
                       className="block"
                       aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      xmlnsXlink="http://www.w3.org/1999/xlink"
+                      preserveAspectRatio="xMidYMid meet"
                     >
                       <defs>
-                        <filter id={`${searchMaskId}-invert`}>
-                          <feColorMatrix
-                            type="matrix"
-                            values="-1 0 0 0 1 0 -1 0 0 1 0 0 -1 0 1 0 0 0 1 0"
-                          />
-                        </filter>
-                        <mask
-                          id={`${searchMaskId}-mask`}
-                          maskUnits="userSpaceOnUse"
-                          x="0"
-                          y="0"
-                          width="30"
-                          height="30"
-                          maskContentUnits="userSpaceOnUse"
-                        >
+                        <clipPath id={`${searchMaskId}-clip1`}>
+                          <path d="M 0.484375 0 L 29.515625 0 L 29.515625 29.03125 L 0.484375 29.03125 Z M 0.484375 0 " clipRule="nonzero" />
+                        </clipPath>
+                        <clipPath id={`${searchMaskId}-clip2`}>
+                          <path d="M 0.484375 0 L 29.515625 0 L 29.515625 29 L 0.484375 29 Z M 0.484375 0 " clipRule="nonzero" />
+                        </clipPath>
+                      </defs>
+                      <g clipPath={`url(#${searchMaskId}-clip1)`}>
+                        <path fill="var(--search-icon-bg)" d="M 0.484375 0 L 29.515625 0 L 29.515625 29.03125 L 0.484375 29.03125 Z M 0.484375 0 " fillOpacity="1" fillRule="nonzero" />
+                        <path fill="var(--search-icon-bg)" d="M 0.484375 0 L 29.515625 0 L 29.515625 29.03125 L 0.484375 29.03125 Z M 0.484375 0 " fillOpacity="1" fillRule="nonzero" />
+                      </g>
+                      <g clipPath={`url(#${searchMaskId}-clip2)`}>
+                        <g transform="matrix(1.036866, 0, 0, 1.036866, 0.48387, 0.00000193548)">
                           <image
-                            href={searchIcon.src}
-                            width="30"
-                            height="30"
-                            filter={`url(#${searchMaskId}-invert)`}
+                            x="0"
+                            y="0"
+                            width="28"
+                            height="28"
+                            href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAIAAAD9b0jDAAAABmJLR0QA/wD/AP+gvaeTAAACk0lEQVRIia3Vz0vbYBgH8Cc66i5SYhGzjSS7vNkhrQe1NepWqVaFdpTsto1tHvTgfYwyHQwFHWN/QUsHVg96LL0ponS1g7aDCtsO204G2irWvl5TarNDoNY0rf3h9/i+7/Mhed+8TwhFUeC2c0d3VFGUZPLHzu5eIpE8OT3DOE+SPVRfr81mnZl2Wq1DBEHUQYnqJ43Fvq99+vLz1+9aNRYzv/j+3djYaEPo5eXl6trnwNcggPLg/j1R9Ew4xhmGIUkSYyxJ0v5BJBQKpzNZAGJ+bnZp0dvZ2an/pmqKxeLc/ALNIsTxPn9AlmVFL7Is+/wBxPE0i+bmF4rFYvWaK3R5ZZVm0cCgkEod6XKVSaWOBgYFmkXLK6s10ehhjGY5xPGNiGUXcTzNctHDmA5aKpVcbpFmkc8faFBU4/MHaBa53GKpVNKi8XiCZpEwYq+1j7Uiy7IwYqdZFI8nKsc7AGBndw8ARNFjMBjqfH3VMRgMougpC+V0AEAikQSACcd4U6IatUoVrqEnp2cAwDBMC6hapQrXUIzzAECSZAuoWoXzWIuSZA8AYIx1y+oHX2AAMBq7tSjV1wsAkiS1gErHEgBQFKVFbTYrAOwfRFpA1Sph2KZFZ6adABAKhQuFQlNioVAIhcIAMOl0aFGrdchi5tOZ7Hpwsyl0PbiZzmQtZn50RLg2od6Blu8+8xBFvkU1U+12qaUPH6tn2+qnNIucU65cLqdZ03Dnv8DS8VXnJwh4/eplPJ788/ffIw5tb22YTKay0+I/yut9a3/y+Pz8/PmLN9WuDgrVf9M8Nhq7KYoShm2TTkflWeu7N57Jjcnlcs4pV+X+3gJa6bqfPlPUJt1+TCbT9tZGf7+5625XzT1tM/8BN4afAouIszQAAAAASUVORK5CYII="
                             preserveAspectRatio="xMidYMid meet"
                           />
-                        </mask>
-                      </defs>
-                      <rect
-                        width="30"
-                        height="30"
-                        style={{ fill: "var(--search-icon-color)" }}
-                        mask={`url(#${searchMaskId}-mask)`}
-                      />
+                        </g>
+                      </g>
                     </svg>
                   </button>
                 </div>
               </div>
+              <div className="absolute bottom-0 left-0 right-0 h-px bg-[#DEDEDE]" aria-hidden="true" />
               {isSearchMenuOpen && (
                 <div
                   ref={searchMenuRef}
@@ -5228,7 +5299,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                         className="relative"
                         style={{ height: rowCanvasHeight }}
                       >
-                        {virtualItems.map((virtualRow) => {
+                        {rowVirtualItems.map((virtualRow) => {
                         const row = sortedTableData[virtualRow.index];
                           if (!row) {
                             return (

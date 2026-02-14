@@ -227,7 +227,8 @@ body {
   height: 28px;
   padding: 0;
   border-radius: 6px;
-  --search-icon-color: #1d1f24;
+  /* White parts of search icon */
+  --search-icon-bg: #ffffff;
 }
 
 .airtable-search-trigger::before {
@@ -235,7 +236,8 @@ body {
 }
 
 .airtable-search-trigger:hover {
-  --search-icon-color: #616670;
+  /* White parts tone into hover colour */
+  --search-icon-bg: #616670;
 }
 
 .airtable-x-trigger {
@@ -255,7 +257,7 @@ body {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--airtable-hover-bg);
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -268,14 +270,22 @@ body {
 }
 
 .airtable-table-feature-selection > * {
-  position: relative;
   z-index: 1;
+}
+
+.airtable-table-feature-selection > *:not(.absolute) {
+  position: relative;
 }
 
 .airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active):not(
     .airtable-table-feature-selection--filter-active
   ):not(.airtable-table-feature-selection--hide-active) img {
   mix-blend-mode: multiply;
+}
+
+.airtable-function-hover-pad::before {
+  left: -4px;
+  right: -4px;
 }
 
 .airtable-sort-arrow-overlay {

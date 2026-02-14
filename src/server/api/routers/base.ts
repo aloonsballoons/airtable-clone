@@ -1,3 +1,4 @@
+import { faker } from "@faker-js/faker";
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -9,6 +10,8 @@ const MAX_TABLES = 1000;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const MAX_BULK_ROWS = 100_000;
+const BULK_INSERT_BATCH_SIZE = 1_000;
+const MAX_ROWS_QUERY_LIMIT = 2_000;
 
 const baseNameSchema = z.string().min(1).max(120);
 const tableNameSchema = z.string().min(1).max(120);
@@ -104,11 +107,238 @@ const normalizeNumberValue = (value: string) => {
 	return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
 };
 
+const coerceColumnType = (
+	value?: string | null,
+): z.infer<typeof columnTypeSchema> =>
+	value === "long_text" || value === "number" ? value : "single_line_text";
+
+const generateFakerValueForColumnType = (columnType: z.infer<typeof columnTypeSchema>) => {
+	if (columnType === "long_text") {
+		return normalizeLongTextValue(
+			faker.lorem.paragraphs({ min: 1, max: 2 }),
+		);
+	}
+	if (columnType === "number") {
+		const normalizedNumber = normalizeNumberValue(
+			String(faker.number.int({ min: -1_000_000, max: 1_000_000 })),
+		);
+		return normalizedNumber ?? "0";
+	}
+	return normalizeSingleLineValue(faker.lorem.words({ min: 2, max: 6 }));
+};
+
+const generateFakerRowData = (columns: Array<{ id: string; type: string }>) => {
+	const data: Record<string, string> = {};
+	for (const column of columns) {
+		const columnType = coerceColumnType(column.type);
+		data[column.id] = generateFakerValueForColumnType(columnType);
+	}
+	return data;
+};
+
+const BULK_TEXT_PREFIXES = [
+	"Atlas",
+	"Beacon",
+	"Cedar",
+	"Delta",
+	"Ember",
+	"Falcon",
+	"Glacier",
+	"Harbor",
+	"Iris",
+	"Juniper",
+	"Kite",
+	"Lumen",
+	"Meridian",
+	"Nova",
+	"Orbit",
+	"Pioneer",
+	"Quartz",
+	"River",
+	"Summit",
+	"Timber",
+];
+
+const BULK_TEXT_NOUNS = [
+	"Plan",
+	"Project",
+	"Request",
+	"Review",
+	"Task",
+	"Record",
+	"Ticket",
+	"Asset",
+	"Milestone",
+	"Brief",
+	"Update",
+	"Proposal",
+	"Rollout",
+	"Audit",
+	"Checklist",
+];
+
+const BULK_LONG_ACTIONS = [
+	"Review",
+	"Confirm",
+	"Prepare",
+	"Coordinate",
+	"Validate",
+	"Schedule",
+	"Update",
+	"Document",
+	"Track",
+	"Finalize",
+];
+
+const BULK_LONG_OBJECTS = [
+	"handoff details",
+	"delivery scope",
+	"support notes",
+	"launch checklist",
+	"risk summary",
+	"resource plan",
+	"timeline changes",
+	"approval path",
+	"onboarding steps",
+	"status blockers",
+];
+
+const BULK_LONG_CONTEXTS = [
+	"the growth team",
+	"operations",
+	"customer success",
+	"finance",
+	"engineering",
+	"marketing",
+	"product",
+	"support",
+	"leadership",
+	"partners",
+];
+
+const BULK_LONG_OUTCOMES = [
+	"pending review",
+	"ready for handoff",
+	"blocked by dependency",
+	"on schedule",
+	"in progress",
+	"needs approval",
+	"awaiting feedback",
+	"validated",
+	"scheduled",
+	"complete",
+];
+
+const buildBulkLexiconValueExpression = (
+	values: readonly string[],
+	seriesAlias: string,
+	columnOffset: number,
+	multiplier: number,
+) => {
+	const rowNumber = sql.raw(`${seriesAlias}.row_num`);
+	const multiplierLiteral = sql.raw(String(multiplier));
+	const columnOffsetLiteral = sql.raw(String(columnOffset));
+	const offsetMultiplierLiteral = sql.raw(String(multiplier + 5));
+	const valueCountLiteral = sql.raw(String(values.length));
+	return sql<string>`(ARRAY[${sql.join(values.map((value) => sql`${value}`), sql`, `)}])[(((${rowNumber} * ${multiplierLiteral}) + ${columnOffsetLiteral} * ${offsetMultiplierLiteral}) % ${valueCountLiteral}) + 1]`;
+};
+
+const buildBulkPopulateValueExpression = (
+	columnType: z.infer<typeof columnTypeSchema>,
+	seriesAlias: string,
+	columnOffset: number,
+) => {
+	const rowNumber = sql.raw(`${seriesAlias}.row_num`);
+	const columnOffsetLiteral = sql.raw(String(columnOffset));
+	if (columnType === "number") {
+		return sql<string>`(((${rowNumber} * 97 + ${columnOffsetLiteral} * 13) % 500001) - 250000)::bigint::text`;
+	}
+	if (columnType === "long_text") {
+		const action = buildBulkLexiconValueExpression(
+			BULK_LONG_ACTIONS,
+			seriesAlias,
+			columnOffset,
+			7,
+		);
+		const object = buildBulkLexiconValueExpression(
+			BULK_LONG_OBJECTS,
+			seriesAlias,
+			columnOffset,
+			11,
+		);
+		const context = buildBulkLexiconValueExpression(
+			BULK_LONG_CONTEXTS,
+			seriesAlias,
+			columnOffset,
+			13,
+		);
+		const outcome = buildBulkLexiconValueExpression(
+			BULK_LONG_OUTCOMES,
+			seriesAlias,
+			columnOffset,
+			17,
+		);
+		return sql<string>`concat(
+			${action},
+			' ',
+			${object},
+			' for ',
+			${context},
+			'. Status: ',
+			${outcome},
+			'.'
+		)`;
+	}
+	const prefix = buildBulkLexiconValueExpression(
+		BULK_TEXT_PREFIXES,
+		seriesAlias,
+		columnOffset,
+		19,
+	);
+	const noun = buildBulkLexiconValueExpression(
+		BULK_TEXT_NOUNS,
+		seriesAlias,
+		columnOffset,
+		23,
+	);
+	return sql<string>`concat(
+		${prefix},
+		' ',
+		${noun}
+	)`;
+};
+
+const buildBulkPopulateSqlExpressions = (columns: Array<{ id: string; type: string }>) => {
+	const valueColumns = columns.map((column, index) => ({
+		id: column.id,
+		expression: buildBulkPopulateValueExpression(
+			coerceColumnType(column.type),
+			"series",
+			index,
+		),
+	}));
+
+	const dataExpression = sql`jsonb_build_object(${sql.join(
+		valueColumns.flatMap((column) => [
+			sql`${column.id}::text`,
+			sql`${column.expression}::text`,
+		]),
+		sql`, `,
+	)})`;
+
+	return {
+		dataExpression,
+	};
+};
+
 const buildSearchText = (data: Record<string, string> | null | undefined) =>
 	Object.values(data ?? {})
 		.map((value) => String(value ?? "").trim())
 		.filter(Boolean)
 		.join(" ");
+
+const nanosecondsToMilliseconds = (value: bigint) => Number(value) / 1_000_000;
+const roundMilliseconds = (value: number) => Math.round(value * 100) / 100;
 
 export const baseRouter = createTRPCRouter({
 	list: protectedProcedure.query(async ({ ctx }) => {
@@ -422,59 +652,231 @@ export const baseRouter = createTRPCRouter({
 				tableId: z.string().uuid(),
 				count: z.number().int().min(1).max(MAX_BULK_ROWS),
 				ids: z.array(z.string().uuid()).optional(),
+				populateWithFaker: z.boolean().optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			if (input.ids && input.ids.length !== input.count) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Row id list must match the requested count.",
+			const shouldLogTiming = input.count >= 10_000 || Boolean(input.populateWithFaker);
+			const requestStart = process.hrtime.bigint();
+			let phaseStart = requestStart;
+			const phases: Array<{ phase: string; ms: number }> = [];
+			const markPhase = (phase: string) => {
+				const now = process.hrtime.bigint();
+				phases.push({
+					phase,
+					ms: roundMilliseconds(nanosecondsToMilliseconds(now - phaseStart)),
 				});
-			}
-			if (input.ids && new Set(input.ids).size !== input.ids.length) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Row id list must be unique.",
+				phaseStart = now;
+			};
+			let mode = "standard";
+			let errorCode: string | null = null;
+			let errorMessage: string | null = null;
+			let searchBackfillScheduled = false;
+
+			try {
+				if (input.ids && input.ids.length !== input.count) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Row id list must match the requested count.",
+					});
+				}
+				if (input.ids && new Set(input.ids).size !== input.ids.length) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Row id list must be unique.",
+					});
+				}
+
+				const tableRecord = await ctx.db.query.baseTable.findFirst({
+					where: eq(baseTable.id, input.tableId),
+					with: {
+						base: true,
+					},
 				});
-			}
 
-			const tableRecord = await ctx.db.query.baseTable.findFirst({
-				where: eq(baseTable.id, input.tableId),
-				with: {
-					base: true,
-				},
-			});
+				if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+					throw new TRPCError({ code: "NOT_FOUND" });
+				}
 
-			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
-				throw new TRPCError({ code: "NOT_FOUND" });
-			}
+				const rowCount = await ctx.db
+					.select({ count: sql<number>`count(*)::int` })
+					.from(tableRow)
+					.where(eq(tableRow.tableId, input.tableId));
 
-			const rowCount = await ctx.db
-				.select({ count: sql<number>`count(*)::int` })
-				.from(tableRow)
-				.where(eq(tableRow.tableId, input.tableId));
+				const currentCount = Number(rowCount[0]?.count ?? 0);
+				if (currentCount + input.count > MAX_ROWS) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: `Row limit of ${MAX_ROWS.toLocaleString()} reached.`,
+					});
+				}
+				markPhase("preflight");
 
-			const currentCount = Number(rowCount[0]?.count ?? 0);
-			if (currentCount + input.count > MAX_ROWS) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: `Row limit of ${MAX_ROWS.toLocaleString()} reached.`,
-				});
-			}
+				if (input.populateWithFaker) {
+					const columns = await ctx.db.query.tableColumn.findMany({
+						where: eq(tableColumn.tableId, input.tableId),
+					});
+					const normalizedColumns = columns.map((column) => ({
+						id: column.id,
+						type: column.type ?? "single_line_text",
+					}));
+					markPhase("load-columns");
+					if (!input.ids) {
+						mode = "populate-sql";
+						if (normalizedColumns.length === 0) {
+							const insertedAtIso = new Date().toISOString();
+							await ctx.db.execute(sql`
+								INSERT INTO table_row (id, table_id, data, created_at, updated_at)
+								SELECT
+									gen_random_uuid(),
+									${input.tableId}::uuid,
+									'{}'::jsonb,
+									${insertedAtIso}::timestamptz,
+									${insertedAtIso}::timestamptz
+								FROM generate_series(1, ${input.count})
+							`);
+							markPhase("insert");
+							if (input.count >= 10_000) {
+								searchBackfillScheduled = true;
+								const backfillStart = process.hrtime.bigint();
+								void ctx.db
+									.execute(sql`
+										UPDATE table_row
+										SET search_text = COALESCE(
+											(SELECT string_agg(value, ' ') FROM jsonb_each_text(table_row.data)),
+											''
+										)
+										WHERE table_id = ${input.tableId}::uuid
+											AND updated_at = ${insertedAtIso}::timestamptz
+											AND search_text = ''
+									`)
+									.then(() => {
+										console.info("[base.addRows.searchBackfill]", {
+											tableId: input.tableId,
+											count: input.count,
+											ms: roundMilliseconds(
+												nanosecondsToMilliseconds(
+													process.hrtime.bigint() - backfillStart,
+												),
+											),
+										});
+									})
+									.catch((backfillError) => {
+										console.error("[base.addRows.searchBackfill.error]", {
+											tableId: input.tableId,
+											count: input.count,
+											message:
+												backfillError instanceof Error
+													? backfillError.message
+													: String(backfillError),
+										});
+									});
+							}
+							return { added: input.count };
+						}
+						const bulkExpressions =
+							buildBulkPopulateSqlExpressions(normalizedColumns);
+						const insertedAtIso = new Date().toISOString();
+						await ctx.db.execute(sql`
+							INSERT INTO table_row (id, table_id, data, created_at, updated_at)
+							SELECT
+								gen_random_uuid(),
+								${input.tableId}::uuid,
+								${bulkExpressions.dataExpression},
+								${insertedAtIso}::timestamptz,
+								${insertedAtIso}::timestamptz
+							FROM generate_series(1, ${input.count}) AS series(row_num)
+						`);
+						markPhase("insert");
+						if (input.count >= 10_000) {
+							searchBackfillScheduled = true;
+							const backfillStart = process.hrtime.bigint();
+							void ctx.db
+								.execute(sql`
+									UPDATE table_row
+									SET search_text = COALESCE(
+										(SELECT string_agg(value, ' ') FROM jsonb_each_text(table_row.data)),
+										''
+									)
+									WHERE table_id = ${input.tableId}::uuid
+										AND updated_at = ${insertedAtIso}::timestamptz
+										AND search_text = ''
+								`)
+								.then(() => {
+									console.info("[base.addRows.searchBackfill]", {
+										tableId: input.tableId,
+										count: input.count,
+										ms: roundMilliseconds(
+											nanosecondsToMilliseconds(
+												process.hrtime.bigint() - backfillStart,
+											),
+										),
+									});
+								})
+								.catch((backfillError) => {
+									console.error("[base.addRows.searchBackfill.error]", {
+										tableId: input.tableId,
+										count: input.count,
+										message:
+											backfillError instanceof Error
+												? backfillError.message
+												: String(backfillError),
+									});
+								});
+						}
+						return { added: input.count };
+					}
 
-			// Use PostgreSQL generate_series for bulk insert in a single query.
-			// For explicit IDs, prefer a typed insert to avoid uuid[] array-literal casts.
-			if (input.ids) {
-				await ctx.db.insert(tableRow).values(
-					input.ids.map((id) => ({
-						id,
-						tableId: input.tableId,
-						data: {},
-					})),
-				);
-			} else {
-				// Let PostgreSQL generate UUIDs - even faster
-				await ctx.db.execute(sql`
+					mode = "populate-js";
+					await ctx.db.transaction(async (tx) => {
+						for (
+							let batchStart = 0;
+							batchStart < input.count;
+							batchStart += BULK_INSERT_BATCH_SIZE
+						) {
+							const batchCount = Math.min(
+								BULK_INSERT_BATCH_SIZE,
+								input.count - batchStart,
+							);
+							const batchRows = Array.from({ length: batchCount }, (_, batchIndex) => {
+								const providedId = input.ids?.[batchStart + batchIndex];
+								if (input.ids && !providedId) {
+									throw new TRPCError({
+										code: "BAD_REQUEST",
+										message: "Row id list must match the requested count.",
+									});
+								}
+								const rowId = providedId ?? createId();
+								const data = generateFakerRowData(normalizedColumns);
+								return {
+									id: rowId,
+									tableId: input.tableId,
+									data,
+									searchText: buildSearchText(data),
+								};
+							});
+							await tx.insert(tableRow).values(batchRows);
+						}
+					});
+					markPhase("insert");
+					return { added: input.count };
+				}
+
+				// Use PostgreSQL generate_series for bulk insert in a single query.
+				// For explicit IDs, prefer a typed insert to avoid uuid[] array-literal casts.
+				if (input.ids) {
+					mode = "blank-explicit-ids";
+					await ctx.db.insert(tableRow).values(
+						input.ids.map((id) => ({
+							id,
+							tableId: input.tableId,
+							data: {},
+						})),
+					);
+				} else {
+					mode = "blank-sql";
+					// Let PostgreSQL generate UUIDs - even faster
+					await ctx.db.execute(sql`
 					INSERT INTO table_row (id, table_id, data, created_at, updated_at)
 					SELECT 
 						gen_random_uuid(),
@@ -483,10 +885,35 @@ export const baseRouter = createTRPCRouter({
 						NOW(),
 						NOW()
 					FROM generate_series(1, ${input.count})
-				`);
+					`);
+				}
+				markPhase("insert");
+				return { added: input.count };
+			} catch (error) {
+				errorCode = error instanceof TRPCError ? error.code : "INTERNAL_ERROR";
+				if (error instanceof Error) {
+					errorMessage = error.message;
+				}
+				throw error;
+			} finally {
+				if (shouldLogTiming) {
+					const totalMs = roundMilliseconds(
+						nanosecondsToMilliseconds(process.hrtime.bigint() - requestStart),
+					);
+					console.info("[base.addRows.timing]", {
+						tableId: input.tableId,
+						count: input.count,
+						mode,
+							populateWithFaker: Boolean(input.populateWithFaker),
+							hasExplicitIds: Boolean(input.ids?.length),
+							errorCode,
+							errorMessage,
+							searchBackfillScheduled,
+							totalMs,
+							phases,
+						});
+				}
 			}
-
-			return { added: input.count };
 		}),
 
 	deleteBase: protectedProcedure
@@ -942,7 +1369,7 @@ export const baseRouter = createTRPCRouter({
 		.input(
 			z.object({
 				tableId: z.string().uuid(),
-				limit: z.number().int().min(1).max(500).default(50),
+				limit: z.number().int().min(1).max(MAX_ROWS_QUERY_LIMIT).default(50),
 				cursor: z.number().int().min(0).optional(),
 				sort: z
 					.array(sortItemSchema)
