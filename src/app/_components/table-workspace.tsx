@@ -4,9 +4,7 @@ import clsx from "clsx";
 import { Inter } from "next/font/google";
 import { useRouter } from "next/navigation";
 import type {
-  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
-  ReactNode,
 } from "react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -15,17 +13,17 @@ import arrowIcon from "~/assets/arrow.svg";
 import assigneeIcon from "~/assets/assignee.svg";
 import attachmentsIcon from "~/assets/attachments.svg";
 import bellIcon from "~/assets/bell.svg";
+import blueSearchIcon from "~/assets/blue-search.svg";
 import colourIcon from "~/assets/colour.svg";
 import deleteIcon from "~/assets/delete.svg";
-import expandIcon from "~/assets/expand.svg";
 import filterIcon from "~/assets/filter.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
 import groupIcon from "~/assets/group.svg";
 import helpIcon from "~/assets/help.svg";
 import hideFieldsIcon from "~/assets/hide fields.svg";
-import launchIcon from "~/assets/launch.svg";
+import { HeaderComponent } from "./header-component";
+import { FunctionBar } from "./function-component";
 import lightArrowIcon from "~/assets/light-arrow.svg";
-import longLineSelectionIcon from "~/assets/long-line-selection.svg";
 import logoIcon from "~/assets/logo.svg";
 import nameIcon from "~/assets/name.svg";
 import notesIcon from "~/assets/notes.svg";
@@ -33,9 +31,9 @@ import numberIcon from "~/assets/number.svg";
 import omniIcon from "~/assets/omni.svg";
 import pinkIcon from "~/assets/pink.svg";
 import plusIcon from "~/assets/plus.svg";
-import refreshIcon from "~/assets/refresh.svg";
 import reorderIcon from "~/assets/reorder.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
+import searchIcon from "~/assets/search.svg";
 import shareSyncIcon from "~/assets/share-and-sync.svg";
 import sortIcon from "~/assets/sort.svg";
 import statusIcon from "~/assets/status.svg";
@@ -44,6 +42,7 @@ import toggleIcon from "~/assets/toggle.svg";
 import xIcon from "~/assets/x.svg";
 import { authClient } from "~/server/better-auth/client";
 import { api, type RouterInputs } from "~/trpc/react";
+import { TableView } from "./table-view";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -51,7 +50,6 @@ const inter = Inter({
 });
 
 const MAX_TABLES = 1000;
-const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const BULK_ROWS = 100_000;
 const PAGE_ROWS = 1000;
@@ -65,7 +63,6 @@ const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
 const MAX_COLUMN_WIDTH = 420;
 const ADD_COLUMN_WIDTH = 93;
-const LONG_TEXT_HEIGHT = 142;
 const ADD_COLUMN_MENU_WIDTH = 400;
 const ADD_COLUMN_OPTION_WIDTH = 380;
 const MAX_NUMBER_DECIMALS = 8;
@@ -107,30 +104,10 @@ const HIDE_FIELDS_BUTTON_BOTTOM_PADDING = 10;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
-const columnIconMap: Record<string, string> = {
-  Name: nameIcon.src,
-  Notes: notesIcon.src,
-  Assignee: assigneeIcon.src,
-  Status: statusIcon.src,
-  Attachments: attachmentsIcon.src,
-  Number: numberIcon.src,
-};
-
 type ColumnFieldType = "single_line_text" | "long_text" | "number";
-
-const columnTypeIconMap: Record<ColumnFieldType, string> = {
-  single_line_text: nameIcon.src,
-  long_text: notesIcon.src,
-  number: numberIcon.src,
-};
 
 const coerceColumnType = (value?: string | null): ColumnFieldType =>
   value === "long_text" || value === "number" ? value : "single_line_text";
-
-const getColumnIconSrc = (name: string, type?: string | null) => {
-  const resolvedType = coerceColumnType(type);
-  return columnIconMap[name] ?? columnTypeIconMap[resolvedType];
-};
 
 const sortAddMenuIconSpecByName: Record<
   string,
@@ -196,27 +173,41 @@ const getHideFieldsIconSpec = (name: string, type?: string | null) => {
   );
 };
 
-const addColumnTypeOptions: Array<{
-  type: ColumnFieldType;
-  label: string;
-  icon: { src: string; width: number; height: number; gap: number; paddingLeft: number };
-}> = [
-  {
-    type: "single_line_text",
-    label: "Single line text",
-    icon: { src: nameIcon.src, width: 12, height: 12, gap: 10, paddingLeft: 8 },
-  },
-  {
-    type: "long_text",
-    label: "Long line text",
-    icon: { src: notesIcon.src, width: 15, height: 13, gap: 8, paddingLeft: 7 },
-  },
-  {
-    type: "number",
-    label: "Number",
-    icon: { src: numberIcon.src, width: 14, height: 14, gap: 9, paddingLeft: 7 },
-  },
-];
+const addColumnDefaultBaseNameByType: Record<ColumnFieldType, string> = {
+  single_line_text: "Label",
+  long_text: "Notes",
+  number: "Number",
+};
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const getDefaultAddColumnName = (
+  type: ColumnFieldType,
+  existingNames: string[]
+) => {
+  const baseName = addColumnDefaultBaseNameByType[type];
+  const suffixPattern = new RegExp(`^${escapeRegExp(baseName)}\\s+(\\d+)$`);
+  let hasBaseName = false;
+  let maxSuffix = 1;
+
+  existingNames.forEach((name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (trimmed === baseName) {
+      hasBaseName = true;
+      return;
+    }
+    const match = trimmed.match(suffixPattern);
+    if (!match) return;
+    const suffix = Number.parseInt(match[1] ?? "", 10);
+    if (Number.isNaN(suffix) || suffix < 2) return;
+    maxSuffix = Math.max(maxSuffix, suffix);
+  });
+
+  if (!hasBaseName) return baseName;
+  return `${baseName} ${Math.max(2, maxSuffix + 1)}`;
+};
 
 const imgEllipse2 =
   "https://www.figma.com/api/mcp/asset/220c0b55-a141-4008-8b9e-393c5dcc820b";
@@ -252,7 +243,7 @@ type FilterGroupItem = {
   id: string;
   type: "group";
   connector: FilterConnector;
-  conditions: FilterConditionItem[];
+  conditions: (FilterConditionItem | FilterGroupItem)[];
 };
 
 type FilterItem = FilterConditionItem | FilterGroupItem;
@@ -314,52 +305,6 @@ const isValidNumberDraft = (value: string) => {
   if (!match) return false;
   const decimals = match[1] ?? "";
   return decimals.length <= MAX_NUMBER_DECIMALS;
-};
-
-const normalizeNumberInput = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  const match = trimmed.match(/^(-?)(\d*)(?:\.(\d*))?$/);
-  if (!match) return null;
-  const sign = match[1] ?? "";
-  let integer = match[2] ?? "";
-  let decimals = match[3] ?? "";
-  if (!integer && !decimals) return "";
-  if (!integer) integer = "0";
-  if (decimals.length > MAX_NUMBER_DECIMALS) return null;
-  return decimals ? `${sign}${integer}.${decimals}` : `${sign}${integer}`;
-};
-
-const renderSearchHighlight = (value: string, query: string) => {
-  if (!query) return value;
-  const normalizedValue = value.toLowerCase();
-  const normalizedQuery = query.toLowerCase();
-  const firstMatch = normalizedValue.indexOf(normalizedQuery);
-  if (firstMatch === -1) return value;
-  const parts: ReactNode[] = [];
-  let startIndex = 0;
-  let matchIndex = firstMatch;
-  let matchCount = 0;
-  while (matchIndex !== -1) {
-    if (matchIndex > startIndex) {
-      parts.push(value.slice(startIndex, matchIndex));
-    }
-    parts.push(
-      <mark
-        key={`${matchIndex}-${matchCount}`}
-        className="airtable-search-highlight"
-      >
-        {value.slice(matchIndex, matchIndex + query.length)}
-      </mark>
-    );
-    startIndex = matchIndex + query.length;
-    matchIndex = normalizedValue.indexOf(normalizedQuery, startIndex);
-    matchCount += 1;
-  }
-  if (startIndex < value.length) {
-    parts.push(value.slice(startIndex));
-  }
-  return parts;
 };
 
 const FILTER_CONNECTORS: FilterConnector[] = ["and", "or"];
@@ -432,7 +377,7 @@ const createFilterGroup = (): FilterGroupItem => ({
   id: crypto.randomUUID(),
   type: "group",
   connector: "and",
-  conditions: [createFilterCondition()],
+  conditions: [],  // Empty - shows placeholder text
 });
 
 const getLastViewedTableKey = (baseId: string) =>
@@ -443,8 +388,6 @@ const getTableFilterStateKey = (baseId: string, tableId: string) =>
 export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const router = useRouter();
   const utils = api.useUtils();
-  const parentRef = useRef<HTMLDivElement>(null);
-
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
   const [preferredTableId, setPreferredTableId] = useState<string | null>(null);
   const [preferredTableBaseId, setPreferredTableBaseId] = useState<string | null>(
@@ -457,7 +400,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     {}
   );
   const [ensuredTableId, setEnsuredTableId] = useState<string | null>(null);
-  const [hoveredHeaderId, setHoveredHeaderId] = useState<string | null>(null);
   const [hoveredTableTabId, setHoveredTableTabId] = useState<string | null>(null);
   const [selectedCell, setSelectedCell] = useState<{
     rowId: string;
@@ -467,13 +409,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     rowId: string;
     columnId: string;
   } | null>(null);
-  const [addRowHover, setAddRowHover] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [isHideFieldsMenuOpen, setIsHideFieldsMenuOpen] = useState(false);
   const [isSearchMenuOpen, setIsSearchMenuOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
-  const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
   const [openSortDirectionId, setOpenSortDirectionId] = useState<string | null>(null);
   const [openSortFieldId, setOpenSortFieldId] = useState<string | null>(null);
   const [isAddSortMenuOpen, setIsAddSortMenuOpen] = useState(false);
@@ -501,6 +441,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [filterValueErrorId, setFilterValueErrorId] = useState<string | null>(null);
   const [draggingFilterId, setDraggingFilterId] = useState<string | null>(null);
   const [draggingFilterTop, setDraggingFilterTop] = useState<number | null>(null);
+  const [highlightedFilterFieldId, setHighlightedFilterFieldId] = useState<string | null>(null);
+  const [highlightedFilterOperatorId, setHighlightedFilterOperatorId] = useState<string | null>(null);
+  const [phantomFilterX, setPhantomFilterX] = useState<number | null>(null);
+  const [phantomFilterY, setPhantomFilterY] = useState<number | null>(null);
+  const [openGroupPlusId, setOpenGroupPlusId] = useState<string | null>(null);
+  const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
@@ -512,17 +458,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const sortFieldMenuRef = useRef<HTMLDivElement>(null);
   const filterFieldMenuListRef = useRef<HTMLDivElement>(null);
   const filterOperatorMenuListRef = useRef<HTMLDivElement>(null);
-  const addColumnButtonRef = useRef<HTMLButtonElement>(null);
-  const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const sortAddMenuListRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchMaskId = useId().replace(/:/g, "");
   const closeMaskId = useId().replace(/:/g, "");
-  const cellRefs = useRef<
-    Map<string, HTMLInputElement | HTMLTextAreaElement | null>
-  >(new Map());
   const sortRowsRef = useRef<SortConfig[]>([]);
   const filterDragOffsetRef = useRef(0);
+  const phantomOffsetRef = useRef({ x: 0, y: 0 });
   const filterDragIndexRef = useRef(0);
   const filterDragScopeRef = useRef<{
     scope: "root" | "group";
@@ -688,22 +630,30 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       };
     };
 
+    // Recursive function to normalize groups (flatten nested groups for server)
+    const normalizeGroup = (
+      item: FilterGroupItem
+    ): Array<{ type: "condition"; columnId: string; operator: FilterOperator; value: string }> => {
+      const result: Array<{ type: "condition"; columnId: string; operator: FilterOperator; value: string }> = [];
+      item.conditions.forEach((child) => {
+        if (child.type === "condition") {
+          const normalized = normalizeCondition(child);
+          if (normalized) result.push(normalized);
+        } else {
+          // Nested group - flatten into parent group
+          result.push(...normalizeGroup(child));
+        }
+      });
+      return result;
+    };
+
     filterItems.forEach((item) => {
       if (item.type === "condition") {
         const normalized = normalizeCondition(item);
         if (normalized) items.push(normalized);
         return;
       }
-      const normalizedGroup = item.conditions
-        .map(normalizeCondition)
-        .filter(
-          (condition): condition is {
-            type: "condition";
-            columnId: string;
-            operator: FilterOperator;
-            value: string;
-          } => Boolean(condition)
-        );
+      const normalizedGroup = normalizeGroup(item);
       if (normalizedGroup.length > 0) {
         items.push({
           type: "group",
@@ -1106,7 +1056,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     setActiveTableId(null);
     setEnsuredTableId(null);
-    setHoveredHeaderId(null);
     setSelectedCell(null);
     setEditingCell(null);
     setSortOverride(null);
@@ -1146,11 +1095,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [activeTableId, baseId, preferredTableBaseId]);
 
   useEffect(() => {
-    if (!activeTableId) return;
-    parentRef.current?.scrollTo({ top: 0 });
-  }, [activeTableId]);
-
-  useEffect(() => {
     setCellEdits({});
   }, [activeTableId]);
 
@@ -1171,6 +1115,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       document.removeEventListener("keydown", handleKey);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!highlightedFilterFieldId && !highlightedFilterOperatorId) return;
+    const handleClick = () => {
+      setHighlightedFilterFieldId(null);
+      setHighlightedFilterOperatorId(null);
+    };
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [highlightedFilterFieldId, highlightedFilterOperatorId]);
 
   useEffect(() => {
     if (!isSortMenuOpen) return;
@@ -1394,29 +1348,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     };
   }, [openFilterConnectorId]);
 
-  useEffect(() => {
-    if (!isAddColumnMenuOpen) return;
-    const handleClick = (event: Event) => {
-      const target = event.target as Node | null;
-      if (addColumnMenuRef.current?.contains(target)) return;
-      if (addColumnButtonRef.current?.contains(target)) return;
-      setIsAddColumnMenuOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsAddColumnMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("scroll", handleClick, true);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("scroll", handleClick, true);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [isAddColumnMenuOpen]);
-
   const sortRows = sortOrderOverride ?? sortOverride ?? sortConfigList;
   const sortedColumnIds = useMemo(
     () => new Set(sortRows.map((sort) => sort.columnId)),
@@ -1539,16 +1470,53 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterFooterGap = 24;
   const filterFooterHeight = 16;
   const filterBottomPadding = 21;
-  const filterDropdownWidth = hasFilterItems
-    ? filterDropdownExpandedWidth
-    : filterDropdownBaseWidth;
+
+  // Group-specific constants
+  const filterGroupEmptyWidth = 570;
+  const filterGroupEmptyHeight = 39;
+  const filterGroupPaddingTop = 40;
+  const filterGroupPaddingBottom = 8;
+  const filterGroupPaddingLeft = 16;
+  const filterGroupWhereLeft = 40;
+  const filterDropdownGroupWidth = 683;
+  const filterGroupNestedWidth = 650;
+  const filterGroupConditionFieldWidth = 456;
+
+  // Dynamic width based on group nesting
+  const hasGroups = filterItems.some(i => i.type === "group");
+  // Check if ANY group (at any level) has child groups
+  const hasNestedGroups = useMemo(() => {
+    const checkForNestedGroups = (items: FilterItem[]): boolean => {
+      for (const item of items) {
+        if (item.type === "group") {
+          // If this group has any child groups, return true
+          if (item.conditions.some(c => c.type === "group")) {
+            return true;
+          }
+          // Recursively check child conditions
+          if (checkForNestedGroups(item.conditions)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    return checkForNestedGroups(filterItems);
+  }, [filterItems]);
+  const filterDropdownWidth = !hasFilterItems
+    ? filterDropdownBaseWidth
+    : hasNestedGroups ? 762
+    : hasGroups ? filterDropdownGroupWidth
+    : filterDropdownExpandedWidth;
   const filterInputWidth = filterDropdownWidth - 32;
 
   const filterLayout = useMemo(() => {
-    let currentTop = filterFirstRowTop;
-    let rootIndex = 0;
-    const rows: Array<{
+    type LayoutEntry = {
+      type: "row";
       condition: FilterConditionItem;
+      depth: number;
+      parentGroupId?: string;
+      grandparentGroupId?: string;
       top: number;
       left: number;
       scope: "root" | "group";
@@ -1560,84 +1528,248 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       connectorKey: string;
       showRootConnector: boolean;
       showGroupConnector: boolean;
-    }> = [];
+    } | {
+      type: "group";
+      group: FilterGroupItem;
+      isEmpty: boolean;
+      depth: number;
+      parentGroupId?: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+      showConnector: boolean;
+      showConnectorControl: boolean;
+      connectorKey: string;
+      connector: FilterConnector;
+      firstChildHasRootConnector: boolean;
+    };
+
+    const entries: LayoutEntry[] = [];
     const groupMetaMap = new Map<
       string,
       { startTop: number; bottomTop: number; rowCount: number }
     >();
 
-    filterRows.forEach((item) => {
-      if (item.type === "condition") {
-        const showRootConnector = rootIndex > 0;
-        rows.push({
-          condition: item,
-          top: currentTop,
-          left: filterRowLeft,
-          scope: "root",
-          indexInScope: rootIndex,
-          showConnector: showRootConnector,
-          showConnectorControl: rootIndex === 1,
-          connector: filterConnector,
-          connectorKey: "root",
-          showRootConnector,
-          showGroupConnector: false,
-        });
-        currentTop += filterRowStride;
-        rootIndex += 1;
-        return;
-      }
+    // Recursive function to process items (conditions and groups)
+    const processItems = (
+      items: (FilterConditionItem | FilterGroupItem)[],
+      depth: number,
+      parentGroupId: string | undefined,
+      grandparentGroupId: string | undefined,
+      currentTop: number,
+      leftOffset: number,
+      rootIndex: number,
+      parentConnector?: FilterConnector
+    ): { nextTop: number; nextRootIndex: number } => {
+      let top = currentTop;
+      let rIndex = rootIndex;
 
-      const groupId = item.id;
-      const groupStartTop = currentTop;
-      const groupConnector = item.connector;
-      item.conditions.forEach((condition, index) => {
-        const showRootConnector = index === 0 && rootIndex > 0;
-        const showGroupConnector = index > 0;
-        const connector =
-          showRootConnector ? filterConnector : groupConnector;
-        const connectorKey = showRootConnector ? "root" : `group:${groupId}`;
-        rows.push({
-          condition,
-          top: currentTop,
-          left: filterRowLeft,
-          scope: "group",
-          groupId,
-          indexInScope: index,
-          showConnector: showRootConnector || showGroupConnector,
-          showConnectorControl: showRootConnector
-            ? rootIndex === 1
-            : index === 1,
-          connector,
-          connectorKey,
-          showRootConnector,
-          showGroupConnector,
-        });
-        currentTop += filterRowStride;
-      });
-      const rowCount = item.conditions.length;
-      const groupBottomTop =
-        rowCount > 0
-          ? groupStartTop + (rowCount - 1) * filterRowStride + filterRowHeight
-          : groupStartTop;
-      groupMetaMap.set(groupId, {
-        startTop: groupStartTop,
-        bottomTop: groupBottomTop,
-        rowCount,
-      });
-      rootIndex += 1;
-    });
+      items.forEach((item, itemIndex) => {
+        if (item.type === "condition") {
+          // Root condition
+          const showRootConnector = rIndex > 0;
+          entries.push({
+            type: "row",
+            condition: item,
+            depth,
+            parentGroupId,
+            grandparentGroupId,
+            top,
+            left: leftOffset,
+            scope: depth === 0 ? "root" : "group",
+            groupId: parentGroupId,
+            indexInScope: itemIndex,
+            showConnector: showRootConnector,
+            showConnectorControl: rIndex === 1,
+            connector: filterConnector,
+            connectorKey: "root",
+            showRootConnector,
+            showGroupConnector: false,
+          });
+          top += filterRowStride;
+          rIndex += 1;
+        } else {
+          // Group
+          const groupId = item.id;
+          const groupStartTop = top;
+          const isEmpty = item.conditions.length === 0;
+          const groupDepth = depth;
 
-    const rowCount = rows.length;
-    const contentBottom =
-      rowCount > 0
-        ? filterFirstRowTop + (rowCount - 1) * filterRowStride + filterRowHeight
-        : filterWhereTop;
+          if (isEmpty) {
+            // Empty group - expand to 650px only for root-level groups when ANY group has child groups
+            // Child groups (nested groups) always stay at 570px
+            const groupWidth = (hasNestedGroups && groupDepth === 0) ? filterGroupNestedWidth : filterGroupEmptyWidth;
+            const showRootConnector = rIndex > 0;
+            // Align group with condition fields: at leftOffset + filterFieldLeft for all groups
+            const groupLeft = leftOffset + filterFieldLeft;
+
+            // Determine connector logic based on depth
+            const showConnector = groupDepth === 0 ? showRootConnector : rIndex > 0;
+            const showConnectorControl = groupDepth === 0 ? rIndex === 1 : rIndex === 1;
+            const connectorKey = groupDepth === 0 ? "root" : `group:${parentGroupId}`;
+            const connector = groupDepth === 0 ? filterConnector : (parentConnector ?? "and");
+
+            entries.push({
+              type: "group",
+              group: item,
+              isEmpty: true,
+              depth: groupDepth,
+              parentGroupId,
+              top: groupStartTop,
+              left: groupLeft,
+              width: groupWidth,
+              height: filterGroupEmptyHeight,
+              showConnector,
+              showConnectorControl,
+              connectorKey,
+              connector,
+              firstChildHasRootConnector: false, // Empty groups have no children
+            });
+            groupMetaMap.set(groupId, {
+              startTop: groupStartTop,
+              bottomTop: groupStartTop + filterGroupEmptyHeight,
+              rowCount: 0,
+            });
+            top += filterGroupEmptyHeight + filterRowGap;
+            rIndex += 1;
+          } else {
+            // Populated group - recursively process children
+            // Group box aligns with condition fields: at leftOffset + filterFieldLeft for all groups
+            // Expand to 650px only for root-level groups when ANY group has child groups
+            // Child groups (nested groups) always stay at 570px
+            const groupWidth = (hasNestedGroups && groupDepth === 0) ? filterGroupNestedWidth : filterGroupEmptyWidth;
+            const groupLeft = leftOffset + filterFieldLeft;
+            // Children positioned with 11px offset from group left edge
+            // Regular conditions: at groupLeft + 11
+            // Nested groups: at groupLeft + 11 + filterFieldLeft (via recursive call) to align with condition fields
+            const childLeftOffset = groupLeft + 11;
+            // Position first child at same vertical level as "Where" label (at 47px from group top)
+            // Adjust for field alignment like at root level
+            const whereTopInGroup = 47;
+            const childTopOffset = whereTopInGroup - (filterFieldHeight - 13) / 2 + 2;
+            let childTop = groupStartTop + childTopOffset;
+            let childRootIndex = 0;
+
+            // Track where to insert the group entry (before all its children)
+            const groupInsertIndex = entries.length;
+
+            item.conditions.forEach((child, childIndex) => {
+              if (child.type === "condition") {
+                // First condition: no connector (show "Where" instead)
+                // Second condition: show connector button
+                // Third+ condition: show connector text
+                const isFirstChild = childIndex === 0;
+                const isSecondChild = childIndex === 1;
+                const showGroupConnector = childIndex > 0;
+                const connector = item.connector;
+                const connectorKey = `group:${groupId}`;
+
+                entries.push({
+                  type: "row",
+                  condition: child,
+                  depth: groupDepth + 1,
+                  parentGroupId: groupId,
+                  grandparentGroupId: parentGroupId,
+                  top: childTop,
+                  left: childLeftOffset,
+                  scope: "group",
+                  groupId,
+                  indexInScope: childIndex,
+                  showConnector: showGroupConnector,
+                  showConnectorControl: isSecondChild,
+                  connector,
+                  connectorKey,
+                  showRootConnector: false,
+                  showGroupConnector,
+                });
+                childTop += filterRowStride;
+                childRootIndex = 0;
+              } else {
+                // Nested group - needs connector logic like conditions
+                const isFirstChild = childIndex === 0;
+                const isSecondChild = childIndex === 1;
+                const showGroupConnector = childIndex > 0;
+
+                const nestedResult = processItems(
+                  [child],
+                  groupDepth + 1,
+                  groupId,
+                  parentGroupId,
+                  childTop,
+                  childLeftOffset,
+                  // Pass childIndex as rootIndex so nested groups get proper connector logic
+                  childIndex,
+                  // Pass parent group's connector to nested group
+                  item.connector
+                );
+                childTop = nestedResult.nextTop;
+                childRootIndex = childIndex + 1;
+              }
+            });
+
+            // Compute group height based on actual bottom position of children
+            const childrenBottomTop = childTop - filterRowGap; // Remove the last gap
+            const groupHeight = (childrenBottomTop - groupStartTop) + filterGroupPaddingBottom;
+
+            const showRootConnector = rIndex > 0;
+
+            // Determine connector logic based on depth
+            const showConnector = groupDepth === 0 ? showRootConnector : rIndex > 0;
+            const showConnectorControl = groupDepth === 0 ? rIndex === 1 : rIndex === 1;
+            const connectorKey = groupDepth === 0 ? "root" : `group:${parentGroupId}`;
+            const connector = groupDepth === 0 ? filterConnector : (parentConnector ?? "and");
+
+            // Insert group entry before children (at the saved index)
+            entries.splice(
+              groupInsertIndex,
+              0,
+              {
+                type: "group",
+                group: item,
+                isEmpty: false,
+                depth: groupDepth,
+                parentGroupId,
+                top: groupStartTop,
+                left: groupLeft,
+                width: groupWidth,
+                height: groupHeight,
+                showConnector,
+                showConnectorControl,
+                connectorKey,
+                connector,
+                firstChildHasRootConnector: false,
+              }
+            );
+
+            groupMetaMap.set(groupId, {
+              startTop: groupStartTop,
+              bottomTop: groupStartTop + groupHeight,
+              rowCount: item.conditions.length,
+            });
+
+            top = groupStartTop + groupHeight + filterRowGap;
+            rIndex += 1;
+          }
+        }
+      });
+
+      return { nextTop: top, nextRootIndex: rIndex };
+    };
+
+    // Start processing from root
+    processItems(filterRows, 0, undefined, undefined, filterFirstRowTop, filterRowLeft, 0, undefined);
+
+    const contentBottom = entries.length > 0
+      ? Math.max(...entries.map(e => e.top + (e.type === "row" ? filterRowHeight : e.height)))
+      : filterWhereTop;
+
     return {
-      rows,
+      entries,
       contentBottom,
       groupMetaMap,
     };
-  }, [filterConnector, filterRows]);
+  }, [filterConnector, filterRows, filterGroupEmptyWidth, filterGroupEmptyHeight, filterGroupPaddingTop, filterGroupPaddingBottom, filterGroupPaddingLeft, filterGroupNestedWidth, filterRowLeft, filterFieldLeft, filterFirstRowTop, filterRowStride, filterRowGap, filterRowHeight, filterWhereTop, hasNestedGroups]);
 
   const filterFooterTop = hasFilterItems
     ? filterLayout.contentBottom + filterFooterGap
@@ -1661,8 +1793,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterFieldMenuHeaderGap = filterFieldMenuTextGap; // Same 20px gap from header to first item
   const filterFieldMenuBottomPadding = 20;
   const filterOperatorMenuBottomPadding = 0;
-  const filterFieldMenuItemLeft = 20;
-  const filterFieldMenuItemWidth = 164;
+  const filterFieldMenuItemLeft = 12;
+  const filterFieldMenuItemWidth = 172;
   const filterFieldMenuLabelLeft = 40;
   const filterFieldMenuHoverPadding = (filterFieldMenuRowHeight - filterFieldMenuTextHeight) / 2; // Extra space for hover box
   const filterFieldMenuFirstRowTop =
@@ -1765,19 +1897,40 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     (
       conditionId: string,
       updater: (condition: FilterConditionItem) => FilterConditionItem,
-      groupId?: string
+      groupId?: string,
+      parentGroupId?: string
     ) => {
       setFilterItems((prev) =>
         prev.map((item) => {
+          if (parentGroupId) {
+            // Nested group case (depth 2)
+            if (item.type !== "group" || item.id !== parentGroupId) return item;
+            return {
+              ...item,
+              conditions: item.conditions.map((child) => {
+                if (child.type !== "group" || child.id !== groupId) return child;
+                return {
+                  ...child,
+                  conditions: child.conditions.map((grandchild) =>
+                    grandchild.type === "condition" && grandchild.id === conditionId
+                      ? updater(grandchild)
+                      : grandchild
+                  ),
+                };
+              }),
+            };
+          }
           if (groupId) {
+            // Root group case (depth 1)
             if (item.type !== "group" || item.id !== groupId) return item;
             return {
               ...item,
-              conditions: item.conditions.map((condition) =>
-                condition.id === conditionId ? updater(condition) : condition
+              conditions: item.conditions.map((child) =>
+                child.type === "condition" && child.id === conditionId ? updater(child) : child
               ),
             };
           }
+          // Root condition case
           if (item.type !== "condition") return item;
           return item.id === conditionId ? updater(item) : item;
         })
@@ -1799,33 +1952,124 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [getDefaultFilterCondition]);
 
   const addFilterGroup = useCallback(() => {
-    setFilterItems((prev) => [
-      ...prev,
-      {
-        ...createFilterGroup(),
-        conditions: [getDefaultFilterCondition()],
-      },
-    ]);
+    setFilterItems((prev) => [...prev, createFilterGroup()]);
     setActiveFilterAdd("group");
-  }, [getDefaultFilterCondition]);
+  }, []);
 
   const addFilterConditionToGroup = useCallback(
-    (groupId: string) => {
-      setFilterItems((prev) =>
-        prev.map((item) => {
-          if (item.type !== "group" || item.id !== groupId) return item;
-          return {
-            ...item,
-            conditions: [...item.conditions, getDefaultFilterCondition()],
-          };
-        })
-      );
+    (groupId: string, parentGroupId?: string) => {
+      setFilterItems((prev) => {
+        if (!parentGroupId) {
+          // Add to root-level group
+          return prev.map((item) => {
+            if (item.type !== "group" || item.id !== groupId) return item;
+            return {
+              ...item,
+              conditions: [...item.conditions, getDefaultFilterCondition()],
+            };
+          });
+        } else {
+          // Add to nested group
+          return prev.map((item) => {
+            if (item.type !== "group" || item.id !== parentGroupId) return item;
+            return {
+              ...item,
+              conditions: item.conditions.map((child) => {
+                if (child.type !== "group" || child.id !== groupId) return child;
+                return {
+                  ...child,
+                  conditions: [...child.conditions, getDefaultFilterCondition()],
+                };
+              }),
+            };
+          });
+        }
+      });
+      setOpenGroupPlusId(null);
     },
     [getDefaultFilterCondition]
   );
 
+  const addFilterGroupToGroup = useCallback((parentGroupId: string, grandparentGroupId?: string) => {
+    setFilterItems((prev) => {
+      if (!grandparentGroupId) {
+        // Add to root-level group
+        return prev.map((item) => {
+          if (item.type !== "group" || item.id !== parentGroupId) return item;
+          return {
+            ...item,
+            conditions: [...item.conditions, createFilterGroup()],
+          };
+        });
+      } else {
+        // Add to nested group
+        return prev.map((item) => {
+          if (item.type !== "group" || item.id !== grandparentGroupId) return item;
+          return {
+            ...item,
+            conditions: item.conditions.map((child) => {
+              if (child.type !== "group" || child.id !== parentGroupId) return child;
+              return {
+                ...child,
+                conditions: [...child.conditions, createFilterGroup()],
+              };
+            }),
+          };
+        });
+      }
+    });
+    setOpenGroupPlusId(null);
+  }, []);
+
+  const deleteFilterGroup = useCallback((groupId: string, parentGroupId?: string) => {
+    setFilterItems((prev) => {
+      if (!parentGroupId) {
+        // Delete root-level group
+        return prev.filter((item) => item.type !== "group" || item.id !== groupId);
+      } else {
+        // Delete nested group
+        return prev.map((item) => {
+          if (item.type !== "group" || item.id !== parentGroupId) return item;
+          return {
+            ...item,
+            conditions: item.conditions.filter(
+              (child) => child.type !== "group" || child.id !== groupId
+            ),
+          };
+        });
+      }
+    });
+  }, []);
+
+  const setGroupConnector = useCallback(
+    (groupId: string, connector: FilterConnector, parentGroupId?: string) => {
+      setFilterItems((prev) => {
+        if (!parentGroupId) {
+          // Update root-level group
+          return prev.map((item) => {
+            if (item.type !== "group" || item.id !== groupId) return item;
+            return { ...item, connector };
+          });
+        } else {
+          // Update nested group
+          return prev.map((item) => {
+            if (item.type !== "group" || item.id !== parentGroupId) return item;
+            return {
+              ...item,
+              conditions: item.conditions.map((child) => {
+                if (child.type !== "group" || child.id !== groupId) return child;
+                return { ...child, connector };
+              }),
+            };
+          });
+        }
+      });
+    },
+    []
+  );
+
   const handleFilterFieldSelect = useCallback(
-    (conditionId: string, columnId: string, groupId?: string) => {
+    (conditionId: string, columnId: string, groupId?: string, parentGroupId?: string) => {
       const column = columnById.get(columnId);
       const columnType = coerceColumnType(column?.type);
       updateFilterCondition(
@@ -1841,44 +2085,69 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             operator: nextOperator,
           };
         },
-        groupId
+        groupId,
+        parentGroupId
       );
       setOpenFilterFieldId(null);
       setOpenFilterOperatorId(null);
+      setHighlightedFilterFieldId(conditionId);
+      setHighlightedFilterOperatorId(null);
     },
     [columnById, updateFilterCondition]
   );
 
   const handleFilterOperatorSelect = useCallback(
-    (conditionId: string, operator: FilterOperator, groupId?: string) => {
+    (conditionId: string, operator: FilterOperator, groupId?: string, parentGroupId?: string) => {
+      const requiresValue = FILTER_OPERATOR_REQUIRES_VALUE.has(operator);
       updateFilterCondition(
         conditionId,
         (condition) => ({
           ...condition,
           operator,
+          ...(requiresValue ? {} : { value: "" }),
         }),
-        groupId
+        groupId,
+        parentGroupId
       );
       setOpenFilterOperatorId(null);
+      setHighlightedFilterOperatorId(conditionId);
+      setHighlightedFilterFieldId(null);
     },
     [updateFilterCondition]
   );
 
   const handleFilterValueChange = useCallback(
-    (conditionId: string, value: string, groupId?: string) => {
+    (conditionId: string, value: string, groupId?: string, parentGroupId?: string) => {
       let isValid = true;
       const columnId = (() => {
+        if (parentGroupId) {
+          // Nested group case (depth 2)
+          const parentGroup = filterItems.find(
+            (item): item is FilterGroupItem => item.type === "group" && item.id === parentGroupId
+          );
+          const nestedGroup = parentGroup?.conditions.find(
+            (item): item is FilterGroupItem => item.type === "group" && item.id === groupId
+          );
+          const condition = nestedGroup?.conditions.find(
+            (item): item is FilterConditionItem => item.type === "condition" && item.id === conditionId
+          );
+          return condition?.columnId ?? null;
+        }
         if (!groupId) {
+          // Root condition case
           const condition = filterItems.find(
             (item): item is FilterConditionItem =>
               item.type === "condition" && item.id === conditionId
           );
           return condition?.columnId ?? null;
         }
+        // Root group case (depth 1)
         const group = filterItems.find(
           (item): item is FilterGroupItem => item.type === "group" && item.id === groupId
         );
-        const condition = group?.conditions.find((item) => item.id === conditionId);
+        const condition = group?.conditions.find(
+          (item): item is FilterConditionItem => item.type === "condition" && item.id === conditionId
+        );
         return condition?.columnId ?? null;
       })();
       const columnType = columnId
@@ -1892,7 +2161,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       updateFilterCondition(
         conditionId,
         (condition) => ({ ...condition, value }),
-        groupId
+        groupId,
+        parentGroupId
       );
     },
     [columnById, filterItems, updateFilterCondition]
@@ -2062,30 +2332,50 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (hiddenColumnIdSet.size === 0) return;
     setFilterItems((prev) => {
       let changed = false;
-      const next: FilterItem[] = [];
-      prev.forEach((item) => {
+
+      // Recursive function to filter conditions and nested groups
+      const filterItem = (item: FilterItem): FilterItem | null => {
         if (item.type === "condition") {
           if (item.columnId && hiddenColumnIdSet.has(item.columnId)) {
             changed = true;
-            return;
+            return null;
           }
-          next.push(item);
-          return;
+          return item;
         }
-        const nextConditions = item.conditions.filter(
-          (condition) =>
-            !condition.columnId ||
-            !hiddenColumnIdSet.has(condition.columnId)
-        );
+
+        // Filter group's conditions recursively
+        const nextConditions: (FilterConditionItem | FilterGroupItem)[] = [];
+        item.conditions.forEach((child) => {
+          const filtered = filterItem(child);
+          if (filtered) {
+            nextConditions.push(filtered);
+          }
+        });
+
         if (nextConditions.length !== item.conditions.length) {
           changed = true;
         }
-        if (nextConditions.length > 0) {
-          next.push({ ...item, conditions: nextConditions });
-        } else {
+
+        if (nextConditions.length === 0) {
           changed = true;
+          return null; // Remove empty groups
+        }
+
+        if (nextConditions.length === item.conditions.length) {
+          return item; // No changes in this group
+        }
+
+        return { ...item, conditions: nextConditions };
+      };
+
+      const next: FilterItem[] = [];
+      prev.forEach((item) => {
+        const filtered = filterItem(item);
+        if (filtered) {
+          next.push(filtered);
         }
       });
+
       return changed ? next : prev;
     });
   }, [hiddenColumnIdSet]);
@@ -2178,11 +2468,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     return ordered;
   }, [rowsQuery.data?.pages]);
 
-  const columnOrder = useMemo(
-    () => orderedColumns.map((column) => column.id),
-    [orderedColumns]
-  );
-
   const tableData = useMemo<TableRow[]>(() => {
     if (!activeTable) return [];
     return rows.map((row) => {
@@ -2230,55 +2515,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     !rowsQuery.hasNextPage &&
     sortedTableData.length === 0;
 
-  const rowOrder = useMemo(
-    () => sortedTableData.map((row) => row.id),
-    [sortedTableData]
-  );
-
-  const columnsWithAdd = useMemo(
-    () => [
-      {
-        id: "__row-number__",
-        name: "Row",
-        width: ROW_NUMBER_COLUMN_WIDTH,
-        type: "row-number" as const,
-      },
-      ...orderedColumns.map((column) => ({
-        id: column.id,
-        name: column.name,
-        fieldType: coerceColumnType(column.type),
-        width: columnWidths[column.id] ?? DEFAULT_COLUMN_WIDTH,
-        type: "data" as const,
-      })),
-      {
-        id: "__add__",
-        name: "Add column",
-        width: ADD_COLUMN_WIDTH,
-        type: "add" as const,
-      },
-    ],
-    [columnWidths, orderedColumns]
-  );
-
-  const totalColumnsWidth = useMemo(
-    () => columnsWithAdd.reduce((sum, column) => sum + column.width, 0),
-    [columnsWithAdd]
-  );
-  const addColumnWidth = useMemo(
-    () => columnsWithAdd.find((column) => column.type === "add")?.width ?? ADD_COLUMN_WIDTH,
-    [columnsWithAdd]
-  );
-  const rowNumberColumnIndex = columnsWithAdd.findIndex(
-    (column) => column.type === "row-number"
-  );
-  const rowNumberColumn =
-    rowNumberColumnIndex >= 0 ? columnsWithAdd[rowNumberColumnIndex] : null;
-  const rowNumberColumnWidth = rowNumberColumn?.width ?? ROW_NUMBER_COLUMN_WIDTH;
-  const dataColumnsWidth = Math.max(
-    0,
-    totalColumnsWidth - addColumnWidth - rowNumberColumnWidth
-  );
-
   const rowCount = sortedTableData.length;
   const showRowsInitialLoading = rowsQuery.isLoading && rowCount === 0;
   const showRowsError = rowsQuery.isError && rowCount === 0;
@@ -2291,68 +2527,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     rowsQuery.error instanceof Error
       ? rowsQuery.error.message
       : "Try refreshing again.";
-  const showRowLoader = rowsQuery.hasNextPage && !hasSearchQuery;
-  const expandedRowId = useMemo(() => {
-    if (!selectedCell) return null;
-    const selectedColumn = orderedColumns.find(
-      (column) => column.id === selectedCell.columnId
-    );
-    const selectedType = coerceColumnType(selectedColumn?.type);
-    return selectedType === "long_text" ? selectedCell.rowId : null;
-  }, [orderedColumns, selectedCell]);
-  const estimateRowSize = useCallback(
-    (index: number) => {
-      const row = sortedTableData[index];
-      if (!row) return ROW_HEIGHT;
-      // Always return ROW_HEIGHT so expanded cells overlay instead of pushing rows down
-      return ROW_HEIGHT;
-    },
-    [sortedTableData]
-  );
-
-  const rowVirtualizer = useVirtualizer({
-    count: showRowLoader ? rowCount + 1 : rowCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: estimateRowSize,
-    overscan: ROW_VIRTUAL_OVERSCAN,
-    getItemKey: (index) => sortedTableData[index]?.id ?? `loader-${index}`,
-    isScrollingResetDelay: ROW_SCROLLING_RESET_DELAY_MS,
-    useAnimationFrameWithResizeObserver: true,
-  });
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const lastNonEmptyVirtualItemsRef = useRef(virtualItems);
-  useEffect(() => {
-    if (virtualItems.length > 0) {
-      lastNonEmptyVirtualItemsRef.current = virtualItems;
-    }
-  }, [virtualItems]);
-  const rowVirtualItems =
-    virtualItems.length > 0 ? virtualItems : lastNonEmptyVirtualItemsRef.current;
-  const isScrolling = rowVirtualizer.isScrolling;
-  const rowCanvasHeight = Math.max(
-    rowVirtualizer.getTotalSize(),
-    showRowsInitialLoading || showRowsError || showRowsEmpty ? ROW_HEIGHT * 5 : 0
-  );
-  const rowVirtualRange = useMemo(() => {
-    if (!rowVirtualItems.length) return { start: 0, end: 0 };
-    return {
-      start: rowVirtualItems[0]?.index ?? 0,
-      end: rowVirtualItems[rowVirtualItems.length - 1]?.index ?? 0,
-    };
-  }, [rowVirtualItems]);
-  const lastVirtualRowIndex = rowVirtualItems.length
-    ? rowVirtualItems[rowVirtualItems.length - 1]?.index ?? -1
-    : -1;
-
-  const columnVirtualizer = useVirtualizer({
-    horizontal: true,
-    count: columnsWithAdd.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: (index) => columnsWithAdd[index]?.width ?? DEFAULT_COLUMN_WIDTH,
-    overscan: 6,
-    getItemKey: (index) => columnsWithAdd[index]?.id ?? index,
-  });
 
   const sortAddVirtualizer = useVirtualizer({
     count: remainingSortColumns.length,
@@ -2381,155 +2555,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterFieldVirtualizerSize =
     filterFieldVirtualizer.getTotalSize();
 
-  const virtualColumns = columnVirtualizer.getVirtualItems();
-  const columnVirtualRange = useMemo(() => {
-    if (!virtualColumns.length) return { start: 0, end: 0 };
-    return {
-      start: virtualColumns[0]?.index ?? 0,
-      end: virtualColumns[virtualColumns.length - 1]?.index ?? 0,
-    };
-  }, [virtualColumns]);
-  const nameColumnIndex = columnsWithAdd.findIndex(
-    (column) => column.type === "data" && column.name === "Name"
-  );
-  const nameColumn = nameColumnIndex >= 0 ? columnsWithAdd[nameColumnIndex] : null;
-  const nameColumnWidth = nameColumn?.width ?? 0;
-  const stickyColumnsWidth = rowNumberColumnWidth + nameColumnWidth;
-  const scrollableVirtualColumns = virtualColumns.filter((virtualColumn) => {
-    if (rowNumberColumnIndex >= 0 && virtualColumn.index === rowNumberColumnIndex) {
-      return false;
-    }
-    if (nameColumnIndex >= 0 && virtualColumn.index === nameColumnIndex) {
-      return false;
-    }
-    return true;
-  });
-  const scrollablePaddingLeft = Math.max(
-    0,
-    (scrollableVirtualColumns[0]?.start ?? stickyColumnsWidth) - stickyColumnsWidth
-  );
-  const totalScrollableWidth = Math.max(0, totalColumnsWidth - stickyColumnsWidth);
-  const lastScrollableEnd = Math.max(
-    0,
-    (scrollableVirtualColumns.at(-1)?.end ?? stickyColumnsWidth) - stickyColumnsWidth
-  );
-  const scrollablePaddingRight = Math.max(0, totalScrollableWidth - lastScrollableEnd);
-
-  useEffect(() => {
-    rowVirtualizer.measure();
-  }, [rowVirtualizer, expandedRowId]);
-
-  useEffect(() => {
-    columnVirtualizer.measure();
-  }, [columnVirtualizer, columnWidths, columnsWithAdd.length]);
-
-  const lastFocusedRef = useRef<{ key: string; mode: "select" | "edit" } | null>(
-    null
-  );
-  const focusTokenRef = useRef(0);
-  const prefetchingRowsRef = useRef(false);
-
-  useEffect(() => {
-    const focusTarget = editingCell ?? selectedCell;
-    if (!focusTarget) {
-      lastFocusedRef.current = null;
-      return;
-    }
-    if (
-      isFilterMenuOpen &&
-      document.activeElement &&
-      filterMenuRef.current?.contains(document.activeElement)
-    ) {
-      return;
-    }
-    const token = (focusTokenRef.current += 1);
-    requestAnimationFrame(() => {
-      if (token !== focusTokenRef.current) return;
-      const key = `${focusTarget.rowId}-${focusTarget.columnId}`;
-      const node = cellRefs.current.get(key);
-      if (!node || !("setSelectionRange" in node)) return;
-      const mode = editingCell ? "edit" : "select";
-      const last = lastFocusedRef.current;
-      if (
-        last &&
-        last.key === key &&
-        last.mode === mode &&
-        document.activeElement === node
-      ) {
-        return;
-      }
-      node.focus();
-      if (editingCell) {
-        const length = node.value.length;
-        node.setSelectionRange(length, length);
-      } else {
-        node.setSelectionRange(0, 0);
-      }
-      lastFocusedRef.current = { key, mode };
-    });
-  }, [
-    editingCell,
-    isFilterMenuOpen,
-    selectedCell,
-    rowVirtualRange.start,
-    rowVirtualRange.end,
-    columnVirtualRange.start,
-    columnVirtualRange.end,
-  ]);
-
-  useEffect(() => {
-    if (lastVirtualRowIndex < 0) return;
-    if (!rowsQuery.hasNextPage) return;
-    if (rowsQuery.isFetchingNextPage) return;
-    if (prefetchingRowsRef.current) return;
-
-    const viewportRows = Math.max(
-      1,
-      Math.ceil((parentRef.current?.clientHeight ?? 0) / ROW_HEIGHT)
-    );
-    const minRowsAhead = Math.max(ROW_PREFETCH_AHEAD, viewportRows * 12);
-    const targetRowsAhead = minRowsAhead + PAGE_ROWS * 2;
-    const rowsRemaining = rowCount - lastVirtualRowIndex - 1;
-
-    if (rowsRemaining > minRowsAhead) return;
-
-    prefetchingRowsRef.current = true;
-
-    const prefetchRowsAhead = async () => {
-      try {
-        let pagesFetched = 0;
-        let bufferedRowCount = rowCount;
-        let hasNextPage = rowsQuery.hasNextPage;
-
-        while (
-          hasNextPage &&
-          pagesFetched < MAX_PREFETCH_PAGES_PER_BURST &&
-          bufferedRowCount - lastVirtualRowIndex - 1 < targetRowsAhead
-        ) {
-          const result = await rowsQuery.fetchNextPage();
-          pagesFetched += 1;
-
-          const pages = result.data?.pages ?? [];
-          const nextRowCount = pages.reduce((total, page) => total + page.rows.length, 0);
-          if (nextRowCount <= bufferedRowCount) break;
-
-          bufferedRowCount = nextRowCount;
-          hasNextPage = (pages[pages.length - 1]?.nextCursor ?? null) !== null;
-        }
-      } finally {
-        prefetchingRowsRef.current = false;
-      }
-    };
-
-    void prefetchRowsAhead();
-  }, [
-    lastVirtualRowIndex,
-    rowCount,
-    rowsQuery.hasNextPage,
-    rowsQuery.fetchNextPage,
-    rowsQuery.isFetchingNextPage,
-  ]);
-
   const handleAddTable = () => {
     addTable.mutate({ baseId });
   };
@@ -2546,27 +2571,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const handleDeleteColumn = (columnId: string) => {
     deleteColumn.mutate({ columnId });
     setContextMenu(null);
-  };
-
-  const handleAddColumn = (type: ColumnFieldType = "single_line_text") => {
-    if (!activeTableId) return;
-    const nextIndex = activeColumns.length + 1;
-    addColumn.mutate({
-      tableId: activeTableId,
-      name: `Column ${nextIndex}`,
-      id: crypto.randomUUID(),
-      type,
-    });
-    setIsAddColumnMenuOpen(false);
-  };
-
-  const handleAddRow = () => {
-    if (!activeTableId) return;
-    addRows.mutate({
-      tableId: activeTableId,
-      count: 1,
-      ids: [crypto.randomUUID()],
-    });
   };
 
   const handleAddBulkRows = () => {
@@ -2602,16 +2606,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setContextMenu({ type, id, x: event.clientX, y: event.clientY });
   };
 
-  const handleStartResize = (event: ReactMouseEvent, columnId: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setResizing({
-      columnId,
-      startX: event.clientX,
-      startWidth: columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTH,
-    });
-  };
-
   const handleSortDragStart = (event: ReactMouseEvent, columnId: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2633,6 +2627,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setIsAddSortMenuOpen(false);
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "none";
+    document.body.classList.add("airtable-dragging");
 
     const handleMove = (moveEvent: MouseEvent) => {
       const order = sortRowsRef.current;
@@ -2669,6 +2664,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       window.removeEventListener("mouseup", handleUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      document.body.classList.remove("airtable-dragging");
       const finalOrder = sortRowsRef.current;
       if (!areSortsEqual(finalOrder, sortConfigList)) {
         applySorts(finalOrder.length ? finalOrder : null);
@@ -2705,7 +2701,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         (item): item is FilterGroupItem => item.type === "group" && item.id === groupId
       );
       if (!group) return;
-      list = group.conditions;
+      list = group.conditions.filter(
+        (child): child is FilterConditionItem => child.type === "condition"
+      );
       listStartTop =
         filterLayout.groupMetaMap.get(groupId)?.startTop ?? filterFirstRowTop;
     }
@@ -2731,6 +2729,32 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setFilterDragPreview({ scope, groupId, order: initialOrder });
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "none";
+    document.body.classList.add("airtable-dragging");
+
+    // Set initial phantom position from mouse – spawn so the cursor
+    // holds the phantom exactly where it pressed the original field.
+    const phantomW = filterFieldWidth;
+    const phantomH = filterFieldHeight;
+    const fieldElement = (event.currentTarget as HTMLElement).parentElement;
+    const fieldRect = fieldElement?.getBoundingClientRect();
+    if (fieldRect) {
+      phantomOffsetRef.current = {
+        x: event.clientX - fieldRect.left,
+        y: event.clientY - fieldRect.top,
+      };
+    } else {
+      // Fallback: centre on the reorder icon area
+      phantomOffsetRef.current = {
+        x: filterFieldSeparatorActionsLeft + (filterFieldWidth - filterFieldSeparatorActionsLeft) / 2,
+        y: filterFieldHeight / 2,
+      };
+    }
+    setPhantomFilterX(
+      Math.max(0, Math.min(event.clientX - phantomOffsetRef.current.x, window.innerWidth - phantomW))
+    );
+    setPhantomFilterY(
+      Math.max(0, Math.min(event.clientY - phantomOffsetRef.current.y, window.innerHeight - phantomH))
+    );
 
     const handleMove = (moveEvent: MouseEvent) => {
       const ctx = filterDragScopeRef.current;
@@ -2744,6 +2768,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         )
       );
       setDraggingFilterTop(nextTop);
+
+      // Update phantom position, clamped to viewport
+      setPhantomFilterX(
+        Math.max(0, Math.min(moveEvent.clientX - phantomOffsetRef.current.x, window.innerWidth - phantomW))
+      );
+      setPhantomFilterY(
+        Math.max(0, Math.min(moveEvent.clientY - phantomOffsetRef.current.y, window.innerHeight - phantomH))
+      );
+
       const targetIndex = Math.min(
         ctx.rowCount - 1,
         Math.max(
@@ -2774,6 +2807,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       window.removeEventListener("mouseup", handleUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      document.body.classList.remove("airtable-dragging");
       const ctx = filterDragScopeRef.current;
       if (ctx && ctx.rowCount > 1) {
         const finalOrder = ctx.order;
@@ -2812,6 +2846,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
       setDraggingFilterId(null);
       setDraggingFilterTop(null);
+      setPhantomFilterX(null);
+      setPhantomFilterY(null);
       filterDragScopeRef.current = null;
       setFilterDragPreview(null);
     };
@@ -2820,228 +2856,19 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     window.addEventListener("mouseup", handleUp);
   };
 
-  const setCellEditValue = (rowId: string, columnId: string, value: string) => {
-    const columnType = coerceColumnType(columnById.get(columnId)?.type);
-    if (columnType === "number" && !isValidNumberDraft(value)) {
-      return false;
-    }
-    setCellEdits((prev) => ({
-      ...prev,
-      [rowId]: {
-        ...prev[rowId],
-        [columnId]: value,
-      },
-    }));
-    updateCell.mutate({ rowId, columnId, value });
-    return true;
-  };
-
-  const clearCellEdit = (rowId: string, columnId: string) => {
-    setCellEdits((prev) => {
-      const rowEdits = prev[rowId];
-      if (!rowEdits || !(columnId in rowEdits)) return prev;
-      const { [columnId]: _removed, ...rest } = rowEdits;
-      if (Object.keys(rest).length === 0) {
-        const { [rowId]: _rowRemoved, ...next } = prev;
-        return next;
-      }
-      return { ...prev, [rowId]: rest };
-    });
-  };
-
-  const handleCellChange = (rowId: string, columnId: string, value: string) => {
-    setCellEditValue(rowId, columnId, value);
-  };
-
-  const handleCellCommit = (
-    rowId: string,
-    columnId: string,
-    value: string
-  ) => {
-    const columnType = coerceColumnType(columnById.get(columnId)?.type);
-    if (columnType === "number") {
-      const normalized = normalizeNumberInput(value);
-      if (normalized !== null && normalized !== value) {
-        setCellEditValue(rowId, columnId, normalized);
-      }
-    }
-    clearCellEdit(rowId, columnId);
-  };
-
-  const beginEditExisting = (rowId: string, columnId: string) => {
-    setSelectedCell({ rowId, columnId });
-    setEditingCell({ rowId, columnId });
-  };
-
-  const focusCell = (rowId: string, columnId: string) => {
-    const rowIndex = rowOrder.indexOf(rowId);
-    const colIndex = columnOrder.indexOf(columnId);
-    if (rowIndex >= 0) {
-      rowVirtualizer.scrollToIndex(rowIndex);
-    }
-    if (colIndex >= 0) {
-      columnVirtualizer.scrollToIndex(colIndex);
-    }
-    setSelectedCell({ rowId, columnId });
-    const key = `${rowId}-${columnId}`;
-    const node = cellRefs.current.get(key);
-    if (node && "setSelectionRange" in node) {
-      node.focus();
-      node.setSelectionRange(0, 0);
-    }
-  };
-
-  const isPrintableKey = (
-    event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) =>
-    event.key.length === 1 &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.altKey;
-
-  const handleCellKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
-    rowId: string,
-    columnId: string,
-    columnType: ColumnFieldType,
-    currentValue: string
-  ) => {
-    if (columnOrder.length === 0 || rowOrder.length === 0) return;
-    const rowIndex = rowOrder.indexOf(rowId);
-    const colIndex = columnOrder.indexOf(columnId);
-    if (rowIndex === -1 || colIndex === -1) return;
-
-    const isEditing =
-      editingCell?.rowId === rowId && editingCell?.columnId === columnId;
-    const isLongText = columnType === "long_text";
-
-    const navigate = () => {
-      let nextRow = rowIndex;
-      let nextCol = colIndex;
-
-      if (event.key === "ArrowRight") {
-        nextCol = Math.min(columnOrder.length - 1, colIndex + 1);
-      } else if (event.key === "ArrowLeft") {
-        nextCol = Math.max(0, colIndex - 1);
-      } else if (event.key === "ArrowDown") {
-        nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
-      } else if (event.key === "ArrowUp") {
-        nextRow = Math.max(0, rowIndex - 1);
-      } else if (event.key === "Tab") {
-        if (event.shiftKey) {
-          if (colIndex > 0) {
-            nextCol = colIndex - 1;
-          } else if (rowIndex > 0) {
-            nextRow = rowIndex - 1;
-            nextCol = columnOrder.length - 1;
-          }
-        } else if (colIndex < columnOrder.length - 1) {
-          nextCol = colIndex + 1;
-        } else if (rowIndex < rowOrder.length - 1) {
-          nextRow = rowIndex + 1;
-          nextCol = 0;
-        }
-      } else {
-        return;
-      }
-
-      event.preventDefault();
-      focusCell(rowOrder[nextRow]!, columnOrder[nextCol]!);
-    };
-
-    if (!isEditing) {
-      if (
-        event.key === "ArrowRight" ||
-        event.key === "ArrowLeft" ||
-        event.key === "ArrowDown" ||
-        event.key === "ArrowUp" ||
-        event.key === "Tab"
-      ) {
-        navigate();
-        return;
-      }
-
-      if (event.key === "Enter") {
-        event.preventDefault();
-        const nextValue = isLongText ? `${currentValue}\n` : currentValue;
-        setSelectedCell({ rowId, columnId });
-        setEditingCell({ rowId, columnId });
-        if (isLongText) {
-          setCellEditValue(rowId, columnId, nextValue);
-        }
-        return;
-      }
-
-      if (isPrintableKey(event) || event.key === "Backspace" || event.key === "Delete") {
-        event.preventDefault();
-        const nextValue =
-          event.key === "Backspace" || event.key === "Delete"
-            ? ""
-            : isLongText
-            ? `${currentValue}${event.key}`
-            : event.key;
-        if (!setCellEditValue(rowId, columnId, nextValue)) {
-          return;
-        }
-        setSelectedCell({ rowId, columnId });
-        setEditingCell({ rowId, columnId });
-      }
-      return;
-    }
-
-    if (!isLongText && event.key === "Enter") {
-      event.preventDefault();
-      handleCellCommit(rowId, columnId, currentValue);
-      setEditingCell(null);
-      const nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
-      focusCell(rowOrder[nextRow]!, columnId);
-      return;
-    }
-
-    if (event.key === "Tab") {
-      event.preventDefault();
-      handleCellCommit(rowId, columnId, currentValue);
-      setEditingCell(null);
-      navigate();
-    }
-  };
-
   const bulkRowsDisabled =
     !activeTableId || addRows.isPending || activeRowCount + BULK_ROWS > MAX_ROWS;
-  const addRowDisabled =
-    !activeTableId || activeRowCount >= MAX_ROWS;
   const addTableDisabled = activeTables.length >= MAX_TABLES || addTable.isPending;
 
   const baseName = baseDetailsQuery.data?.name ?? "Base";
   const userInitial = formatUserInitial(userName);
-
-  const headerCellBorder = (
-    column: { name: string; type: "data" | "add" | "row-number" },
-    isFirst: boolean
-  ) => ({
-    borderTop: "none",
-    borderBottom: "0.5px solid #CBCBCB",
-    borderRight:
-      column.type === "row-number" ||
-      (column.type === "data" && column.name === "Name")
-        ? "none"
-        : "0.5px solid #DDE1E3",
-    borderLeft: "none",
-  });
-
-  const bodyCellBorder = (
-    column: { name: string; type: "data" | "add" | "row-number" },
-    isFirst: boolean,
-    isLastRow: boolean
-  ) => ({
-    borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
-    borderRight:
-      column.type === "row-number" ||
-      (column.type === "data" && column.name === "Name")
-        ? "none"
-        : "0.5px solid #DDE1E3",
-    borderLeft: "none",
-  });
+  const headerLoading =
+    (baseDetailsQuery.isLoading && !baseDetailsQuery.data) ||
+    (activeTableId !== null &&
+      tableMetaQuery.isLoading &&
+      !activeTable) ||
+    showRowsInitialLoading ||
+    addColumn.isPending;
 
   return (
     <div className={clsx("h-screen overflow-hidden bg-white text-[#1d1f24]", inter.className)}>
@@ -3090,63 +2917,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6">
-              <div className="flex items-center gap-3">
-                <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[6px] bg-[#8c3f78]">
-                  <img
-                    alt=""
-                    className="h-[19.74px] w-[22.68px]"
-                    src={logoIcon.src}
-                    style={{ filter: "brightness(0) saturate(100%) invert(1)" }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => router.push("/bases")}
-                  className="flex items-center gap-2 text-[16px] font-semibold text-[#1d1f24]"
-                >
-                  <span>{baseName}</span>
-                  <span className="airtable-nav-chevron rotate-90 text-[#1d1f24]" />
-                </button>
-              </div>
-
-              <nav className="ml-[118px] flex flex-wrap items-center gap-5 airtable-secondary-font">
-                <button type="button" className="relative text-[#1d1f24]">
-                  Data
-                  <span className="absolute -bottom-[19px] left-1/2 h-[2px] w-[28.5px] -translate-x-1/2 bg-[#8c3f78]" />
-                </button>
-                <button type="button">Automations</button>
-                <button type="button">Interfaces</button>
-                <button type="button">Forms</button>
-              </nav>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="flex items-center" aria-label="Refresh">
-                  <img alt="" className="h-[14px] w-[14px]" src={refreshIcon.src} />
-                </button>
-                <button
-                  type="button"
-                  className="flex h-[32px] w-[126px] items-center justify-center rounded-[6px] bg-[#F2F2F2] text-[13px] text-[#1d1f24]"
-                >
-                  Trial: 14 days left
-                </button>
-                <button
-                  type="button"
-                  className="flex h-[32px] items-center gap-2 rounded-[6px] border border-[#DDE1E3] bg-white px-3 text-[13px] text-[#1d1f24]"
-                >
-                  <img alt="" className="h-[14px] w-[14px]" src={launchIcon.src} />
-                  Launch
-                </button>
-                <button
-                  type="button"
-                  className="h-[32px] rounded-[6px] bg-[#8c3f78] px-4 text-[13px] font-medium text-white"
-                >
-                  Share
-                </button>
-              </div>
-            </div>
-          </header>
+          <HeaderComponent baseName={baseName} isLoading={headerLoading} />
 
           <section className="border-t border-[#DEDEDE] bg-white">
             <div className="h-[31px] border-b border-[#E5DAE5] bg-[#FFF0FF]">
@@ -3294,1705 +3065,195 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               </div>
             </div>
 
-            <div className="relative h-[46px] bg-white">
-              <div className="relative h-full min-w-[940px] airtable-secondary-font-regular">
-                <img
-                  alt=""
-                  className="absolute left-[20px] top-[16px] h-[15px] w-[16px]"
-                  src={threeLineIcon.src}
-                />
-                <button type="button" className="absolute left-[54px] top-0 h-full w-[108px]">
-                  <img
-                    alt=""
-                    className="absolute left-0 top-[15px] h-[16px] w-[18px]"
-                    src={gridViewIcon.src}
-                  />
-                  <span
-                    className="absolute left-[26px] top-[17px] block w-[66px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
-                    style={{ fontFamily: "Inter, sans-serif" }}
-                  >
-                    Grid view
-                  </span>
-                  <img
-                    alt=""
-                    className="absolute left-[95px] top-[17.5px] h-[16px] w-[10px]"
-                    src={arrowIcon.src}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddBulkRows}
-                  disabled={bulkRowsDisabled}
-                  className={clsx(
-                    "absolute left-[175px] top-[10px] flex h-[26px] items-center justify-center rounded-[6px] px-3 text-[13px] leading-[13px]",
-                    bulkRowsDisabled
-                      ? "cursor-not-allowed border border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
-                      : "airtable-outline airtable-selection-hover bg-white text-[#1d1f24] cursor-pointer"
-                  )}
-                >
-                  Add 100k rows
-                </button>
-                <div className="absolute right-[8.5px] top-0 flex h-full items-center">
-                  <div className="relative h-full w-[643px]">
-                    <div className="absolute left-[68px] top-0">
-                      <button
-                        ref={hideFieldsButtonRef}
-                        type="button"
-                        className={clsx(
-                          "airtable-table-feature-selection airtable-function-hover-pad relative mt-[10px] h-[26px] !min-w-0 w-[101px] !px-0",
-                          hiddenFieldCount > 0 &&
-                            "airtable-table-feature-selection--hide-active"
-                        )}
-                      onClick={() => setIsHideFieldsMenuOpen((prev) => !prev)}
-                      aria-haspopup="menu"
-                      aria-expanded={isHideFieldsMenuOpen}
-                    >
-                      <img
-                        alt=""
-                        className={clsx(
-                          "absolute left-[4px] top-[5px] h-[16px] w-[19px]",
-                          hiddenFieldCount > 0 && "airtable-hide-fields-icon--active"
-                        )}
-                        src={hideFieldsIcon.src}
-                      />
-                      <span className="absolute left-[25px] top-[5px] block h-[16px] w-[72px] truncate text-[13px] leading-[16px]">
-                        {hiddenFieldCount > 0
-                          ? `${hiddenFieldCount} hidden field${
-                              hiddenFieldCount === 1 ? "" : "s"
-                            }`
-                          : "Hide fields"}
-                      </span>
-                    </button>
-                    {isHideFieldsMenuOpen && (
-                      <div
-                        ref={hideFieldsMenuRef}
-                        className="airtable-hide-fields-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
-                        style={{
-                          width: HIDE_FIELDS_DROPDOWN_WIDTH,
-                          height: hideFieldsLayout.dropdownHeight,
-                        }}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <div className="relative h-full w-full">
-                          <div
-                            className="absolute airtable-find-field-label"
-                            style={{
-                              left: HIDE_FIELDS_HEADER_LEFT,
-                              top: HIDE_FIELDS_HEADER_TOP,
-                            }}
-                          >
-                            Find a field
-                          </div>
-                          <span
-                            className="airtable-help-icon absolute text-[#878B94]"
-                            style={{
-                              left: HIDE_FIELDS_HELP_LEFT,
-                              top: HIDE_FIELDS_HELP_TOP,
-                              width: 14,
-                              height: 14,
-                            }}
-                            aria-hidden="true"
-                          />
-                          <div
-                            className="absolute bg-[#E4E4E4]"
-                            style={{
-                              left: HIDE_FIELDS_SEPARATOR_LEFT,
-                              top: HIDE_FIELDS_SEPARATOR_TOP,
-                              width: HIDE_FIELDS_SEPARATOR_WIDTH,
-                              height: HIDE_FIELDS_SEPARATOR_HEIGHT,
-                            }}
-                            aria-hidden="true"
-                          />
-                          {hideFieldsLayout.rows.map((row) => {
-                            const isHidden = hiddenColumnIdSet.has(row.column.id);
-                            return (
-                              <button
-                                key={row.column.id}
-                                type="button"
-                                className="airtable-hide-fields-row"
-                                style={{
-                                  top: row.hoverTop,
-                                  width: HIDE_FIELDS_HOVER_WIDTH,
-                                }}
-                                onClick={() => toggleHiddenColumn(row.column.id)}
-                                aria-pressed={!isHidden}
-                              >
-                                <svg
-                                  className="airtable-hide-fields-toggle absolute"
-                                  width={HIDE_FIELDS_TOGGLE_WIDTH}
-                                  height={HIDE_FIELDS_TOGGLE_HEIGHT}
-                                  viewBox={`0 0 ${HIDE_FIELDS_TOGGLE_WIDTH} ${HIDE_FIELDS_TOGGLE_HEIGHT}`}
-                                  style={{
-                                    left:
-                                      HIDE_FIELDS_TOGGLE_LEFT -
-                                      HIDE_FIELDS_HOVER_LEFT,
-                                    top: row.toggleOffset,
-                                  }}
-                                  aria-hidden="true"
-                                >
-                                  <rect
-                                    x="0"
-                                    y="0"
-                                    width={HIDE_FIELDS_TOGGLE_WIDTH}
-                                    height={HIDE_FIELDS_TOGGLE_HEIGHT}
-                                    rx="4"
-                                    fill={isHidden ? "#D9D9D9" : "#09890E"}
-                                  />
-                                  <rect
-                                    x={isHidden ? 2 : 7}
-                                    y={2}
-                                    width={4}
-                                    height={4}
-                                    rx={2}
-                                    fill="#FFFFFF"
-                                  />
-                                </svg>
-                              <img
-                                alt=""
-                                className="airtable-hide-fields-icon absolute"
-                                style={{
-                                  left: row.iconLeftOffset,
-                                  top: row.iconTopOffset,
-                                  width: row.iconSpec.width,
-                                  height: row.iconSpec.height,
-                                }}
-                                src={row.iconSpec.src}
-                              />
-                              <span
-                                className="airtable-hide-fields-label absolute"
-                                style={{
-                                  left: HIDE_FIELDS_TEXT_LEFT - HIDE_FIELDS_HOVER_LEFT,
-                                  top: row.textOffset,
-                                }}
-                              >
-                                {row.column.name}
-                              </span>
-                              <span
-                                className="airtable-hide-fields-reorder absolute"
-                                style={{
-                                  left: HIDE_FIELDS_REORDER_LEFT - HIDE_FIELDS_HOVER_LEFT,
-                                  top: row.reorderOffset,
-                                  width: HIDE_FIELDS_REORDER_WIDTH,
-                                  height: HIDE_FIELDS_REORDER_HEIGHT,
-                                }}
-                                aria-hidden="true"
-                              />
-                            </button>
-                          );
-                          })}
-                          <button
-                            type="button"
-                            className="airtable-hide-fields-action absolute"
-                            style={{ left: 16, top: hideFieldsLayout.buttonTop }}
-                            onClick={hideAllColumns}
-                          >
-                            Hide all
-                          </button>
-                          <button
-                            type="button"
-                            className="airtable-hide-fields-action absolute"
-                            style={{
-                              left:
-                                HIDE_FIELDS_DROPDOWN_WIDTH -
-                                16 -
-                                HIDE_FIELDS_BUTTON_WIDTH,
-                              top: hideFieldsLayout.buttonTop,
-                            }}
-                            onClick={showAllColumns}
-                          >
-                            Show all
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="absolute left-[178px] top-0">
-                    <button
-                      ref={filterButtonRef}
-                      type="button"
-                      className={clsx(
-                        "airtable-table-feature-selection airtable-function-hover-pad relative mt-[10px] h-[26px] !min-w-0 w-[77px] !px-0",
-                        hasActiveFilters &&
-                          "airtable-table-feature-selection--filter-active text-[#1d1f24]"
-                      )}
-                      onClick={() =>
-                        setIsFilterMenuOpen((prev) => {
-                          const next = !prev;
-                          if (!next) {
-                            setOpenFilterFieldId(null);
-                            setOpenFilterOperatorId(null);
-                            setOpenFilterConnectorId(null);
-                          }
-                          return next;
-                        })
-                      }
-                      aria-haspopup="menu"
-                      aria-expanded={isFilterMenuOpen}
-                    >
-                      <img
-                        alt=""
-                        className={clsx(
-                          "absolute left-[4px] top-[6px] h-[12px] w-[18px]",
-                          hasActiveFilters && "airtable-filter-icon--active"
-                        )}
-                        src={filterIcon.src}
-                      />
-                      <span className="absolute left-[13px] top-[5px] block h-[16px] w-[60px] truncate text-[13px] leading-[16px]">
-                        {hasActiveFilters
-                          ? `Filtered by ${filteredColumnNames.join(", ")}`
-                          : "Filter"}
-                      </span>
-                    </button>
-                    {isFilterMenuOpen && (
-                      <div
-                        ref={filterMenuRef}
-                        className="airtable-filter-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
-                        style={{
-                          width: filterDropdownWidth,
-                          height: filterDropdownHeight,
-                        }}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <div className="relative h-full w-full">
-                          <div
-                            className="absolute flex items-center gap-[3px] airtable-secondary-font"
-                            style={{
-                              left: filterDropdownHeaderLeft,
-                              top: filterDropdownHeaderTop,
-                            }}
-                          >
-                            <span>Filter</span>
-                          </div>
-                          <div
-                            className="absolute flex items-center border border-[#F2F2F2] bg-white text-[13px] font-normal text-[#757575]"
-                            style={{
-                              left: filterInputLeft,
-                              top: filterInputTop,
-                              width: filterInputWidth,
-                              height: filterInputHeight,
-                              borderRadius: filterInputRadius,
-                              paddingLeft: 7.5,
-                              gap: 7,
-                            }}
-                          >
-                            <img
-                              alt=""
-                              className="h-[21px] w-[21px]"
-                              src={pinkIcon.src}
-                            />
-                            <span>Describe what you want to see</span>
-                          </div>
-                          {!hasFilterItems ? (
-                            <>
-                              <div
-                                className="absolute flex items-center text-[13px] font-normal text-[#8E8F92]"
-                                style={{ left: 16, top: filterEmptyMessageTop }}
-                              >
-                                <span>No filter conditions are applied</span>
-                                <span
-                                  className="airtable-help-icon ml-[6px] text-[#8E8F92]"
-                                  style={{ width: 14, height: 14 }}
-                                  aria-hidden="true"
-                                />
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div
-                                className="absolute text-[13px] font-normal text-[#616670]"
-                                style={{ left: 16, top: filterExpandedMessageTop }}
-                              >
-                                In this view, show records
-                              </div>
-                              <div
-                                className="absolute text-[13px] font-normal text-[#1D1F24]"
-                                style={{
-                                  left: filterRowLeft,
-                                  top: filterWhereTop,
-                                  width: filterConnectorWidth,
-                                  textAlign: "center",
-                                }}
-                              >
-                                Where
-                              </div>
-                              {filterLayout.rows.map((row) => {
-                                const columnId = row.condition.columnId;
-                                const column = columnId ? columnById.get(columnId) : null;
-                                const columnType = coerceColumnType(column?.type);
-                                const operatorLabel = formatFilterOperatorLabel(
-                                  FILTER_OPERATOR_LABELS[row.condition.operator]
-                                );
-                                const operatorOptions = getFilterOperatorsForType(columnType);
-                                const operatorListHeight =
-                                  operatorOptions.length > 0
-                                    ? (operatorOptions.length - 1) *
-                                        filterOperatorMenuRowStride +
-                                      filterOperatorMenuRowHeight
-                                    : 0;
-                                const operatorMenuContentHeight =
-                                  filterOperatorMenuFirstRowTop +
-                                  operatorListHeight +
-                                  filterOperatorMenuBottomPadding;
-                                const operatorMenuHeight = Math.min(
-                                  filterOperatorMenuMaxHeight,
-                                  operatorMenuContentHeight
-                                );
-                                const operatorMenuListHeight = Math.max(
-                                  0,
-                                  operatorMenuHeight -
-                                    filterOperatorMenuFirstRowTop -
-                                    filterOperatorMenuBottomPadding
-                                );
-                                const isFieldMenuOpen = openFilterFieldId === row.condition.id;
-                                const isOperatorMenuOpen =
-                                  openFilterOperatorId === row.condition.id;
-                                const isNumber = columnType === "number";
-                                const isFocused = focusedFilterValueId === row.condition.id;
-                                const hasError = filterValueErrorId === row.condition.id;
-                                const connectorLabel = row.connector;
-                                const showConnectorControl = row.showConnectorControl;
-                                const connectorKey = row.connectorKey;
-                                const isConnectorOpen = openFilterConnectorId === connectorKey;
-                                const fieldValue = row.condition.value;
-                                const scopeGroupId = row.scope === "group" ? row.groupId : undefined;
-                                const isDraggingRow = draggingFilterId === row.condition.id;
-                                const dragOffset =
-                                  isDraggingRow && draggingFilterTop !== null
-                                    ? draggingFilterTop - row.top
-                                    : 0;
-                                const fieldTop =
-                                  (filterRowHeight - filterFieldHeight) / 2 + dragOffset;
-                                const fieldMenuTop = fieldTop + filterFieldHeight + 2;
-                                const operatorMenuTop = fieldMenuTop;
-                                const rowZIndex = isOperatorMenuOpen
-                                  ? 40
-                                  : isDraggingRow
-                                  ? 30
-                                  : isFieldMenuOpen || isConnectorOpen
-                                  ? 25
-                                  : 10;
-                                const hideConnectorControl =
-                                  showConnectorControl && isDraggingRow;
-                                return (
-                                  <div
-                                    key={row.condition.id}
-                                    className="absolute"
-                                    style={{
-                                      left: row.left,
-                                      top: row.top,
-                                      width: filterFieldLeft + filterFieldWidth,
-                                      height: filterRowHeight,
-                                      zIndex: rowZIndex,
-                                      transition: isDraggingRow ? "none" : "top 0.15s ease",
-                                      overflow: "visible",
-                                    }}
-                                  >
-                                  {row.showConnector && !hideConnectorControl && (
-                                    <>
-                                      {showConnectorControl ? (
-                                        <button
-                                          type="button"
-                                          className="absolute flex items-center rounded-[2px] border border-[#E4E4E4] text-[13px] font-normal text-[#1D1F24] hover:bg-[#F2F2F2] cursor-pointer"
-                                          style={{
-                                            width: filterConnectorWidth,
-                                            height: filterConnectorHeight,
-                                            left: 0,
-                                            top: 0,
-                                            paddingLeft: 8,
-                                          }}
-                                          onClick={() =>
-                                            setOpenFilterConnectorId((prev) =>
-                                              prev === connectorKey ? null : connectorKey
-                                            )
-                                          }
-                                          data-filter-connector-trigger={connectorKey}
-                                        >
-                                          <span>{connectorLabel}</span>
-                                          <img
-                                            alt=""
-                                            className="absolute"
-                                            style={{
-                                              width: 10,
-                                              height: 6,
-                                              right: 7,
-                                            }}
-                                            src={arrowIcon.src}
-                                          />
-                                        </button>
-                                      ) : (
-                                        <span
-                                          className="absolute text-[13px] font-normal text-[#1D1F24]"
-                                          style={{ left: 8, top: 8 }}
-                                        >
-                                          {connectorLabel}
-                                        </span>
-                                      )}
-                                      {showConnectorControl && isConnectorOpen && (
-                                        <div
-                                          className="airtable-dropdown-surface absolute z-20"
-                                          data-filter-connector-menu={connectorKey}
-                                          style={{
-                                            width: filterConnectorWidth,
-                                            height: 72,
-                                            left: 0,
-                                            top: filterConnectorHeight,
-                                            borderRadius: 2,
-                                            zIndex: 1000,
-                                          }}
-                                        >
-                                          {FILTER_CONNECTORS.map((connector, index) => (
-                                            <button
-                                              key={connector}
-                                              type="button"
-                                              className="absolute text-[13px] font-normal text-[#1D1F24] cursor-pointer"
-                                              style={{
-                                                left: 6,
-                                                top: index === 0 ? 10 : 46,
-                                              }}
-                                              onClick={() => {
-                                                if (row.showRootConnector) {
-                                                  setFilterConnector(connector);
-                                                } else if (row.groupId) {
-                                                  setFilterItems((prev) =>
-                                                    prev.map((item) =>
-                                                      item.type === "group" &&
-                                                      item.id === row.groupId
-                                                        ? { ...item, connector }
-                                                        : item
-                                                    )
-                                                  );
-                                                }
-                                                setOpenFilterConnectorId(null);
-                                              }}
-                                            >
-                                              {connector}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </>
-                                  )}
-                                  <div
-                                    className="absolute flex items-center text-[13px] font-normal text-[#1D1F24]"
-                                    style={{
-                                      left: filterFieldLeft,
-                                      top: fieldTop,
-                                      width: filterFieldWidth,
-                                      height: filterFieldHeight,
-                                      borderRadius: 3,
-                                      border: "1px solid #E4E4E4",
-                                      background: "#ffffff",
-                                      zIndex: isDraggingRow ? 40 : 10,
-                                      transition: isDraggingRow
-                                        ? "none"
-                                        : "top 0.15s ease",
-                                      overflow: "visible",
-                                    }}
-                                  >
-                                    {filterFieldSeparatorPositions.map((left) => (
-                                      <span
-                                        key={left}
-                                        className="absolute top-0 h-full"
-                                        style={{
-                                          left,
-                                          width: 1,
-                                          background: "#E4E4E4",
-                                        }}
-                                      />
-                                    ))}
-                                    <button
-                                      type="button"
-                                      className="airtable-filter-section absolute cursor-pointer"
-                                      data-filter-field-trigger={row.condition.id}
-                                      style={{
-                                        left: 0,
-                                        top: 0,
-                                        width: filterFieldSeparatorFieldLeft,
-                                        height: filterFieldHeight,
-                                        paddingLeft: 9,
-                                        paddingRight: 22,
-                                        display: "flex",
-                                        alignItems: "center",
-                                      }}
-                                      onClick={() =>
-                                        {
-                                          setOpenFilterOperatorId(null);
-                                          setOpenFilterFieldId((prev) =>
-                                            prev === row.condition.id ? null : row.condition.id
-                                          );
-                                        }
-                                      }
-                                    >
-                                      <span className="text-[13px] font-normal text-[#1D1F24]">
-                                        {column?.name ?? "Name"}
-                                      </span>
-                                      <img
-                                        alt=""
-                                        className="absolute"
-                                        style={{
-                                          width: 10,
-                                          height: 6,
-                                          left: filterFieldSeparatorFieldLeft - 11 - 10,
-                                          top: "50%",
-                                          transform: "translateY(-50%)",
-                                        }}
-                                        src={arrowIcon.src}
-                                      />
-                                    </button>
-                                    {isFieldMenuOpen && (
-                                      <div
-                                        className="airtable-dropdown-surface absolute"
-                                        data-filter-field-menu={row.condition.id}
-                                        style={{
-                                          left: 0,
-                                          top: filterFieldHeight + 2,
-                                          width: filterFieldMenuWidth,
-                                          height: filterFieldMenuHeight,
-                                          borderRadius: 3,
-                                          zIndex: 1000,
-                                        }}
-                                      >
-                                        <div
-                                          className="absolute airtable-find-field-label"
-                                          style={{
-                                            left: filterFieldMenuHeaderLeft,
-                                            top: filterFieldMenuTopPadding,
-                                            lineHeight: `${filterFieldMenuHeaderHeight}px`,
-                                          }}
-                                        >
-                                          Find a field
-                                        </div>
-                                        <div
-                                          ref={filterFieldMenuListRef}
-                                          className="absolute left-0 right-0"
-                                          style={{
-                                            top: filterFieldMenuFirstRowTop - filterFieldMenuHoverPadding,
-                                            height: filterFieldMenuListHeight + filterFieldMenuHoverPadding,
-                                            overflowY:
-                                              filterFieldMenuContentHeight >
-                                              filterFieldMenuHeight
-                                                ? "auto"
-                                                : "hidden",
-                                          }}
-                                        >
-                                          <div
-                                            className="relative w-full"
-                                            style={{ height: filterFieldVirtualizerSize + filterFieldMenuHoverPadding }}
-                                          >
-                                            {filterFieldVirtualItems.map((virtualRow) => {
-                                              const columnOption = orderedColumns[virtualRow.index];
-                                              if (!columnOption) return null;
-                                              const iconSpec = getSortAddMenuIconSpec(
-                                                columnOption.name,
-                                                columnOption.type
-                                              );
-                                              const hoverPadding = (filterFieldMenuRowHeight - filterFieldMenuTextHeight) / 2;
-                                              const hoverBoxTop = virtualRow.start;
-                                              return (
-                                                <button
-                                                  key={columnOption.id}
-                                                  type="button"
-                                                  className="airtable-filter-menu-item airtable-filter-menu-item--field absolute"
-                                                  style={{
-                                                    top: hoverBoxTop,
-                                                    width: filterFieldMenuItemWidth,
-                                                    left: filterFieldMenuItemLeft,
-                                                    height: filterFieldMenuRowHeight,
-                                                  }}
-                                                  onClick={() =>
-                                                    handleFilterFieldSelect(
-                                                      row.condition.id,
-                                                      columnOption.id,
-                                                      scopeGroupId
-                                                    )
-                                                  }
-                                                >
-                                                  <span
-                                                    style={{
-                                                      position: 'absolute',
-                                                      left: 0,
-                                                      top: hoverPadding,
-                                                      width: iconSpec.width,
-                                                      height: iconSpec.height,
-                                                    }}
-                                                  >
-                                                    <img alt="" src={iconSpec.src} style={{ width: '100%', height: '100%' }} />
-                                                  </span>
-                                                  <span
-                                                    style={{
-                                                      position: 'absolute',
-                                                      left: filterFieldMenuLabelLeft - filterFieldMenuItemLeft,
-                                                      top: hoverPadding,
-                                                      fontSize: 13,
-                                                      lineHeight: '13px',
-                                                    }}
-                                                  >
-                                                    {columnOption.name}
-                                                  </span>
-                                                </button>
-                                              );
-                                            })}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="airtable-filter-section absolute cursor-pointer"
-                                      data-filter-operator-trigger={row.condition.id}
-                                      style={{
-                                        left: filterFieldSeparatorFieldLeft,
-                                        top: 0,
-                                        width:
-                                          filterFieldSeparatorOperatorLeft -
-                                          filterFieldSeparatorFieldLeft,
-                                        height: filterFieldHeight,
-                                        paddingLeft: 9,
-                                        paddingRight: 22,
-                                        display: "flex",
-                                        alignItems: "center",
-                                      }}
-                                      onClick={() =>
-                                        {
-                                          setOpenFilterFieldId(null);
-                                          setOpenFilterOperatorId((prev) =>
-                                            prev === row.condition.id ? null : row.condition.id
-                                          );
-                                        }
-                                      }
-                                    >
-                                      <span className="text-[13px] font-normal text-[#1D1F24]">
-                                        {operatorLabel}
-                                      </span>
-                                      <img
-                                        alt=""
-                                        className="absolute"
-                                        style={{
-                                          width: 10,
-                                          height: 6,
-                                          left:
-                                            filterFieldSeparatorOperatorLeft -
-                                            filterFieldSeparatorFieldLeft -
-                                            11 -
-                                            10,
-                                          top: "50%",
-                                          transform: "translateY(-50%)",
-                                        }}
-                                        src={arrowIcon.src}
-                                      />
-                                    </button>
-                                    {isOperatorMenuOpen && (
-                                        <div
-                                          className="airtable-dropdown-surface absolute"
-                                          data-filter-operator-menu={row.condition.id}
-                                          style={{
-                                            left: filterFieldSeparatorFieldLeft,
-                                            top: filterFieldHeight + 2,
-                                            width: filterOperatorMenuWidth,
-                                            height: operatorMenuHeight,
-                                            borderRadius: 3,
-                                            zIndex: 3000,
-                                          }}
-                                        >
-                                        <div
-                                          className="absolute text-[13px] font-normal text-[#757575]"
-                                          style={{
-                                            left: filterFieldMenuHeaderLeft,
-                                            top: filterFieldMenuTopPadding,
-                                            lineHeight: `${filterFieldMenuHeaderHeight}px`,
-                                          }}
-                                        >
-                                          Find an operator
-                                        </div>
-                                        <div
-                                          ref={filterOperatorMenuListRef}
-                                          className="absolute left-0 right-0"
-                                          style={{
-                                            top: filterOperatorMenuFirstRowTop - filterOperatorMenuHoverPadding,
-                                            height: operatorMenuListHeight + filterOperatorMenuHoverPadding,
-                                            overflowY:
-                                              operatorMenuContentHeight >
-                                              filterOperatorMenuMaxHeight
-                                                ? "auto"
-                                                : "hidden",
-                                          }}
-                                        >
-                                          <div
-                                            className="relative w-full"
-                                            style={{ height: operatorListHeight }}
-                                          >
-                                            {operatorOptions.map((operator, index) => {
-                                              const hoverBoxTop = index * filterOperatorMenuRowStride;
-                                              return (
-                                                <button
-                                                  key={operator}
-                                                  type="button"
-                                                  className="airtable-filter-menu-item airtable-filter-menu-item--operator absolute"
-                                                  style={{
-                                                    top: hoverBoxTop,
-                                                    width: filterOperatorMenuItemWidth,
-                                                    left: filterOperatorMenuItemLeft,
-                                                    height: filterOperatorMenuRowHeight,
-                                                  }}
-                                                  onClick={() =>
-                                                    handleFilterOperatorSelect(
-                                                      row.condition.id,
-                                                      operator,
-                                                      scopeGroupId
-                                                    )
-                                                  }
-                                                >
-                                                  <span
-                                                    className="airtable-filter-menu-item-label"
-                                                    style={{
-                                                      position: 'absolute',
-                                                      left: 8,
-                                                      top: '50%',
-                                                      transform: 'translateY(-50%)',
-                                                    }}
-                                                  >
-                                                    {FILTER_OPERATOR_LABELS[operator]}
-                                                  </span>
-                                                </button>
-                                              );
-                                            })}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    <div
-                                      className={`airtable-filter-section absolute flex items-center${isFocused ? " airtable-filter-section--no-hover" : ""}`}
-                                      style={{
-                                        left: filterFieldSeparatorOperatorLeft,
-                                        width:
-                                          filterFieldSeparatorValueLeft -
-                                          filterFieldSeparatorOperatorLeft,
-                                        height: filterFieldHeight,
-                                        paddingLeft: 9,
-                                        paddingRight: 9,
-                                        cursor: "text",
-                                      }}
-                                    >
-                                      <div
-                                        className="absolute"
-                                        style={{
-                                          left: 0,
-                                          right: 0,
-                                          top: -4,
-                                          bottom: -4,
-                                          border: isFocused
-                                            ? "2px solid #156FE2"
-                                            : "2px solid transparent",
-                                          borderRadius: 2,
-                                        }}
-                                      />
-                                      {isNumber && isFocused && (
-                                        <div
-                                          className="absolute"
-                                          style={{
-                                            left: 4,
-                                            right: 4,
-                                            top: 2,
-                                            bottom: 2,
-                                            border: hasError
-                                              ? "2px solid #DC053C"
-                                              : "2px solid #BFBFBF",
-                                            borderRadius: 2,
-                                          }}
-                                        />
-                                      )}
-                                      <input
-                                        value={fieldValue}
-                                        onChange={(event) =>
-                                          handleFilterValueChange(
-                                            row.condition.id,
-                                            event.target.value,
-                                            scopeGroupId
-                                          )
-                                        }
-                                        onFocus={() =>
-                                          setFocusedFilterValueId(row.condition.id)
-                                        }
-                                        onBlur={() => {
-                                          setFocusedFilterValueId(null);
-                                          setFilterValueErrorId(null);
-                                        }}
-                                        placeholder="Enter a value"
-                                        inputMode={isNumber ? "decimal" : undefined}
-                                        pattern={
-                                          isNumber ? "^-?\\d*(?:\\.\\d{0,8})?$" : undefined
-                                        }
-                                        className="relative z-10 w-full bg-transparent text-[13px] font-normal text-[#1D1F24] outline-none placeholder:text-[#616670]"
-                                        style={{
-                                          paddingLeft: 0,
-                                          paddingRight: 0,
-                                        }}
-                                      />
-                                    </div>
-                                    <button
-                                      type="button"
-                                      className="airtable-filter-section absolute flex items-center justify-center cursor-pointer"
-                                      style={{
-                                        left: filterFieldSeparatorValueLeft,
-                                        top: 0,
-                                        width:
-                                          filterFieldSeparatorActionsLeft -
-                                          filterFieldSeparatorValueLeft,
-                                        height: filterFieldHeight,
-                                      }}
-                                      onClick={() => {
-                                        if (row.scope === "root") {
-                                          setFilterItems((prev) =>
-                                            prev.filter(
-                                              (item) =>
-                                                item.type !== "condition" ||
-                                                item.id !== row.condition.id
-                                            )
-                                          );
-                                        } else if (row.groupId) {
-                                          setFilterItems((prev) =>
-                                            prev.flatMap((item) => {
-                                              if (
-                                                item.type !== "group" ||
-                                                item.id !== row.groupId
-                                              ) {
-                                                return [item];
-                                              }
-                                              const nextConditions = item.conditions.filter(
-                                                (condition) =>
-                                                  condition.id !== row.condition.id
-                                              );
-                                              if (nextConditions.length === 0) return [];
-                                              return [{ ...item, conditions: nextConditions }];
-                                            })
-                                          );
-                                        }
-                                      }}
-                                      aria-label="Delete condition"
-                                    >
-                                      <img
-                                        alt=""
-                                        style={{
-                                          width: 13.15,
-                                          height: 15.45,
-                                        }}
-                                        src={deleteIcon.src}
-                                      />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="airtable-filter-section absolute flex items-center justify-center cursor-grab"
-                                      style={{
-                                        left: filterFieldSeparatorActionsLeft,
-                                        top: 0,
-                                        width: filterFieldWidth - filterFieldSeparatorActionsLeft,
-                                        height: filterFieldHeight,
-                                      }}
-                                      onMouseDown={(event) =>
-                                        handleFilterDragStart(
-                                          event,
-                                          row.condition.id,
-                                          row.scope,
-                                          row.groupId
-                                        )
-                                      }
-                                      aria-label="Reorder condition"
-                                    >
-                                      <img
-                                        alt=""
-                                        style={{
-                                          width: 10.23,
-                                          height: 13.3,
-                                        }}
-                                        src={reorderIcon.src}
-                                      />
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          className={clsx(
-                            "absolute flex items-center text-[13px] font-medium cursor-pointer",
-                            activeFilterAdd === "condition"
-                              ? "text-[#156FE2]"
-                              : "text-[#616670] hover:text-[#1D1F24]"
-                          )}
-                          style={{ left: 16, top: filterFooterTop, gap: 5 }}
-                          onClick={addFilterCondition}
-                        >
-                          <span className="airtable-plus-icon airtable-plus-icon--small" />
-                          <span>Add condition</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={clsx(
-                            "absolute flex items-center text-[13px] font-medium cursor-pointer",
-                            activeFilterAdd === "group"
-                              ? "text-[#156FE2]"
-                              : "text-[#616670] hover:text-[#1D1F24]"
-                          )}
-                          style={{ left: 150, top: filterFooterTop, gap: 5 }}
-                          onClick={addFilterGroup}
-                        >
-                          <span className="airtable-plus-icon airtable-plus-icon--small" />
-                          <span>Add condition group</span>
-                          <span
-                            className="airtable-help-icon"
-                            style={{ width: 14, height: 14, marginLeft: 10 }}
-                          />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className="absolute left-[261px] top-[10px] h-[26px] w-[60px] text-left"
-                >
-                  <img alt="" className="absolute left-0 top-[6px] h-[14px] w-[16px]" src={groupIcon.src} />
-                  <span className="absolute left-[20px] top-[5px] block h-[16px] w-[40px] text-[13px] leading-[16px]">
-                    Group
-                  </span>
-                </button>
-                <div className="absolute left-[338px] top-0">
-                  <button
-                    ref={sortButtonRef}
-                    type="button"
-                    className={clsx(
-                      "airtable-table-feature-selection airtable-function-hover-pad relative mt-[10px] h-[26px] !min-w-0 w-[66px] !px-0",
-                      hasSort &&
-                        "airtable-table-feature-selection--active text-[#1d1f24]"
-                    )}
-                    onClick={() =>
-                      setIsSortMenuOpen((prev) => {
-                        const next = !prev;
-                        if (!next) {
-                          setOpenSortDirectionId(null);
-                          setOpenSortFieldId(null);
-                          setIsAddSortMenuOpen(false);
-                        }
-                        return next;
-                      })
-                    }
-                    aria-haspopup="menu"
-                    aria-expanded={isSortMenuOpen}
-                  >
-                    <span className="absolute left-[4px] top-[6px] inline-flex h-[14px] w-[13px]">
-                      <img
-                        alt=""
-                        className={clsx(
-                          "h-[14px] w-[13px]",
-                          hasSort && "airtable-sort-icon--active"
-                        )}
-                        src={sortIcon.src}
-                      />
-                      <span
-                        className="airtable-sort-white-overlay airtable-sort-white-overlay--hover"
-                        aria-hidden="true"
-                      />
-                      {hasSort && (
-                        <>
-                          <span
-                            className="airtable-sort-white-overlay airtable-sort-white-overlay--active"
-                            aria-hidden="true"
-                          />
-                          <span className="airtable-sort-arrow-overlay" aria-hidden="true" />
-                        </>
-                      )}
-                    </span>
-                    <span className="absolute left-[10px] top-[5px] block h-[16px] w-[52px] truncate text-[13px] leading-[16px]">
-                      {hasSort
-                        ? `Sorted by ${sortRows.length} ${
-                            sortRows.length === 1 ? "field" : "fields"
-                          }`
-                        : "Sort"}
-                    </span>
-                  </button>
-                  {isSortMenuOpen && (
-                    <div
-                      ref={sortMenuRef}
-                      className="airtable-sort-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
-                      style={{
-                        width: hasSort ? sortConfiguredWidth : 320,
-                        height: hasSort ? sortConfiguredHeight : sortListHeight,
-                      }}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <div className="relative h-full w-full">
-                        <div className="absolute left-[20px] top-[14px] flex items-center gap-[3px] airtable-secondary-font">
-                          <span>Sort by</span>
-                          <span className="airtable-help-icon" aria-hidden="true" />
-                        </div>
-                        <div
-                          className="absolute left-[20px] top-[41px] h-px bg-[#E5E5E5]"
-                          style={{ width: hasSort ? sortLineWidth : 280 }}
-                        />
-                        {hasSort ? (
-                          <>
-                            {sortRows.map((sortItem, index) => {
-                              const rowTop = sortFieldTop + index * sortRowStride;
-                              const isDragging = draggingSortId === sortItem.columnId;
-                              const displayTop =
-                                isDragging && draggingSortTop !== null ? draggingSortTop : rowTop;
-                              const fieldMenuColumns = orderedColumns.filter(
-                                (column) =>
-                                  column.id === sortItem.columnId ||
-                                  !sortedColumnIds.has(column.id)
-                              );
-                              const fieldMenuHeight =
-                                sortFieldMenuFirstRowTop +
-                                Math.max(0, fieldMenuColumns.length - 1) *
-                                  (sortFieldMenuRowHeight + sortFieldMenuGap) +
-                                (fieldMenuColumns.length > 0
-                                  ? sortFieldMenuRowHeight
-                                  : 0) +
-                                sortFieldMenuPadding;
-                              const directionLabels = getSortDirectionLabels(
-                                sortItem.columnId
-                              );
-                              const removeTop = (sortFieldHeight - sortRemoveSize) / 2;
-                              const reorderTop = (sortFieldHeight - 13) / 2;
-                              const isFieldMenuOpen =
-                                openSortFieldId === sortItem.columnId;
-                              const isDirectionMenuOpen =
-                                openSortDirectionId === sortItem.columnId;
-                              const shouldElevateRow =
-                                isDragging || isFieldMenuOpen || isDirectionMenuOpen;
-                              const columnLabel =
-                                columnById.get(sortItem.columnId)?.name ?? "Select field";
-                              return (
-                                <div
-                                  key={sortItem.columnId}
-                                  className="airtable-sort-row absolute left-0 right-0"
-                                  style={{
-                                    top: displayTop,
-                                    height: sortFieldHeight,
-                                    zIndex: shouldElevateRow ? 30 : 0,
-                                    transition: isDragging ? "none" : "top 0.15s ease",
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    className="airtable-sort-field absolute"
-                                    style={{ left: sortFieldLeft, width: sortFieldWidth }}
-                                    onClick={() => {
-                                      setOpenSortFieldId((prev) =>
-                                        prev === sortItem.columnId ? null : sortItem.columnId
-                                      );
-                                      setOpenSortDirectionId(null);
-                                      setIsAddSortMenuOpen(false);
-                                    }}
-                                    aria-expanded={isFieldMenuOpen}
-                                  >
-                                    <span>{columnLabel}</span>
-                                    <span className="ml-auto airtable-nav-chevron rotate-90" />
-                                  </button>
-                                  {isFieldMenuOpen && (
-                                    <div
-                                      className="airtable-sort-field-menu z-30"
-                                      ref={sortFieldMenuRef}
-                                      style={{
-                                        left: sortFieldLeft,
-                                        top: sortFieldHeight + 1,
-                                        width: sortFieldMenuWidth,
-                                        height: fieldMenuHeight,
-                                      }}
-                                    >
-                                      <div
-                                        className="absolute airtable-find-field-label"
-                                        style={{ left: 9, top: sortFieldMenuPadding }}
-                                      >
-                                        Find a field
-                                      </div>
-                                      {fieldMenuColumns.map((column, itemIndex) => {
-                                        const itemTop =
-                                          sortFieldMenuFirstRowTop +
-                                          itemIndex *
-                                            (sortFieldMenuRowHeight + sortFieldMenuGap);
-                                        const iconSrc = getColumnIconSrc(
-                                          column.name,
-                                          column.type
-                                        );
-                                        const isStatusColumn = column.name === "Status";
-                                        return (
-                                          <button
-                                            key={column.id}
-                                            type="button"
-                                            className="airtable-sort-field-menu-item"
-                                            style={{ top: itemTop }}
-                                            onClick={() => {
-                                              const nextSorts: SortConfig[] = sortRows.map(
-                                                (item): SortConfig => {
-                                                if (item.columnId !== sortItem.columnId) {
-                                                  return item;
-                                                }
-                                                const isSameColumn =
-                                                  column.id === sortItem.columnId;
-                                                const nextDirection: SortConfig["direction"] =
-                                                  isSameColumn
-                                                    ? item.direction
-                                                    : coerceColumnType(column.type) === "number"
-                                                    ? "asc"
-                                                    : item.direction;
-                                                return {
-                                                  columnId: column.id,
-                                                  direction: nextDirection,
-                                                };
-                                              }
-                                              );
-                                              applySorts(nextSorts);
-                                              setOpenSortFieldId(null);
-                                            }}
-                                          >
-                                            {iconSrc ? (
-                                              <img
-                                                alt=""
-                                                className="airtable-sort-field-menu-icon"
-                                                style={
-                                                  isStatusColumn
-                                                    ? {
-                                                        width: STATUS_MENU_ICON_SIZE,
-                                                        height: STATUS_MENU_ICON_SIZE,
-                                                      }
-                                                    : undefined
-                                                }
-                                                src={iconSrc}
-                                              />
-                                            ) : (
-                                              <span
-                                                className="airtable-sort-field-menu-icon"
-                                                aria-hidden="true"
-                                              />
-                                            )}
-                                            <span>{column.name}</span>
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="airtable-sort-direction absolute"
-                                    style={{
-                                      left: sortDirectionLeft,
-                                      width: sortDirectionWidth,
-                                    }}
-                                    onClick={() => {
-                                      setOpenSortDirectionId((prev) =>
-                                        prev === sortItem.columnId ? null : sortItem.columnId
-                                      );
-                                      setOpenSortFieldId(null);
-                                      setIsAddSortMenuOpen(false);
-                                    }}
-                                    aria-expanded={isDirectionMenuOpen}
-                                  >
-                                    <span>
-                                      {sortItem.direction === "asc"
-                                        ? directionLabels.asc
-                                        : directionLabels.desc}
-                                    </span>
-                                    <span className="ml-auto airtable-nav-chevron rotate-90" />
-                                  </button>
-                                  {isDirectionMenuOpen && (
-                                    <div
-                                      className="airtable-sort-direction-menu absolute z-10"
-                                      style={{
-                                        left: sortDirectionLeft,
-                                        top: sortFieldHeight + 1,
-                                        width: sortDirectionWidth,
-                                        height: 73,
-                                      }}
-                                    >
-                                      <button
-                                        type="button"
-                                        className="airtable-sort-direction-option"
-                                        style={{ top: 12 }}
-                                        onClick={() => {
-                                          const nextSorts = sortRows.map((item) =>
-                                            item.columnId === sortItem.columnId
-                                              ? { ...item, direction: "asc" as const }
-                                              : item
-                                          );
-                                          applySorts(nextSorts);
-                                          setOpenSortDirectionId(null);
-                                        }}
-                                      >
-                                        {directionLabels.asc}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="airtable-sort-direction-option"
-                                        style={{ top: 48 }}
-                                        onClick={() => {
-                                          const nextSorts = sortRows.map((item) =>
-                                            item.columnId === sortItem.columnId
-                                              ? { ...item, direction: "desc" as const }
-                                              : item
-                                          );
-                                          applySorts(nextSorts);
-                                          setOpenSortDirectionId(null);
-                                        }}
-                                      >
-                                        {directionLabels.desc}
-                                      </button>
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="airtable-sort-remove absolute"
-                                    style={{ left: sortRemoveLeft, top: removeTop }}
-                                    onClick={() => {
-                                      const nextSorts = sortRows.filter(
-                                        (item) => item.columnId !== sortItem.columnId
-                                      );
-                                      applySorts(nextSorts.length ? nextSorts : null);
-                                      setOpenSortDirectionId(null);
-                                      setOpenSortFieldId(null);
-                                    }}
-                                    aria-label="Remove sort"
-                                  >
-                                    <img alt="" className="h-[12px] w-[12px]" src={xIcon.src} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="airtable-sort-reorder absolute"
-                                    style={{ left: sortReorderLeft, top: reorderTop }}
-                                    onMouseDown={(event) =>
-                                      handleSortDragStart(event, sortItem.columnId)
-                                    }
-                                    aria-label="Reorder sort"
-                                  >
-                                    <img
-                                      alt=""
-                                      style={{ width: sortReorderWidth, height: 13 }}
-                                      src={reorderIcon.src}
-                                    />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                            <div className="absolute" style={{ left: 23, top: sortAddTop }}>
-                              <button
-                                type="button"
-                                className="airtable-sort-add"
-                                disabled={remainingSortColumns.length === 0}
-                                onClick={() => {
-                                  if (!remainingSortColumns.length) return;
-                                  setIsAddSortMenuOpen((prev) => !prev);
-                                  setOpenSortDirectionId(null);
-                                  setOpenSortFieldId(null);
-                                }}
-                                aria-expanded={isAddSortMenuOpen}
-                              >
-                                <span className="airtable-plus-icon" aria-hidden="true" />
-                                <span>Add another sort</span>
-                              </button>
-                              {isAddSortMenuOpen && remainingSortColumns.length > 0 && (
-                                <div
-                                  className="airtable-sort-add-menu absolute z-10"
-                                  style={{
-                                    top: "calc(100% + 7px)",
-                                    width: sortAddMenuWidth,
-                                    height: sortAddMenuHeight,
-                                  }}
-                                >
-                                  <div
-                                    className="absolute airtable-find-field-label"
-                                    style={{ left: 10, top: 10 }}
-                                  >
-                                    Find a field
-                                  </div>
-                                  <div
-                                    ref={sortAddMenuListRef}
-                                    className="airtable-sort-add-menu-list absolute left-0 right-0"
-                                    style={{
-                                      top: sortAddMenuFirstRowTop,
-                                      height: sortAddMenuListHeight,
-                                      overflowY:
-                                        sortAddMenuContentHeight > sortAddMenuHeight
-                                          ? "auto"
-                                          : "hidden",
-                                    }}
-                                  >
-                                    <div
-                                      className="relative w-full"
-                                      style={{ height: sortAddVirtualizerSize }}
-                                    >
-                                      {sortAddVirtualItems.map((virtualRow) => {
-                                        const column =
-                                          remainingSortColumns[virtualRow.index];
-                                        if (!column) return null;
-                                        const iconSpec = getSortAddMenuIconSpec(
-                                          column.name,
-                                          column.type
-                                        );
-                                        return (
-                                          <button
-                                            key={column.id}
-                                            type="button"
-                                            className="airtable-sort-add-menu-item"
-                                            style={{
-                                              top: virtualRow.start,
-                                              height: sortAddMenuRowHeight,
-                                            }}
-                                            onClick={() => {
-                                              const nextSorts = [
-                                                ...sortRows,
-                                                { columnId: column.id, direction: "asc" as const },
-                                              ];
-                                              applySorts(nextSorts);
-                                              setIsAddSortMenuOpen(false);
-                                            }}
-                                          >
-                                            <img
-                                              alt=""
-                                              className="airtable-sort-add-menu-icon absolute top-1/2 -translate-y-1/2"
-                                              style={{
-                                                left: iconSpec.left,
-                                                width: iconSpec.width,
-                                                height: iconSpec.height,
-                                              }}
-                                              src={iconSpec.src}
-                                            />
-                                            <span
-                                              className="airtable-sort-add-menu-label absolute top-1/2 -translate-y-1/2"
-                                              style={{ left: 30 }}
-                                            >
-                                              {column.name}
-                                            </span>
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                            <div
-                              className="absolute left-px right-px h-px bg-[#E4E4E4]"
-                              style={{ top: sortFooterTop - 1 }}
-                              aria-hidden="true"
-                            />
-                            <div
-                              className="airtable-sort-footer absolute left-0 right-0"
-                              style={{
-                                top: sortFooterTop,
-                                bottom: 0,
-                                paddingLeft: 22,
-                              }}
-                            >
-                              <div className="flex h-full items-center gap-[7px]">
-                                <img
-                                  alt=""
-                                  className="h-[16px] w-[22px]"
-                                  src={toggleIcon.src}
-                                />
-                                <span className="text-[13px] font-normal text-[#1d1f24]">
-                                  Automatically sort records
-                                </span>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <span
-                              className="airtable-search-icon absolute left-[21px] top-[58px] text-[#156FE2]"
-                              aria-hidden="true"
-                            />
-                            <div className="absolute left-[48px] top-[57px] text-[13px] font-normal text-[#989AA1]">
-                              Find a field
-                            </div>
-                            {orderedColumns.map((column, index) => {
-                              const top = 57 + 32 * (index + 1);
-                              const iconSrc = getColumnIconSrc(
-                                column.name,
-                                column.type
-                              );
-                              const isStatusColumn = column.name === "Status";
-                              return (
-                                <button
-                                  key={column.id}
-                                  type="button"
-                                  className="airtable-sort-option"
-                                  style={{ top }}
-                                  onClick={() => {
-                                    applySorts([
-                                      { columnId: column.id, direction: "asc" as const },
-                                    ]);
-                                    setOpenSortDirectionId(null);
-                                    setOpenSortFieldId(null);
-                                    setIsAddSortMenuOpen(false);
-                                  }}
-                                >
-                                  {iconSrc ? (
-                                    <img
-                                      alt=""
-                                      className="airtable-sort-option-icon"
-                                      style={
-                                        isStatusColumn
-                                          ? {
-                                              width: STATUS_MENU_ICON_SIZE,
-                                              height: STATUS_MENU_ICON_SIZE,
-                                            }
-                                          : undefined
-                                      }
-                                      src={iconSrc}
-                                    />
-                                  ) : (
-                                    <span
-                                      className="airtable-sort-option-icon"
-                                      aria-hidden="true"
-                                    />
-                                  )}
-                                  <span>{column.name}</span>
-                                </button>
-                              );
-                            })}
-                          </>
-                        )}
-                        </div>
-                      </div>
-                    )}
-                    </div>
-                    <button
-                      type="button"
-                      className="absolute left-[410px] top-[10px] h-[26px] w-[68px] text-left"
-                    >
-                      <img
-                        alt=""
-                        className="absolute left-0 top-[3px] h-[19px] w-[20px]"
-                        src={colourIcon.src}
-                      />
-                      <span className="absolute left-[20px] top-[5px] block h-[16px] w-[48px] text-[13px] leading-[16px]">
-                        Color
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="absolute left-[485px] top-0 h-full w-[19px]"
-                      aria-label="Row height"
-                    >
-                      <img
-                        alt=""
-                        className="absolute left-0 top-[16px] h-[15px] w-[19px]"
-                        src={rowHeightIcon.src}
-                      />
-                    </button>
-                    <button
-                      type="button"
-                      className="absolute left-[528px] top-[10px] h-[26px] w-[114px] text-left"
-                    >
-                      <img
-                        alt=""
-                        className="absolute left-0 top-[6px] h-[15px] w-[15px]"
-                        src={shareSyncIcon.src}
-                      />
-                      <span className="absolute left-[19px] top-[5px] block h-[16px] w-[95px] whitespace-nowrap text-[13px] leading-[16px]">
-                        Share and sync
-                      </span>
-                    </button>
-                  </div>
-                  <button
-                    ref={searchButtonRef}
-                    type="button"
-                    className="airtable-table-feature-selection airtable-search-trigger ml-[21px]"
-                    onClick={() => setIsSearchMenuOpen((prev) => !prev)}
-                    aria-haspopup="dialog"
-                    aria-expanded={isSearchMenuOpen}
-                    aria-label="Search"
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 30 30.000001"
-                      className="block"
-                      aria-hidden="true"
-                      xmlns="http://www.w3.org/2000/svg"
-                      xmlnsXlink="http://www.w3.org/1999/xlink"
-                      preserveAspectRatio="xMidYMid meet"
-                    >
-                      <defs>
-                        <clipPath id={`${searchMaskId}-clip1`}>
-                          <path d="M 0.484375 0 L 29.515625 0 L 29.515625 29.03125 L 0.484375 29.03125 Z M 0.484375 0 " clipRule="nonzero" />
-                        </clipPath>
-                        <clipPath id={`${searchMaskId}-clip2`}>
-                          <path d="M 0.484375 0 L 29.515625 0 L 29.515625 29 L 0.484375 29 Z M 0.484375 0 " clipRule="nonzero" />
-                        </clipPath>
-                      </defs>
-                      <g clipPath={`url(#${searchMaskId}-clip1)`}>
-                        <path fill="var(--search-icon-bg)" d="M 0.484375 0 L 29.515625 0 L 29.515625 29.03125 L 0.484375 29.03125 Z M 0.484375 0 " fillOpacity="1" fillRule="nonzero" />
-                        <path fill="var(--search-icon-bg)" d="M 0.484375 0 L 29.515625 0 L 29.515625 29.03125 L 0.484375 29.03125 Z M 0.484375 0 " fillOpacity="1" fillRule="nonzero" />
-                      </g>
-                      <g clipPath={`url(#${searchMaskId}-clip2)`}>
-                        <g transform="matrix(1.036866, 0, 0, 1.036866, 0.48387, 0.00000193548)">
-                          <image
-                            x="0"
-                            y="0"
-                            width="28"
-                            height="28"
-                            href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAIAAAD9b0jDAAAABmJLR0QA/wD/AP+gvaeTAAACk0lEQVRIia3Vz0vbYBgH8Cc66i5SYhGzjSS7vNkhrQe1NepWqVaFdpTsto1tHvTgfYwyHQwFHWN/QUsHVg96LL0ponS1g7aDCtsO204G2irWvl5TarNDoNY0rf3h9/i+7/Mhed+8TwhFUeC2c0d3VFGUZPLHzu5eIpE8OT3DOE+SPVRfr81mnZl2Wq1DBEHUQYnqJ43Fvq99+vLz1+9aNRYzv/j+3djYaEPo5eXl6trnwNcggPLg/j1R9Ew4xhmGIUkSYyxJ0v5BJBQKpzNZAGJ+bnZp0dvZ2an/pmqKxeLc/ALNIsTxPn9AlmVFL7Is+/wBxPE0i+bmF4rFYvWaK3R5ZZVm0cCgkEod6XKVSaWOBgYFmkXLK6s10ehhjGY5xPGNiGUXcTzNctHDmA5aKpVcbpFmkc8faFBU4/MHaBa53GKpVNKi8XiCZpEwYq+1j7Uiy7IwYqdZFI8nKsc7AGBndw8ARNFjMBjqfH3VMRgMougpC+V0AEAikQSACcd4U6IatUoVrqEnp2cAwDBMC6hapQrXUIzzAECSZAuoWoXzWIuSZA8AYIx1y+oHX2AAMBq7tSjV1wsAkiS1gErHEgBQFKVFbTYrAOwfRFpA1Sph2KZFZ6adABAKhQuFQlNioVAIhcIAMOl0aFGrdchi5tOZ7Hpwsyl0PbiZzmQtZn50RLg2od6Blu8+8xBFvkU1U+12qaUPH6tn2+qnNIucU65cLqdZ03Dnv8DS8VXnJwh4/eplPJ788/ffIw5tb22YTKay0+I/yut9a3/y+Pz8/PmLN9WuDgrVf9M8Nhq7KYoShm2TTkflWeu7N57Jjcnlcs4pV+X+3gJa6bqfPlPUJt1+TCbT9tZGf7+5625XzT1tM/8BN4afAouIszQAAAAASUVORK5CYII="
-                            preserveAspectRatio="xMidYMid meet"
-                          />
-                        </g>
-                      </g>
-                    </svg>
-                  </button>
-                </div>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 h-px bg-[#DEDEDE]" aria-hidden="true" />
-              {isSearchMenuOpen && (
-                <div
-                  ref={searchMenuRef}
-                  className="absolute right-[8px] top-[calc(100%+1px)] z-50 h-[41px] w-[370px] rounded-b-[5px] rounded-t-none border-[2px] border-[#E5E5E5] border-t-0 bg-white"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <div className="relative h-full w-full">
-                    <input
-                      ref={searchInputRef}
-                      value={searchValue}
-                      onChange={(event) => {
-                        setSearchValue(event.target.value);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          setIsSearchMenuOpen(false);
-                        }
-                      }}
-                      placeholder="Find in view..."
-                      className="absolute bg-transparent text-[13px] font-normal text-[#1D1F24] placeholder:text-[#A9A9A9] focus:outline-none"
-                      style={{ left: 12, top: 12, right: 101 }}
-                      aria-label="Find in view"
-                    />
-                    {showSearchSpinner && (
-                      <span
-                        className="airtable-search-spinner"
-                        style={{ right: 111, top: 13 }}
-                        aria-hidden="true"
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 14 14"
-                          aria-hidden="true"
-                        >
-                          <circle
-                            cx="7"
-                            cy="7"
-                            r="6.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1"
-                            strokeLinecap="round"
-                            strokeDasharray="0.5 0.5"
-                            pathLength="3"
-                          />
-                        </svg>
-                      </span>
-                    )}
-                    {showNoSearchResults && (
-                      <span
-                        className="airtable-search-no-results"
-                        style={{ right: 110, top: 14 }}
-                      >
-                        No results
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className="absolute flex items-center justify-center rounded-[6px] bg-[#1D1F24] text-[11px] font-medium text-white"
-                      style={{
-                        left: 269,
-                        top: 8,
-                        width: 67,
-                        height: 24,
-                        boxShadow: "var(--airtable-button-shadow)",
-                      }}
-                    >
-                      Ask Omni
-                    </button>
-                  <button
-                    type="button"
-                    className="airtable-table-feature-selection airtable-x-trigger absolute"
-                    style={{ left: 340, top: 9 }}
-                    onClick={() => setIsSearchMenuOpen(false)}
-                    aria-label="Close search"
-                  >
-                    <svg
-                      width="10"
-                      height="10"
-                        viewBox="0 0 10 10"
-                        className="block"
-                        aria-hidden="true"
-                      >
-                      <defs>
-                        <filter id={`${closeMaskId}-invert`}>
-                          <feColorMatrix
-                            type="matrix"
-                            values="-1 0 0 0 1 0 -1 0 0 1 0 0 -1 0 1 0 0 0 1 0"
-                          />
-                        </filter>
-                        <mask
-                          id={`${closeMaskId}-mask`}
-                          maskUnits="userSpaceOnUse"
-                          x="0"
-                          y="0"
-                          width="10"
-                          height="10"
-                          maskContentUnits="userSpaceOnUse"
-                        >
-                          <image
-                            href={xIcon.src}
-                            width="10"
-                            height="10"
-                            filter={`url(#${closeMaskId}-invert)`}
-                            preserveAspectRatio="xMidYMid meet"
-                          />
-                        </mask>
-                      </defs>
-                      <rect
-                        width="10"
-                        height="10"
-                        fill="#1D1F24"
-                        mask={`url(#${closeMaskId}-mask)`}
-                      />
-                    </svg>
-                  </button>
-                </div>
-                </div>
-              )}
-          </div>
+            <FunctionBar
+              bulkRowsDisabled={bulkRowsDisabled}
+              handleAddBulkRows={handleAddBulkRows}
+              hideFieldsButtonRef={hideFieldsButtonRef}
+              hideFieldsMenuRef={hideFieldsMenuRef}
+              isHideFieldsMenuOpen={isHideFieldsMenuOpen}
+              setIsHideFieldsMenuOpen={setIsHideFieldsMenuOpen}
+              hiddenFieldCount={hiddenFieldCount}
+              hiddenColumnIdSet={hiddenColumnIdSet}
+              hideFieldsLayout={hideFieldsLayout}
+              toggleHiddenColumn={toggleHiddenColumn}
+              hideAllColumns={hideAllColumns}
+              showAllColumns={showAllColumns}
+              filterButtonRef={filterButtonRef}
+              isFilterMenuOpen={isFilterMenuOpen}
+              setIsFilterMenuOpen={setIsFilterMenuOpen}
+              hasActiveFilters={hasActiveFilters}
+              filteredColumnNames={filteredColumnNames}
+              filterMenuRef={filterMenuRef}
+              filterFieldMenuListRef={filterFieldMenuListRef}
+              filterOperatorMenuListRef={filterOperatorMenuListRef}
+              filterItems={filterItems}
+              setFilterItems={setFilterItems}
+              filterConnector={filterConnector}
+              setFilterConnector={setFilterConnector}
+              openFilterFieldId={openFilterFieldId}
+              setOpenFilterFieldId={setOpenFilterFieldId}
+              openFilterOperatorId={openFilterOperatorId}
+              setOpenFilterOperatorId={setOpenFilterOperatorId}
+              openFilterConnectorId={openFilterConnectorId}
+              setOpenFilterConnectorId={setOpenFilterConnectorId}
+              focusedFilterValueId={focusedFilterValueId}
+              setFocusedFilterValueId={setFocusedFilterValueId}
+              filterValueErrorId={filterValueErrorId}
+              setFilterValueErrorId={setFilterValueErrorId}
+              draggingFilterId={draggingFilterId}
+              draggingFilterTop={draggingFilterTop}
+              phantomFilterX={phantomFilterX}
+              phantomFilterY={phantomFilterY}
+              highlightedFilterFieldId={highlightedFilterFieldId}
+              highlightedFilterOperatorId={highlightedFilterOperatorId}
+              activeFilterAdd={activeFilterAdd}
+              handleFilterFieldSelect={handleFilterFieldSelect}
+              handleFilterOperatorSelect={handleFilterOperatorSelect}
+              handleFilterValueChange={handleFilterValueChange}
+              handleFilterDragStart={handleFilterDragStart}
+              addFilterCondition={addFilterCondition}
+              addFilterGroup={addFilterGroup}
+              addFilterConditionToGroup={addFilterConditionToGroup}
+              addFilterGroupToGroup={addFilterGroupToGroup}
+              deleteFilterGroup={deleteFilterGroup}
+              setGroupConnector={setGroupConnector}
+              openGroupPlusId={openGroupPlusId}
+              setOpenGroupPlusId={setOpenGroupPlusId}
+              draggingGroupId={draggingGroupId}
+              filterGroupEmptyWidth={filterGroupEmptyWidth}
+              filterGroupEmptyHeight={filterGroupEmptyHeight}
+              filterGroupPaddingTop={filterGroupPaddingTop}
+              filterGroupPaddingBottom={filterGroupPaddingBottom}
+              filterGroupPaddingLeft={filterGroupPaddingLeft}
+              filterGroupWhereLeft={filterGroupWhereLeft}
+              orderedColumns={orderedColumns}
+              columnById={columnById}
+              hasFilterItems={hasFilterItems}
+              filterLayout={filterLayout}
+              filterFooterTop={filterFooterTop}
+              filterDropdownWidth={filterDropdownWidth}
+              filterDropdownHeight={filterDropdownHeight}
+              filterDropdownHeaderLeft={filterDropdownHeaderLeft}
+              filterDropdownHeaderTop={filterDropdownHeaderTop}
+              filterInputLeft={filterInputLeft}
+              filterInputTop={filterInputTop}
+              filterInputWidth={filterInputWidth}
+              filterInputHeight={filterInputHeight}
+              filterInputRadius={filterInputRadius}
+              filterEmptyMessageTop={filterEmptyMessageTop}
+              filterExpandedMessageTop={filterExpandedMessageTop}
+              filterRowLeft={filterRowLeft}
+              filterWhereTop={filterWhereTop}
+              filterConnectorWidth={filterConnectorWidth}
+              filterConnectorHeight={filterConnectorHeight}
+              filterConnectorGap={filterConnectorGap}
+              filterFieldLeft={filterFieldLeft}
+              filterFieldWidth={filterFieldWidth}
+              filterFieldHeight={filterFieldHeight}
+              filterRowHeight={filterRowHeight}
+              filterFieldSeparatorPositions={filterFieldSeparatorPositions}
+              filterFieldSeparatorFieldLeft={filterFieldSeparatorFieldLeft}
+              filterFieldSeparatorOperatorLeft={filterFieldSeparatorOperatorLeft}
+              filterFieldSeparatorValueLeft={filterFieldSeparatorValueLeft}
+              filterFieldSeparatorActionsLeft={filterFieldSeparatorActionsLeft}
+              filterFieldMenuWidth={filterFieldMenuWidth}
+              filterFieldMenuHeight={filterFieldMenuHeight}
+              filterFieldMenuHeaderLeft={filterFieldMenuHeaderLeft}
+              filterFieldMenuTopPadding={filterFieldMenuTopPadding}
+              filterFieldMenuHeaderHeight={filterFieldMenuHeaderHeight}
+              filterFieldMenuFirstRowTop={filterFieldMenuFirstRowTop}
+              filterFieldMenuHoverPadding={filterFieldMenuHoverPadding}
+              filterFieldMenuListHeight={filterFieldMenuListHeight}
+              filterFieldMenuContentHeight={filterFieldMenuContentHeight}
+              filterFieldMenuRowHeight={filterFieldMenuRowHeight}
+              filterFieldMenuTextHeight={filterFieldMenuTextHeight}
+              filterFieldMenuItemWidth={filterFieldMenuItemWidth}
+              filterFieldMenuItemLeft={filterFieldMenuItemLeft}
+              filterFieldMenuLabelLeft={filterFieldMenuLabelLeft}
+              filterOperatorMenuWidth={filterOperatorMenuWidth}
+              filterOperatorMenuMaxHeight={filterOperatorMenuMaxHeight}
+              filterOperatorMenuFirstRowTop={filterOperatorMenuFirstRowTop}
+              filterOperatorMenuBottomPadding={filterOperatorMenuBottomPadding}
+              filterOperatorMenuRowStride={filterOperatorMenuRowStride}
+              filterOperatorMenuRowHeight={filterOperatorMenuRowHeight}
+              filterOperatorMenuItemWidth={filterOperatorMenuItemWidth}
+              filterOperatorMenuItemLeft={filterOperatorMenuItemLeft}
+              filterOperatorMenuHoverPadding={filterOperatorMenuHoverPadding}
+              filterFieldVirtualItems={filterFieldVirtualItems}
+              filterFieldVirtualizerSize={filterFieldVirtualizerSize}
+              sortButtonRef={sortButtonRef}
+              sortMenuRef={sortMenuRef}
+              sortFieldMenuRef={sortFieldMenuRef}
+              sortAddMenuListRef={sortAddMenuListRef}
+              isSortMenuOpen={isSortMenuOpen}
+              setIsSortMenuOpen={setIsSortMenuOpen}
+              openSortDirectionId={openSortDirectionId}
+              setOpenSortDirectionId={setOpenSortDirectionId}
+              openSortFieldId={openSortFieldId}
+              setOpenSortFieldId={setOpenSortFieldId}
+              isAddSortMenuOpen={isAddSortMenuOpen}
+              setIsAddSortMenuOpen={setIsAddSortMenuOpen}
+              hasSort={hasSort}
+              sortRows={sortRows}
+              sortedColumnIds={sortedColumnIds}
+              draggingSortId={draggingSortId}
+              draggingSortTop={draggingSortTop}
+              applySorts={applySorts}
+              handleSortDragStart={handleSortDragStart}
+              getSortDirectionLabels={getSortDirectionLabels}
+              remainingSortColumns={remainingSortColumns}
+              sortAddVirtualItems={sortAddVirtualItems}
+              sortAddVirtualizerSize={sortAddVirtualizerSize}
+              sortListHeight={sortListHeight}
+              sortFieldTop={sortFieldTop}
+              sortFieldHeight={sortFieldHeight}
+              sortRowStride={sortRowStride}
+              sortConfiguredWidth={sortConfiguredWidth}
+              sortConfiguredHeight={sortConfiguredHeight}
+              sortLineWidth={sortLineWidth}
+              sortFieldLeft={sortFieldLeft}
+              sortFieldWidth={sortFieldWidth}
+              sortDirectionLeft={sortDirectionLeft}
+              sortDirectionWidth={sortDirectionWidth}
+              sortRemoveSize={sortRemoveSize}
+              sortRemoveLeft={sortRemoveLeft}
+              sortReorderLeft={sortReorderLeft}
+              sortReorderWidth={sortReorderWidth}
+              sortFieldMenuWidth={sortFieldMenuWidth}
+              sortFieldMenuPadding={sortFieldMenuPadding}
+              sortFieldMenuFirstRowTop={sortFieldMenuFirstRowTop}
+              sortFieldMenuRowHeight={sortFieldMenuRowHeight}
+              sortFieldMenuGap={sortFieldMenuGap}
+              sortAddTop={sortAddTop}
+              sortFooterTop={sortFooterTop}
+              sortAddMenuWidth={sortAddMenuWidth}
+              sortAddMenuHeight={sortAddMenuHeight}
+              sortAddMenuListHeight={sortAddMenuListHeight}
+              sortAddMenuContentHeight={sortAddMenuContentHeight}
+              sortAddMenuFirstRowTop={sortAddMenuFirstRowTop}
+              sortAddMenuRowHeight={sortAddMenuRowHeight}
+              sortAddMenuRowStride={sortAddMenuRowStride}
+              searchButtonRef={searchButtonRef}
+              searchMenuRef={searchMenuRef}
+              searchInputRef={searchInputRef}
+              isSearchMenuOpen={isSearchMenuOpen}
+              setIsSearchMenuOpen={setIsSearchMenuOpen}
+              searchValue={searchValue}
+              setSearchValue={setSearchValue}
+              showSearchSpinner={showSearchSpinner}
+              showNoSearchResults={showNoSearchResults}
+            />
           </section>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <section className="w-[281px] flex-shrink-0 border-r border-[#DDE1E3] bg-white" />
 
             <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
-              {baseDetailsQuery.isLoading && !baseDetailsQuery.data && (
-                <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-6 airtable-secondary-font">
-                  Loading base...
-                </div>
-              )}
-
               {baseDetailsQuery.isError && (
                 <div className="rounded-[6px] border border-[#FECACA] bg-[#FEF2F2] px-4 py-6 text-[12px] text-[#991b1b]">
                   We couldn’t load this base. It may have been deleted or you may not have access.
                 </div>
               )}
-
-              {!baseDetailsQuery.isLoading &&
-                !baseDetailsQuery.isError &&
-                activeTableId &&
-                tableMetaQuery.isLoading &&
-                !activeTable && (
-                  <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-6 airtable-secondary-font">
-                    Loading table...
-                  </div>
-                )}
 
               {!baseDetailsQuery.isLoading &&
                 !baseDetailsQuery.isError &&
@@ -5004,1335 +3265,46 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   </div>
                 )}
 
-              {activeTable && (
-                <div className="h-full">
-                  <div className="relative h-full w-full">
-                    <div
-                      ref={parentRef}
-                      className="h-full w-full overflow-auto"
-                      style={{ backgroundColor: "#F7F8FC" }}
-                    >
-                      <div
-                        className="relative"
-                        style={{ minWidth: totalColumnsWidth, minHeight: "100%" }}
-                        onMouseLeave={() => {
-                          setHoveredHeaderId(null);
-                        }}
-                      >
-                      <div
-                        className="sticky top-0 z-10 flex text-[13px] font-medium text-[#1d1f24] relative"
-                        style={{ width: totalColumnsWidth }}
-                      >
-                        {rowNumberColumn && (
-                          <div
-                            className="relative flex h-[33px] items-center px-2 text-[12px] font-normal text-[#606570]"
-                            style={{
-                              borderTop: "none",
-                              borderBottom: "0.5px solid #CBCBCB",
-                              borderLeft: "none",
-                              borderRight: "none",
-                              width: rowNumberColumnWidth,
-                              minWidth: rowNumberColumnWidth,
-                              maxWidth: rowNumberColumnWidth,
-                              flex: "0 0 auto",
-                              backgroundColor: "#ffffff",
-                              position: "sticky",
-                              left: 0,
-                              zIndex: 35,
-                            }}
-                            aria-hidden="true"
-                          >
-                            <div className="airtable-outline flex h-[17px] w-[17px] items-center justify-center rounded-[4px] bg-white" />
-                          </div>
-                        )}
-                        {nameColumn && (
-                          <div
-                            className="relative flex h-[33px] items-center gap-2 px-2"
-                            style={{
-                              ...headerCellBorder(nameColumn, true),
-                              width: nameColumnWidth,
-                              minWidth: nameColumnWidth,
-                              maxWidth: nameColumnWidth,
-                              flex: "0 0 auto",
-                              backgroundColor: filteredColumnIds.has(nameColumn.id)
-                                ? "#F6FBF9"
-                                : sortedColumnIds.has(nameColumn.id)
-                                ? "var(--airtable-sort-header-bg)"
-                                : hoveredHeaderId === nameColumn.id
-                                ? "var(--airtable-cell-hover-bg)"
-                                : "#ffffff",
-                              position: "sticky",
-                              left: rowNumberColumnWidth,
-                              zIndex: 30,
-                            }}
-                            onMouseEnter={() => setHoveredHeaderId(nameColumn.id)}
-                            onMouseLeave={() => setHoveredHeaderId(null)}
-                            onContextMenu={(event) =>
-                              handleOpenContextMenu(
-                                event,
-                                "column",
-                                nameColumn.id,
-                                canDeleteColumn
-                              )
-                            }
-                          >
-                            {nameColumn.type === "data" &&
-                              getColumnIconSrc(nameColumn.name, nameColumn.fieldType) && (
-                              <img
-                                alt=""
-                                className={clsx(
-                                  "h-[13px] w-[13px]",
-                                  (sortedColumnIds.has(nameColumn.id) ||
-                                    filteredColumnIds.has(nameColumn.id)) &&
-                                    "airtable-column-icon--sorted",
-                                  hoveredHeaderId === nameColumn.id &&
-                                    "airtable-column-icon--hover"
-                                )}
-                                style={
-                                  nameColumn.name === "Status"
-                                    ? {
-                                        width: STATUS_HEADER_ICON_SIZE,
-                                        height: STATUS_HEADER_ICON_SIZE,
-                                      }
-                                    : undefined
-                                }
-                                src={getColumnIconSrc(
-                                  nameColumn.name,
-                                  nameColumn.fieldType
-                                )}
-                              />
-                            )}
-                            <span>{nameColumn.name}</span>
-                            <div
-                              role="separator"
-                              aria-label="Resize column"
-                              className="absolute right-0 top-0 h-full w-[6px] cursor-col-resize"
-                              onMouseDown={(event) =>
-                                handleStartResize(event, nameColumn.id)
-                              }
-                            />
-                          </div>
-                        )}
-                        {scrollablePaddingLeft > 0 && (
-                          <div style={{ width: scrollablePaddingLeft }} />
-                        )}
-                        {scrollableVirtualColumns.map((virtualColumn) => {
-                          const column = columnsWithAdd[virtualColumn.index];
-                          if (!column) return null;
-                          const cellStyle = headerCellBorder(column, false);
-                          const isSortedColumn =
-                            column.type === "data" && sortedColumnIds.has(column.id);
-                          const isFilteredColumn =
-                            column.type === "data" && filteredColumnIds.has(column.id);
-                          const backgroundColor =
-                            isFilteredColumn
-                              ? "#F6FBF9"
-                              : isSortedColumn
-                              ? "var(--airtable-sort-header-bg)"
-                              : hoveredHeaderId === column.id
-                              ? "var(--airtable-cell-hover-bg)"
-                              : "#ffffff";
-
-                          if (column.type === "add") {
-                            return (
-                              <div
-                                key={column.id}
-                                className="relative"
-                                onMouseEnter={() => setHoveredHeaderId(column.id)}
-                                onMouseLeave={() => setHoveredHeaderId(null)}
-                                style={{
-                                  ...cellStyle,
-                                  width: virtualColumn.size,
-                                  flex: "0 0 auto",
-                                  backgroundColor,
-                                }}
-                              >
-                                <button
-                                  ref={addColumnButtonRef}
-                                  type="button"
-                                  onClick={() => {
-                                    if (activeColumns.length >= MAX_COLUMNS) return;
-                                    setIsAddColumnMenuOpen((prev) => !prev);
-                                  }}
-                                  disabled={activeColumns.length >= MAX_COLUMNS}
-                                  className="flex h-[33px] w-full cursor-pointer items-center justify-center text-[#1d1f24] transition-colors disabled:cursor-not-allowed"
-                                  aria-label="Add column"
-                                >
-                                  <span className="airtable-plus-icon" aria-hidden="true" />
-                                </button>
-                                {isAddColumnMenuOpen && (
-                                  <div
-                                    ref={addColumnMenuRef}
-                                    className="airtable-add-column-menu airtable-dropdown-surface absolute z-50"
-                                    style={{
-                                      width: ADD_COLUMN_MENU_WIDTH,
-                                      top: "calc(100% + 2px)",
-                                      right: 5,
-                                    }}
-                                    onClick={(event) => event.stopPropagation()}
-                                  >
-                                    <div className="airtable-add-column-header">
-                                      <div className="airtable-add-column-search">
-                                        <span
-                                          className="airtable-search-icon text-[#156FE2]"
-                                          aria-hidden="true"
-                                        />
-                                        <span className="airtable-add-column-placeholder">
-                                          Find a field type
-                                        </span>
-                                      </div>
-                                      <img
-                                        alt=""
-                                        className="airtable-add-column-help"
-                                        src={helpIcon.src}
-                                      />
-                                    </div>
-                                    <div
-                                      className="airtable-dropdown-separator"
-                                      style={{ marginLeft: 6, marginTop: 6 }}
-                                      aria-hidden="true"
-                                    />
-                                    <div className="airtable-add-column-body">
-                                      <div className="airtable-dropdown-heading">
-                                        Standard fields
-                                      </div>
-                                      <div className="airtable-add-column-options">
-                                        {addColumnTypeOptions.map((option) => (
-                                          <button
-                                            key={option.type}
-                                            type="button"
-                                            className="airtable-add-column-option airtable-dropdown-body"
-                                            style={{
-                                              width: ADD_COLUMN_OPTION_WIDTH,
-                                              paddingLeft: option.icon.paddingLeft,
-                                              gap: option.icon.gap,
-                                            }}
-                                            onClick={() => handleAddColumn(option.type)}
-                                          >
-                                            <img
-                                              alt=""
-                                              style={{
-                                                width: option.icon.width,
-                                                height: option.icon.height,
-                                              }}
-                                              src={option.icon.src}
-                                            />
-                                            <span>{option.label}</span>
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div
-                              key={column.id}
-                              className="relative flex h-[33px] items-center gap-2 px-2"
-                              style={{
-                                ...cellStyle,
-                                width: virtualColumn.size,
-                                flex: "0 0 auto",
-                                backgroundColor,
-                              }}
-                              onMouseEnter={() => setHoveredHeaderId(column.id)}
-                              onMouseLeave={() => setHoveredHeaderId(null)}
-                              onContextMenu={(event) =>
-                                handleOpenContextMenu(
-                                  event,
-                                  "column",
-                                  column.id,
-                                  canDeleteColumn
-                                )
-                              }
-                            >
-                              {column.type === "data" &&
-                                getColumnIconSrc(column.name, column.fieldType) && (
-                                <img
-                                  alt=""
-                                  className={clsx(
-                                    "h-[13px] w-[13px]",
-                                    (isSortedColumn || isFilteredColumn) &&
-                                      "airtable-column-icon--sorted",
-                                    hoveredHeaderId === column.id &&
-                                      "airtable-column-icon--hover"
-                                  )}
-                                  style={
-                                    column.name === "Status"
-                                      ? {
-                                          width: STATUS_HEADER_ICON_SIZE,
-                                          height: STATUS_HEADER_ICON_SIZE,
-                                        }
-                                      : undefined
-                                  }
-                                  src={getColumnIconSrc(
-                                    column.name,
-                                    column.fieldType
-                                  )}
-                                />
-                              )}
-                              <span>{column.name}</span>
-                              <div
-                                role="separator"
-                                aria-label="Resize column"
-                                className="absolute right-0 top-0 h-full w-[6px] cursor-col-resize"
-                                onMouseDown={(event) =>
-                                  handleStartResize(event, column.id)
-                                }
-                              />
-                            </div>
-                          );
-                        })}
-                        {scrollablePaddingRight > 0 && (
-                          <div style={{ width: scrollablePaddingRight }} />
-                        )}
-                        <div
-                          className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 h-px bg-[#CBCBCB]"
-                          aria-hidden="true"
-                        />
-                      </div>
-
-                      <div
-                        className="relative"
-                        style={{ height: rowCanvasHeight }}
-                      >
-                        {rowVirtualItems.map((virtualRow) => {
-                        const row = sortedTableData[virtualRow.index];
-                          if (!row) {
-                            return (
-                              <div
-                                key={`loader-${virtualRow.index}`}
-                                className="absolute left-0 right-0 flex items-center px-3 text-[12px] text-[#616670]"
-                                style={{
-                                  transform: `translate3d(0, ${virtualRow.start}px, 0)`,
-                                  height: `${virtualRow.size}px`,
-                                  width: totalColumnsWidth,
-                                }}
-                              >
-                                {rowsQuery.hasNextPage
-                                  ? "Loading more rows..."
-                                  : "No more rows"}
-                              </div>
-                            );
-                          }
-
-                        const rowSearchMatches = hasSearchQuery
-                          ? searchMatchesByRow.get(row.id)
-                          : null;
-                        const isLastRow = virtualRow.index === rowCount - 1;
-                        const rowHasSelection = selectedCell?.rowId === row.id;
-                        const rowNumberBaseBg = rowHasSelection
-                          ? "var(--airtable-hover-bg)"
-                          : "#ffffff";
-                        const rowNumberHoverBg = "var(--airtable-cell-hover-bg)";
-
-                        if (isScrolling) {
-                          const nameHasSearchMatch =
-                            Boolean(nameColumn && hasSearchQuery && rowSearchMatches?.has(nameColumn.id));
-                          const nameIsSelected =
-                            Boolean(
-                              nameColumn &&
-                                selectedCell?.rowId === row.id &&
-                                selectedCell?.columnId === nameColumn.id
-                            );
-                          const nameBaseBackground =
-                            nameColumn && nameHasSearchMatch
-                              ? "#FFF3D3"
-                              : nameColumn && filteredColumnIds.has(nameColumn.id)
-                              ? "#E2F1E3"
-                              : nameColumn && sortedColumnIds.has(nameColumn.id)
-                              ? "var(--airtable-sort-column-bg)"
-                              : nameIsSelected
-                              ? "#ffffff"
-                              : rowHasSelection
-                              ? "var(--airtable-hover-bg)"
-                              : "#ffffff";
-                          const nameValue =
-                            nameColumn && nameColumn.type === "data"
-                              ? cellEdits[row.id]?.[nameColumn.id] ?? row[nameColumn.id] ?? ""
-                              : "";
-
-                          return (
-                            <div
-                              key={row.id}
-                              className="airtable-row absolute left-0 right-0 flex text-[13px] text-[#1d1f24] pointer-events-none"
-                              style={{
-                                transform: `translate3d(0, ${virtualRow.start}px, 0)`,
-                                height: `${virtualRow.size}px`,
-                                width: totalColumnsWidth,
-                                zIndex: rowHasSelection ? 5 : 1,
-                              }}
-                            >
-                              {rowNumberColumn && (
-                                <div
-                                  className="airtable-cell flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
-                                  style={{
-                                    borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
-                                    borderLeft: "none",
-                                    borderRight: "none",
-                                    width: rowNumberColumnWidth,
-                                    minWidth: rowNumberColumnWidth,
-                                    maxWidth: rowNumberColumnWidth,
-                                    flex: "0 0 auto",
-                                    height: 33,
-                                    position: "sticky",
-                                    left: 0,
-                                    zIndex: rowHasSelection ? 20 : 15,
-                                    ["--airtable-cell-base" as string]: rowNumberBaseBg,
-                                    ["--airtable-cell-hover" as string]: rowNumberHoverBg,
-                                  }}
-                                  aria-hidden="true"
-                                >
-                                  <span className="block w-[17px] text-center">
-                                    {virtualRow.index + 1}
-                                  </span>
-                                </div>
-                              )}
-                              {nameColumn && nameColumn.type === "data" && (
-                                <div
-                                  className="airtable-cell flex items-center px-2 text-[13px] text-[#1d1f24]"
-                                  style={{
-                                    ...bodyCellBorder(nameColumn, true, isLastRow),
-                                    width: nameColumnWidth,
-                                    minWidth: nameColumnWidth,
-                                    maxWidth: nameColumnWidth,
-                                    flex: "0 0 auto",
-                                    height: 33,
-                                    position: "sticky",
-                                    left: rowNumberColumnWidth,
-                                    zIndex: rowHasSelection ? 15 : 10,
-                                    backgroundColor: nameBaseBackground,
-                                  }}
-                                >
-                                  <span className="block w-full truncate">{nameValue}</span>
-                                </div>
-                              )}
-                              {scrollablePaddingLeft > 0 && (
-                                <div style={{ width: scrollablePaddingLeft }} />
-                              )}
-                              {scrollableVirtualColumns.map((virtualColumn) => {
-                                const column = columnsWithAdd[virtualColumn.index];
-                                if (!column) return null;
-                                if (column.type === "add") {
-                                  return (
-                                    <div
-                                      key={`${row.id}-${column.id}-scrolling`}
-                                      style={{
-                                        width: virtualColumn.size,
-                                        flex: "0 0 auto",
-                                      }}
-                                      aria-hidden="true"
-                                    />
-                                  );
-                                }
-                                if (column.type !== "data") {
-                                  return null;
-                                }
-                                const value = cellEdits[row.id]?.[column.id] ?? row[column.id] ?? "";
-                                const isNumber = column.fieldType === "number";
-                                const isSelected =
-                                  selectedCell?.rowId === row.id &&
-                                  selectedCell?.columnId === column.id;
-                                const isSortedColumn = sortedColumnIds.has(column.id);
-                                const isFilteredColumn = filteredColumnIds.has(column.id);
-                                const cellHasSearchMatch =
-                                  hasSearchQuery && rowSearchMatches?.has(column.id);
-                                const cellBaseBackground = cellHasSearchMatch
-                                  ? "#FFF3D3"
-                                  : isFilteredColumn
-                                  ? "#E2F1E3"
-                                  : isSortedColumn
-                                  ? "var(--airtable-sort-column-bg)"
-                                  : isSelected
-                                  ? "#ffffff"
-                                  : rowHasSelection
-                                  ? "var(--airtable-hover-bg)"
-                                  : "#ffffff";
-                                return (
-                                  <div
-                                    key={`${row.id}-${column.id}-scrolling`}
-                                    className="airtable-cell flex items-center px-2 text-[13px] text-[#1d1f24]"
-                                    style={{
-                                      ...bodyCellBorder(column, false, isLastRow),
-                                      width: virtualColumn.size,
-                                      flex: "0 0 auto",
-                                      height: 33,
-                                      backgroundColor: cellBaseBackground,
-                                    }}
-                                  >
-                                    <span
-                                      className="block w-full truncate"
-                                      style={{
-                                        textAlign: isNumber ? "right" : "left",
-                                      }}
-                                    >
-                                      {value}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                              {scrollablePaddingRight > 0 && (
-                                <div style={{ width: scrollablePaddingRight }} />
-                              )}
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div
-                            key={row.id}
-                            className={clsx(
-                              "airtable-row absolute left-0 right-0 flex text-[13px] text-[#1d1f24]",
-                              isScrolling && "pointer-events-none"
-                            )}
-                            style={{
-                              transform: `translate3d(0, ${virtualRow.start}px, 0)`,
-                              height: `${virtualRow.size}px`,
-                              width: totalColumnsWidth,
-                              zIndex: rowHasSelection ? 5 : 1,
-                            }}
-                            onContextMenu={(event) =>
-                              handleOpenContextMenu(
-                                event,
-                                "row",
-                                row.id,
-                                canDeleteRow
-                              )
-                            }
-                          >
-                            {rowNumberColumn && (
-                              <div
-                                className="airtable-cell relative flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
-                                style={{
-                                  borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
-                                  borderLeft: "none",
-                                  borderRight: "none",
-                                  width: rowNumberColumnWidth,
-                                  minWidth: rowNumberColumnWidth,
-                                  maxWidth: rowNumberColumnWidth,
-                                  flex: "0 0 auto",
-                                  height: 33,
-                                  position: "sticky",
-                                  left: 0,
-                                  zIndex: rowHasSelection ? 20 : 15,
-                                  ["--airtable-cell-base" as string]: rowNumberBaseBg,
-                                  ["--airtable-cell-hover" as string]: rowNumberHoverBg,
-                                }}
-                                aria-hidden="true"
-                              >
-                                <div className="relative flex h-full w-full items-center">
-                                  <span className="airtable-row-hover-hide block w-[17px] text-center">
-                                    {virtualRow.index + 1}
-                                  </span>
-                                  <div className="airtable-row-hover-show absolute inset-0 flex items-center">
-                                    <div className="airtable-outline h-[17px] w-[17px] rounded-[4px] bg-white" />
-                                    <div className="airtable-outline ml-auto flex h-[25px] w-[25px] items-center justify-center rounded-[4px] bg-white">
-                                      <img
-                                        alt=""
-                                        className="h-[13px] w-[12px]"
-                                        src={expandIcon.src}
-                                      />
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                            {nameColumn && nameColumn.type === "data" && (
-                              (() => {
-                                const nameOriginalValue = row[nameColumn.id] ?? "";
-                                const nameEditedValue =
-                                  cellEdits[row.id]?.[nameColumn.id] ??
-                                  nameOriginalValue;
-                                const nameIsSelected =
-                                  selectedCell?.rowId === row.id &&
-                                  selectedCell?.columnId === nameColumn.id;
-                                const nameIsLongText =
-                                  nameColumn.fieldType === "long_text";
-                                const nameIsNumber =
-                                  nameColumn.fieldType === "number";
-                                const nameIsEditing =
-                                  editingCell?.rowId === row.id &&
-                                  editingCell?.columnId === nameColumn.id;
-                                const nameHasSearchMatch =
-                                  hasSearchQuery && rowSearchMatches?.has(nameColumn.id);
-                                const showNameSearchOverlay =
-                                  nameHasSearchMatch && !nameIsEditing;
-                                const nameExpanded =
-                                  nameIsLongText &&
-                                  selectedCell?.rowId === row.id &&
-                                  selectedCell?.columnId === nameColumn.id;
-                                const nameBaseBackground = nameHasSearchMatch
-                                  ? "#FFF3D3"
-                                  : filteredColumnIds.has(nameColumn.id)
-                                  ? "#E2F1E3"
-                                  : sortedColumnIds.has(nameColumn.id)
-                                  ? "var(--airtable-sort-column-bg)"
-                                  : nameIsSelected
-                                  ? "#ffffff"
-                                  : rowHasSelection
-                                  ? "var(--airtable-hover-bg)"
-                                  : "#ffffff";
-                                const nameHoverBackground = nameHasSearchMatch
-                                  ? "#FFF3D3"
-                                  : filteredColumnIds.has(nameColumn.id)
-                                  ? "#E5F4E6"
-                                  : sortedColumnIds.has(nameColumn.id)
-                                  ? "#F8EDE4"
-                                  : nameIsSelected
-                                  ? "#ffffff"
-                                  : "var(--airtable-cell-hover-bg)";
-                                return (
-                                  <div
-                                    className={clsx(
-                                      "airtable-cell relative flex overflow-visible px-2",
-                                      nameIsSelected &&
-                                        (nameIsEditing
-                                          ? "airtable-cell--editing"
-                                          : "airtable-cell--selected")
-                                    )}
-                                    style={{
-                                      ...bodyCellBorder(nameColumn, true, isLastRow),
-                                      width: nameColumnWidth,
-                                      minWidth: nameColumnWidth,
-                                      maxWidth: nameColumnWidth,
-                                      flex: "0 0 auto",
-                                      height: nameExpanded ? LONG_TEXT_HEIGHT : 33,
-                                      alignItems: nameExpanded ? "flex-start" : "center",
-                                      position: "sticky",
-                                      left: rowNumberColumnWidth,
-                                      zIndex: nameExpanded ? 30 : 25,
-                                      ["--airtable-cell-base" as string]:
-                                        nameBaseBackground,
-                                      ["--airtable-cell-hover" as string]:
-                                        nameHoverBackground,
-                                    }}
-                                    onClick={() => {
-                                      if (!nameIsEditing) {
-                                        focusCell(row.id, nameColumn.id);
-                                      }
-                                    }}
-                                  >
-                                    {nameIsLongText ? (
-                                      <>
-                                        {!nameExpanded ? (
-                                          <>
-                                            <input
-                                              value={nameEditedValue}
-                                              onChange={(event) =>
-                                                handleCellChange(
-                                                  row.id,
-                                                  nameColumn.id,
-                                                  event.target.value
-                                                )
-                                              }
-                                              onBlur={() => {
-                                                if (!nameIsEditing) return;
-                                                handleCellCommit(
-                                                  row.id,
-                                                  nameColumn.id,
-                                                  nameEditedValue
-                                                );
-                                                setEditingCell(null);
-                                              }}
-                                              onFocus={() =>
-                                                setSelectedCell({
-                                                  rowId: row.id,
-                                                  columnId: nameColumn.id,
-                                                })
-                                              }
-                                              onDoubleClick={() =>
-                                                beginEditExisting(row.id, nameColumn.id)
-                                              }
-                                              onKeyDown={(event) =>
-                                                handleCellKeyDown(
-                                                  event,
-                                                  row.id,
-                                                  nameColumn.id,
-                                                  nameColumn.fieldType,
-                                                  nameEditedValue
-                                                )
-                                              }
-                                              ref={(node) => {
-                                                const key = `${row.id}-${nameColumn.id}`;
-                                                if (node) {
-                                                  cellRefs.current.set(key, node);
-                                                } else {
-                                                  cellRefs.current.delete(key);
-                                                }
-                                              }}
-                                              className={clsx(
-                                                "airtable-long-text-input airtable-long-text-input--collapsed",
-                                                !nameIsEditing && "airtable-cell-input--inactive"
-                                              )}
-                                              readOnly={!nameIsEditing}
-                                              aria-label={`${nameColumn.name} cell`}
-                                            />
-                                            <div className="airtable-long-text-display">
-                                              {renderSearchHighlight(
-                                                nameEditedValue,
-                                                searchQuery
-                                              )}
-                                            </div>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <textarea
-                                              value={nameEditedValue}
-                                              onChange={(event) =>
-                                                handleCellChange(
-                                                  row.id,
-                                                  nameColumn.id,
-                                                  event.target.value
-                                                )
-                                              }
-                                              onBlur={() => {
-                                                if (!nameIsEditing) return;
-                                                handleCellCommit(
-                                                  row.id,
-                                                  nameColumn.id,
-                                                  nameEditedValue
-                                                );
-                                                setEditingCell(null);
-                                              }}
-                                              onFocus={() =>
-                                                setSelectedCell({
-                                                  rowId: row.id,
-                                                  columnId: nameColumn.id,
-                                                })
-                                              }
-                                              onDoubleClick={() =>
-                                                beginEditExisting(row.id, nameColumn.id)
-                                              }
-                                              onKeyDown={(event) =>
-                                                handleCellKeyDown(
-                                                  event,
-                                                  row.id,
-                                                  nameColumn.id,
-                                                  nameColumn.fieldType,
-                                                  nameEditedValue
-                                                )
-                                              }
-                                              ref={(node) => {
-                                                const key = `${row.id}-${nameColumn.id}`;
-                                                if (node) {
-                                                  cellRefs.current.set(key, node);
-                                                } else {
-                                                  cellRefs.current.delete(key);
-                                                }
-                                              }}
-                                              className={clsx(
-                                                "airtable-long-text-input airtable-long-text-input--expanded",
-                                                !nameIsEditing && "airtable-cell-input--inactive",
-                                                showNameSearchOverlay &&
-                                                  "airtable-search-input--hidden"
-                                              )}
-                                              style={{ height: LONG_TEXT_HEIGHT }}
-                                              readOnly={!nameIsEditing}
-                                              aria-label={`${nameColumn.name} cell`}
-                                            />
-                                            {showNameSearchOverlay && (
-                                              <div className="airtable-search-overlay airtable-search-overlay--expanded">
-                                                {renderSearchHighlight(
-                                                  nameEditedValue,
-                                                  searchQuery
-                                                )}
-                                              </div>
-                                            )}
-                                            <img
-                                              alt=""
-                                              className="airtable-long-text-selection"
-                                              src={longLineSelectionIcon.src}
-                                            />
-                                          </>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <input
-                                          value={nameEditedValue}
-                                          onChange={(event) =>
-                                            handleCellChange(
-                                              row.id,
-                                              nameColumn.id,
-                                              event.target.value
-                                            )
-                                          }
-                                          onBlur={() => {
-                                            if (!nameIsEditing) return;
-                                            handleCellCommit(
-                                              row.id,
-                                              nameColumn.id,
-                                              nameEditedValue
-                                            );
-                                            setEditingCell(null);
-                                          }}
-                                          onFocus={() =>
-                                            setSelectedCell({
-                                              rowId: row.id,
-                                              columnId: nameColumn.id,
-                                            })
-                                          }
-                                          onDoubleClick={() =>
-                                            beginEditExisting(row.id, nameColumn.id)
-                                          }
-                                          onKeyDown={(event) =>
-                                            handleCellKeyDown(
-                                              event,
-                                              row.id,
-                                              nameColumn.id,
-                                              nameColumn.fieldType,
-                                              nameEditedValue
-                                            )
-                                          }
-                                          ref={(node) => {
-                                            const key = `${row.id}-${nameColumn.id}`;
-                                            if (node) {
-                                              cellRefs.current.set(key, node);
-                                            } else {
-                                              cellRefs.current.delete(key);
-                                            }
-                                          }}
-                                          className={clsx(
-                                            "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
-                                            !nameIsEditing &&
-                                              "airtable-cell-input--inactive",
-                                            showNameSearchOverlay &&
-                                              "airtable-search-input--hidden"
-                                          )}
-                                          inputMode={nameIsNumber ? "decimal" : undefined}
-                                          pattern={
-                                            nameIsNumber
-                                              ? "^-?\\d*(?:\\.\\d{0,8})?$"
-                                              : undefined
-                                          }
-                                          style={{
-                                            textAlign: nameIsNumber ? "right" : "left",
-                                          }}
-                                          readOnly={!nameIsEditing}
-                                          aria-label={`${nameColumn.name} cell`}
-                                        />
-                                        {showNameSearchOverlay && (
-                                          <div
-                                            className="airtable-search-overlay"
-                                            style={{
-                                              textAlign: nameIsNumber ? "right" : "left",
-                                            }}
-                                          >
-                                            {renderSearchHighlight(
-                                              nameEditedValue,
-                                              searchQuery
-                                            )}
-                                          </div>
-                                        )}
-                                      </>
-                                    )}
-                                    {nameIsSelected && !nameIsEditing && (
-                                      <div className="airtable-cell-handle" />
-                                    )}
-                                  </div>
-                                );
-                              })()
-                            )}
-                            {scrollablePaddingLeft > 0 && (
-                              <div style={{ width: scrollablePaddingLeft }} />
-                            )}
-                            {scrollableVirtualColumns.map((virtualColumn) => {
-                              const column = columnsWithAdd[virtualColumn.index];
-                              if (!column) return null;
-                              const isSelected =
-                                column.type === "data" &&
-                                selectedCell?.rowId === row.id &&
-                                selectedCell?.columnId === column.id;
-                              const isSortedColumn =
-                                column.type === "data" &&
-                                sortedColumnIds.has(column.id);
-                              const isFilteredColumn =
-                                column.type === "data" &&
-                                filteredColumnIds.has(column.id);
-                              const cellHasSearchMatch =
-                                hasSearchQuery && rowSearchMatches?.has(column.id);
-                              const rowHasSelection = selectedCell?.rowId === row.id;
-                              const cellBaseBackground = cellHasSearchMatch
-                                ? "#FFF3D3"
-                                : isFilteredColumn
-                                ? "#E2F1E3"
-                                : isSortedColumn
-                                ? "var(--airtable-sort-column-bg)"
-                                : isSelected
-                                ? "#ffffff"
-                                : rowHasSelection
-                                ? "var(--airtable-hover-bg)"
-                                : "#ffffff";
-                              const cellHoverBackground = cellHasSearchMatch
-                                ? "#FFF3D3"
-                                : isFilteredColumn
-                                ? "#E5F4E6"
-                                : isSortedColumn
-                                ? "#F8EDE4"
-                                : isSelected
-                                ? "#ffffff"
-                                : "var(--airtable-cell-hover-bg)";
-                              const cellStyle = bodyCellBorder(column, false, isLastRow);
-
-                                if (column.type === "add") {
-                                  return (
-                                    <div
-                                      key={`${row.id}-${column.id}`}
-                                      style={{
-                                        width: virtualColumn.size,
-                                        flex: "0 0 auto",
-                                      }}
-                                      aria-hidden="true"
-                                    />
-                                  );
-                                }
-                                if (column.type !== "data") {
-                                  return null;
-                                }
-
-                                const originalValue = row[column.id] ?? "";
-                                const editedValue =
-                                  cellEdits[row.id]?.[column.id] ?? originalValue;
-                              const isLongText =
-                                column.type === "data" && column.fieldType === "long_text";
-                              const isNumber =
-                                column.type === "data" && column.fieldType === "number";
-                              const isEditing =
-                                editingCell?.rowId === row.id &&
-                                editingCell?.columnId === column.id;
-                              const showSearchOverlay =
-                                cellHasSearchMatch && !isEditing;
-                              const isExpanded =
-                                isLongText &&
-                                selectedCell?.rowId === row.id &&
-                                selectedCell?.columnId === column.id;
-
-                                return (
-                                <div
-                                  key={`${row.id}-${column.id}`}
-                                  className={clsx(
-                                    "airtable-cell relative flex overflow-visible px-2",
-                                    isSelected &&
-                                      (isEditing
-                                        ? "airtable-cell--editing"
-                                        : "airtable-cell--selected")
-                                  )}
-                                  style={{
-                                    ...cellStyle,
-                                    width: virtualColumn.size,
-                                    flex: "0 0 auto",
-                                    height: isExpanded ? LONG_TEXT_HEIGHT : 33,
-                                    alignItems: isExpanded ? "flex-start" : "center",
-                                    zIndex: isExpanded ? 20 : undefined,
-                                    ...(isSelected
-                                      ? ({ ["--cell-outline-left" as string]: "0px" } as Record<
-                                          string,
-                                          string
-                                        >)
-                                      : null),
-                                    ["--airtable-cell-base" as string]: cellBaseBackground,
-                                    ["--airtable-cell-hover" as string]: cellHoverBackground,
-                                    }}
-                                  onClick={() => {
-                                    if (!isEditing) {
-                                      focusCell(row.id, column.id);
-                                    }
-                                  }}
-                                  >
-                                      {isLongText ? (
-                                        <>
-                                          {!isExpanded ? (
-                                            <>
-                                              <input
-                                                value={editedValue}
-                                                onChange={(event) =>
-                                                  handleCellChange(
-                                                    row.id,
-                                                    column.id,
-                                                    event.target.value
-                                                  )
-                                                }
-                                                onBlur={() => {
-                                                  if (!isEditing) return;
-                                                  handleCellCommit(
-                                                    row.id,
-                                                    column.id,
-                                                    editedValue
-                                                  );
-                                                  setEditingCell(null);
-                                                }}
-                                                onFocus={() =>
-                                                  setSelectedCell({
-                                                    rowId: row.id,
-                                                    columnId: column.id,
-                                                  })
-                                                }
-                                                onDoubleClick={() =>
-                                                  beginEditExisting(row.id, column.id)
-                                                }
-                                                onKeyDown={(event) =>
-                                                  handleCellKeyDown(
-                                                    event,
-                                                    row.id,
-                                                    column.id,
-                                                    column.fieldType,
-                                                    editedValue
-                                                  )
-                                                }
-                                                ref={(node) => {
-                                                  const key = `${row.id}-${column.id}`;
-                                                  if (node) {
-                                                    cellRefs.current.set(key, node);
-                                                  } else {
-                                                    cellRefs.current.delete(key);
-                                                  }
-                                                }}
-                                                className={clsx(
-                                                  "airtable-long-text-input airtable-long-text-input--collapsed",
-                                                  !isEditing && "airtable-cell-input--inactive"
-                                                )}
-                                                readOnly={!isEditing}
-                                                aria-label={`${column.name} cell`}
-                                              />
-                                              <div className="airtable-long-text-display">
-                                                {renderSearchHighlight(
-                                                  editedValue,
-                                                  searchQuery
-                                                )}
-                                              </div>
-                                            </>
-                                          ) : (
-                                            <>
-                                              <textarea
-                                                value={editedValue}
-                                                onChange={(event) =>
-                                                  handleCellChange(
-                                                    row.id,
-                                                    column.id,
-                                                    event.target.value
-                                                  )
-                                                }
-                                                onBlur={() => {
-                                                  if (!isEditing) return;
-                                                  handleCellCommit(
-                                                    row.id,
-                                                    column.id,
-                                                    editedValue
-                                                  );
-                                                  setEditingCell(null);
-                                                }}
-                                                onFocus={() =>
-                                                  setSelectedCell({
-                                                    rowId: row.id,
-                                                    columnId: column.id,
-                                                  })
-                                                }
-                                                onDoubleClick={() =>
-                                                  beginEditExisting(row.id, column.id)
-                                                }
-                                                onKeyDown={(event) =>
-                                                  handleCellKeyDown(
-                                                    event,
-                                                    row.id,
-                                                    column.id,
-                                                    column.fieldType,
-                                                    editedValue
-                                                  )
-                                                }
-                                                ref={(node) => {
-                                                  const key = `${row.id}-${column.id}`;
-                                                  if (node) {
-                                                    cellRefs.current.set(key, node);
-                                                  } else {
-                                                    cellRefs.current.delete(key);
-                                                  }
-                                                }}
-                                                className={clsx(
-                                                  "airtable-long-text-input airtable-long-text-input--expanded",
-                                                  !isEditing && "airtable-cell-input--inactive",
-                                                  showSearchOverlay &&
-                                                    "airtable-search-input--hidden"
-                                                )}
-                                                style={{ height: LONG_TEXT_HEIGHT }}
-                                                readOnly={!isEditing}
-                                                aria-label={`${column.name} cell`}
-                                              />
-                                              {showSearchOverlay && (
-                                                <div className="airtable-search-overlay airtable-search-overlay--expanded">
-                                                  {renderSearchHighlight(
-                                                    editedValue,
-                                                    searchQuery
-                                                  )}
-                                                </div>
-                                              )}
-                                              <img
-                                                alt=""
-                                                className="airtable-long-text-selection"
-                                                src={longLineSelectionIcon.src}
-                                              />
-                                            </>
-                                          )}
-                                        </>
-                                      ) : (
-                                        <>
-                                          <input
-                                            value={editedValue}
-                                            onChange={(event) =>
-                                              handleCellChange(
-                                                row.id,
-                                                column.id,
-                                                event.target.value
-                                              )
-                                            }
-                                            onBlur={() => {
-                                              if (!isEditing) return;
-                                              handleCellCommit(
-                                                row.id,
-                                                column.id,
-                                                editedValue
-                                              );
-                                              setEditingCell(null);
-                                            }}
-                                            onFocus={() =>
-                                              setSelectedCell({
-                                                rowId: row.id,
-                                                columnId: column.id,
-                                              })
-                                            }
-                                            onDoubleClick={() =>
-                                              beginEditExisting(row.id, column.id)
-                                            }
-                                            onKeyDown={(event) =>
-                                              handleCellKeyDown(
-                                                event,
-                                                row.id,
-                                                column.id,
-                                                column.fieldType,
-                                                editedValue
-                                              )
-                                            }
-                                            ref={(node) => {
-                                              const key = `${row.id}-${column.id}`;
-                                              if (node) {
-                                                cellRefs.current.set(key, node);
-                                              } else {
-                                                cellRefs.current.delete(key);
-                                              }
-                                            }}
-                                            className={clsx(
-                                              "h-full w-full bg-transparent text-[13px] text-[#1d1f24] outline-none",
-                                              !isEditing &&
-                                                "airtable-cell-input--inactive",
-                                              showSearchOverlay &&
-                                                "airtable-search-input--hidden"
-                                            )}
-                                            inputMode={isNumber ? "decimal" : undefined}
-                                            pattern={
-                                              isNumber
-                                                ? "^-?\\d*(?:\\.\\d{0,8})?$"
-                                                : undefined
-                                            }
-                                            style={{
-                                              textAlign: isNumber ? "right" : "left",
-                                            }}
-                                            readOnly={!isEditing}
-                                            aria-label={`${column.name} cell`}
-                                          />
-                                          {showSearchOverlay && (
-                                            <div
-                                              className="airtable-search-overlay"
-                                              style={{
-                                                textAlign: isNumber ? "right" : "left",
-                                              }}
-                                            >
-                                              {renderSearchHighlight(
-                                                editedValue,
-                                                searchQuery
-                                              )}
-                                            </div>
-                                          )}
-                                        </>
-                                      )}
-                                      {isSelected && !isEditing && (
-                                        <div className="airtable-cell-handle" />
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                            {scrollablePaddingRight > 0 && (
-                              <div style={{ width: scrollablePaddingRight }} />
-                            )}
-                          </div>
-                        );
-                      })}
-                        {(showRowsInitialLoading || showRowsError || showRowsEmpty) && (
-                          <div className="absolute inset-0 z-40 flex items-center justify-center px-4">
-                            <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-3 text-[12px] text-[#616670] shadow-sm">
-                              {showRowsInitialLoading && <span>Loading rows...</span>}
-                              {showRowsError && (
-                                <span>
-                                  We couldn&apos;t load table rows. {rowsErrorMessage}
-                                </span>
-                              )}
-                              {showRowsEmpty && hasSearchQuery && (
-                                <div className="flex items-center gap-3">
-                                  <span>No rows match &quot;{searchQuery}&quot;.</span>
-                                  <button
-                                    type="button"
-                                    className="rounded-[4px] border border-[#DDE1E3] px-2 py-1 text-[11px] font-medium text-[#1D1F24] hover:bg-[#F7F8FC]"
-                                    onClick={() => {
-                                      setSearchValue("");
-                                    }}
-                                  >
-                                    Clear search
-                                  </button>
-                                </div>
-                              )}
-                              {showRowsEmpty && !hasSearchQuery && <span>No rows yet.</span>}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div
-                        className="flex"
-                        style={{ width: totalColumnsWidth }}
-                        onMouseEnter={() => setAddRowHover(true)}
-                        onMouseLeave={() => setAddRowHover(false)}
-                      >
-                        {rowNumberColumn && (
-                          <button
-                            type="button"
-                            onClick={handleAddRow}
-                            disabled={addRowDisabled}
-                            className="flex h-[33px] cursor-pointer items-center px-2 text-[#606570] disabled:cursor-not-allowed"
-                            style={{
-                              width: rowNumberColumnWidth,
-                              minWidth: rowNumberColumnWidth,
-                              maxWidth: rowNumberColumnWidth,
-                              flex: "0 0 auto",
-                              backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                              borderTop: "0.5px solid #DDE1E3",
-                              borderBottom: "0.5px solid #DDE1E3",
-                              borderLeft: "none",
-                              borderRight: "none",
-                              position: "sticky",
-                              left: 0,
-                              zIndex: 30,
-                            }}
-                            aria-label="Add row"
-                          >
-                            <span className="flex h-[17px] w-[17px] items-center justify-center">
-                              <svg
-                                aria-hidden="true"
-                                className="h-[13px] w-[13px]"
-                                viewBox="0 0 13 13"
-                              >
-                                <rect
-                                  x="0"
-                                  y="6"
-                                  width="13"
-                                  height="1"
-                                  rx="0.5"
-                                  fill="currentColor"
-                                />
-                                <rect
-                                  x="6"
-                                  y="0"
-                                  width="1"
-                                  height="13"
-                                  rx="0.5"
-                                  fill="currentColor"
-                                />
-                              </svg>
-                            </span>
-                          </button>
-                        )}
-                        {nameColumn ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={handleAddRow}
-                              disabled={addRowDisabled}
-                              className="flex h-[33px] cursor-pointer items-center px-2 airtable-secondary-font disabled:cursor-not-allowed"
-                              style={{
-                                width: nameColumnWidth,
-                                minWidth: nameColumnWidth,
-                                maxWidth: nameColumnWidth,
-                                flex: "0 0 auto",
-                                backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                                borderTop: "0.5px solid #DDE1E3",
-                                borderBottom: "0.5px solid #DDE1E3",
-                                borderLeft: "none",
-                                borderRight: "none",
-                                position: "sticky",
-                                left: rowNumberColumnWidth,
-                                zIndex: 30,
-                              }}
-                              aria-label="Add row"
-                            >
-                            </button>
-                            <div
-                              style={{
-                                width: Math.max(0, dataColumnsWidth - nameColumnWidth),
-                                flex: "0 0 auto",
-                                backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                                borderTop: "0.5px solid #DDE1E3",
-                                borderBottom: "0.5px solid #DDE1E3",
-                                borderRight: "0.5px solid #DDE1E3",
-                              }}
-                              aria-hidden="true"
-                            />
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleAddRow}
-                            disabled={addRowDisabled}
-                            className="flex h-[33px] cursor-pointer items-center px-2 airtable-secondary-font disabled:cursor-not-allowed"
-                            style={{
-                              width: dataColumnsWidth,
-                              flex: "0 0 auto",
-                              backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                              borderTop: "0.5px solid #DDE1E3",
-                              borderBottom: "0.5px solid #DDE1E3",
-                              borderLeft: "none",
-                              borderRight: "0.5px solid #DDE1E3",
-                              position: "sticky",
-                              left: rowNumberColumnWidth,
-                            }}
-                            aria-label="Add row"
-                          >
-                          </button>
-                        )}
-                        <div
-                          style={{
-                            width: addColumnWidth,
-                            backgroundColor: addRowHover ? "#F7F8FC" : "transparent",
-                          }}
-                          aria-hidden="true"
-                        />
-                      </div>
-                    </div>
-                    </div>
-                    {nameColumn && nameColumnWidth > 0 && (
-                      <div
-                        className="pointer-events-none absolute top-0 bottom-0 z-40 w-px bg-[#CBCBCB]"
-                        style={{ left: `${rowNumberColumnWidth + nameColumnWidth}px` }}
-                        aria-hidden="true"
-                      />
-                    )}
-                  </div>
-
-                  {!activeColumns.length && (
-                    <div className="p-6 text-center text-[12px] text-[#94a3b8]">
-                      Add a column to start building this table.
-                    </div>
-                  )}
-                </div>
+              {activeTable && !showRowsInitialLoading && (
+                <TableView
+                  activeTableId={activeTableId!}
+                  activeTable={activeTable}
+                  activeColumns={activeColumns}
+                  orderedColumns={orderedColumns}
+                  columnById={columnById}
+                  sortedTableData={sortedTableData}
+                  searchMatchesByRow={searchMatchesByRow}
+                  columnWidths={columnWidths}
+                  setColumnWidths={setColumnWidths}
+                  selectedCell={selectedCell}
+                  setSelectedCell={setSelectedCell}
+                  editingCell={editingCell}
+                  setEditingCell={setEditingCell}
+                  cellEdits={cellEdits}
+                  setCellEdits={setCellEdits}
+                  resizing={resizing}
+                  setResizing={setResizing}
+                  sortedColumnIds={sortedColumnIds}
+                  filteredColumnIds={filteredColumnIds}
+                  hiddenColumnIdSet={hiddenColumnIdSet}
+                  searchQuery={searchQuery}
+                  hasSearchQuery={hasSearchQuery}
+                  rowsHasNextPage={rowsQuery.hasNextPage ?? false}
+                  rowsIsFetchingNextPage={rowsQuery.isFetchingNextPage}
+                  rowsFetchNextPage={rowsQuery.fetchNextPage}
+                  showRowsError={showRowsError}
+                  showRowsEmpty={showRowsEmpty}
+                  showRowsInitialLoading={showRowsInitialLoading}
+                  rowsErrorMessage={rowsErrorMessage}
+                  updateCellMutate={updateCell.mutate}
+                  addRowsMutate={addRows.mutate}
+                  addColumnMutate={addColumn.mutate}
+                  addColumnIsPending={addColumn.isPending}
+                  setContextMenu={setContextMenu}
+                  isFilterMenuOpen={isFilterMenuOpen}
+                  activeRowCount={activeRowCount}
+                  onClearSearch={() => setSearchValue("")}
+                />
               )}
             </section>
           </div>
