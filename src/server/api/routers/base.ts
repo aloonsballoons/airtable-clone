@@ -40,7 +40,7 @@ const filterConditionSchema = z.object({
 	type: z.literal("condition"),
 	columnId: z.string().uuid(),
 	operator: filterOperatorSchema,
-	value: z.string().default(""),
+	value: z.string().optional(),
 });
 const filterGroupSchema: z.ZodType<{
 	type: "group";
