@@ -274,7 +274,6 @@ export function FunctionBar({
   handleFilterOperatorSelect,
   handleFilterValueChange,
   handleFilterDragStart,
-  handleGroupDragStart,
   addFilterCondition,
   addFilterGroup,
   hasFilterItems,
@@ -337,7 +336,6 @@ export function FunctionBar({
   openGroupPlusId,
   setOpenGroupPlusId,
   draggingGroupId,
-  dropTargetInfo,
   filterGroupEmptyWidth,
   filterGroupEmptyHeight,
   filterGroupPaddingTop,
@@ -817,7 +815,6 @@ export function FunctionBar({
                   handleFilterOperatorSelect={handleFilterOperatorSelect}
                   handleFilterValueChange={handleFilterValueChange}
                   handleFilterDragStart={handleFilterDragStart}
-                  handleGroupDragStart={handleGroupDragStart}
                   addFilterCondition={addFilterCondition}
                   addFilterGroup={addFilterGroup}
                   addFilterConditionToGroup={addFilterConditionToGroup}
@@ -827,7 +824,6 @@ export function FunctionBar({
                   openGroupPlusId={openGroupPlusId}
                   setOpenGroupPlusId={setOpenGroupPlusId}
                   draggingGroupId={draggingGroupId}
-                  dropTargetInfo={dropTargetInfo}
                   filterGroupEmptyWidth={filterGroupEmptyWidth}
                   filterGroupEmptyHeight={filterGroupEmptyHeight}
                   filterGroupPaddingTop={filterGroupPaddingTop}
