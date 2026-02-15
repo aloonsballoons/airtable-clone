@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent, RefObject } from "react";
+import type { Dispatch, SetStateAction, MouseEvent as ReactMouseEvent, RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "~/trpc/react";
 
@@ -91,13 +91,13 @@ export type UseTableSortReturn = {
 
   // State
   isSortMenuOpen: boolean;
-  setIsSortMenuOpen: (open: boolean) => void;
+  setIsSortMenuOpen: Dispatch<SetStateAction<boolean>>;
   openSortDirectionId: string | null;
-  setOpenSortDirectionId: (id: string | null) => void;
+  setOpenSortDirectionId: Dispatch<SetStateAction<string | null>>;
   openSortFieldId: string | null;
-  setOpenSortFieldId: (id: string | null) => void;
+  setOpenSortFieldId: Dispatch<SetStateAction<string | null>>;
   isAddSortMenuOpen: boolean;
-  setIsAddSortMenuOpen: (open: boolean) => void;
+  setIsAddSortMenuOpen: Dispatch<SetStateAction<boolean>>;
 
   // Data
   hasSort: boolean;
