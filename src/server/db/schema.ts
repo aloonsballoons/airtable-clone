@@ -130,7 +130,10 @@ export const tableRow = createTable(
 			.$defaultFn(() => new Date())
 			.notNull(),
 	}),
-	(t) => [index("table_row_table_idx").on(t.tableId)],
+	(t) => [
+		index("table_row_table_idx").on(t.tableId),
+		index("table_row_table_created_idx").on(t.tableId, t.createdAt),
+	],
 );
 
 export const user = pgTable("user", {

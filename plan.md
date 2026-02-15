@@ -43,46 +43,6 @@ Testing: Drag group to reorder, verify phantom shows count, verify smooth collap
 
 ---
 
-Phase 10: Server Schema & Filter Processing 
-
-Goal: Support nested groups on server
-
-Make schema recursive (base.ts lines 45-49):
-const filterGroupSchema: z.ZodType<FilterGroup> = z.object({
-type: z.literal("group"),
-connector: filterConnectorSchema,
-conditions: z.array(
-z.union([
-filterConditionSchema,
-z.lazy(() => filterGroupSchema),
-])
-),
-})
-
-Update SQL building:
-
-* Recursive function to build WHERE clauses
-* Handle nested groups with parentheses: (condition1 AND (nested_condition1 OR nested_condition2))
-
-Testing: Create nested filter, verify SQL query is correct, verify data filtering works
-
----
-
-Phase 11: localStorage & filterInput Memo 
-
-Goal: Persist nested groups and normalize for server
-
-Update filterInput useMemo (table-workspace.tsx line 594):
-
-* Recursively normalize groups (filter nullinvalid conditions)
-* Skip empty groups
-* Handle hidden column cleanup recursively
-
-localStorage: JSON.stringify already handles recursion, parsing needs validation
-
-Testing: Create nested filter, refresh → persists, hide column in nested group → removed
-
----
 
 Phase 12: CSS & Polish
 

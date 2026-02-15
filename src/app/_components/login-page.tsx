@@ -22,7 +22,9 @@ const buttonBase =
   "absolute left-[232px] flex h-[80px] w-[996px] items-center rounded-[10px] text-[30px] font-normal";
 const buttonOutline = clsx(
   buttonBase,
-  "justify-start border border-[#dadada] text-[#1d1d1f] shadow-[0_2px_6.5px_rgba(0,0,0,0.0578)]"
+  "justify-start border border-[#dadada] text-[#1d1d1f] shadow-[0_2px_6.5px_rgba(0,0,0,0.0578)]",
+  "cursor-pointer transition-all duration-150",
+  "hover:border-[#b8b8b8] hover:shadow-[0_4px_12px_rgba(0,0,0,0.12)]"
 );
 const buttonSolidBase =
   "absolute left-[236px] top-[732px] flex h-[80px] w-[996px] items-center justify-center rounded-[10px] text-[30px] font-normal text-white box-border";

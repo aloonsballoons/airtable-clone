@@ -9,6 +9,29 @@ import type {
   RefObject,
 } from "react";
 import { FilterDropdown, type FilterDropdownProps } from "./filter";
+import { getSortAddMenuIconSpec, type SortLayoutConstants } from "./use-table-sort";
+import {
+  HIDE_FIELDS_DROPDOWN_WIDTH,
+  HIDE_FIELDS_HEADER_LEFT,
+  HIDE_FIELDS_HEADER_TOP,
+  HIDE_FIELDS_HELP_LEFT,
+  HIDE_FIELDS_HELP_TOP,
+  HIDE_FIELDS_SEPARATOR_LEFT,
+  HIDE_FIELDS_SEPARATOR_TOP,
+  HIDE_FIELDS_SEPARATOR_WIDTH,
+  HIDE_FIELDS_SEPARATOR_HEIGHT,
+  HIDE_FIELDS_HOVER_LEFT,
+  HIDE_FIELDS_HOVER_WIDTH,
+  HIDE_FIELDS_TOGGLE_LEFT,
+  HIDE_FIELDS_TOGGLE_WIDTH,
+  HIDE_FIELDS_TOGGLE_HEIGHT,
+  HIDE_FIELDS_TEXT_LEFT,
+  HIDE_FIELDS_REORDER_WIDTH,
+  HIDE_FIELDS_REORDER_HEIGHT,
+  HIDE_FIELDS_REORDER_LEFT,
+  HIDE_FIELDS_BUTTON_WIDTH,
+  type HideFieldsRow,
+} from "./use-hide-fields";
 
 import arrowIcon from "~/assets/arrow.svg";
 import assigneeIcon from "~/assets/assignee.svg";
@@ -73,16 +96,6 @@ type FilterGroupItem = {
 
 type FilterItem = FilterConditionItem | FilterGroupItem;
 
-type HideFieldsRow = {
-  column: { id: string; name: string; type: string | null };
-  hoverTop: number;
-  toggleOffset: number;
-  iconLeftOffset: number;
-  iconTopOffset: number;
-  iconSpec: { src: string; width: number; height: number };
-  textOffset: number;
-  reorderOffset: number;
-};
 
 type FilterLayoutRow = {
   condition: FilterConditionItem;
@@ -103,30 +116,6 @@ type FilterLayoutRow = {
 
 const STATUS_ICON_SCALE = 1.1;
 const STATUS_MENU_ICON_SIZE = 15 * STATUS_ICON_SCALE;
-
-const HIDE_FIELDS_DROPDOWN_WIDTH = 320;
-const HIDE_FIELDS_HEADER_LEFT = 16;
-const HIDE_FIELDS_HEADER_TOP = 18;
-const HIDE_FIELDS_HELP_LEFT = 289;
-const HIDE_FIELDS_HELP_TOP = 18;
-const HIDE_FIELDS_SEPARATOR_LEFT = 16;
-const HIDE_FIELDS_SEPARATOR_TOP = 44;
-const HIDE_FIELDS_SEPARATOR_WIDTH = 288;
-const HIDE_FIELDS_SEPARATOR_HEIGHT = 2;
-const HIDE_FIELDS_HOVER_LEFT = 16;
-const HIDE_FIELDS_HOVER_WIDTH = 272;
-const HIDE_FIELDS_TOGGLE_LEFT = 20;
-const HIDE_FIELDS_TOGGLE_WIDTH = 13;
-const HIDE_FIELDS_TOGGLE_HEIGHT = 8;
-const HIDE_FIELDS_TEXT_LEFT = 73;
-const HIDE_FIELDS_REORDER_WIDTH = 9;
-const HIDE_FIELDS_REORDER_HEIGHT = 12;
-const HIDE_FIELDS_REORDER_RIGHT_OFFSET = 20;
-const HIDE_FIELDS_REORDER_LEFT =
-  HIDE_FIELDS_DROPDOWN_WIDTH -
-  HIDE_FIELDS_REORDER_RIGHT_OFFSET -
-  HIDE_FIELDS_REORDER_WIDTH;
-const HIDE_FIELDS_BUTTON_WIDTH = 136;
 
 // Suppress unused‑import warning – lightArrowIcon is kept for API surface parity.
 void lightArrowIcon;
@@ -156,39 +145,6 @@ const coerceColumnType = (value?: string | null): ColumnFieldType =>
 const getColumnIconSrc = (name: string, type?: string | null) => {
   const resolvedType = coerceColumnType(type);
   return columnIconMap[name] ?? columnTypeIconMap[resolvedType];
-};
-
-const sortAddMenuIconSpecByName: Record<
-  string,
-  { src: string; width: number; height: number; left: number }
-> = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
-  Status: {
-    src: statusIcon.src,
-    width: STATUS_MENU_ICON_SIZE,
-    height: STATUS_MENU_ICON_SIZE,
-    left: 10,
-  },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
-  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
-};
-
-const sortAddMenuIconSpecByType: Record<
-  ColumnFieldType,
-  { src: string; width: number; height: number; left: number }
-> = {
-  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
-};
-
-const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
-  const resolvedType = coerceColumnType(type);
-  return (
-    sortAddMenuIconSpecByName[name] ?? sortAddMenuIconSpecByType[resolvedType]
-  );
 };
 
 // ---------------------------------------------------------------------------
@@ -247,35 +203,7 @@ export type FunctionBarProps = FilterDropdownProps & {
   remainingSortColumns: { id: string; name: string; type: string | null }[];
   sortAddVirtualItems: { index: number; start: number }[];
   sortAddVirtualizerSize: number;
-  sortListHeight: number;
-  sortFieldTop: number;
-  sortFieldHeight: number;
-  sortRowStride: number;
-  sortConfiguredWidth: number;
-  sortConfiguredHeight: number;
-  sortLineWidth: number;
-  sortFieldLeft: number;
-  sortFieldWidth: number;
-  sortDirectionLeft: number;
-  sortDirectionWidth: number;
-  sortRemoveSize: number;
-  sortRemoveLeft: number;
-  sortReorderLeft: number;
-  sortReorderWidth: number;
-  sortFieldMenuWidth: number;
-  sortFieldMenuPadding: number;
-  sortFieldMenuFirstRowTop: number;
-  sortFieldMenuRowHeight: number;
-  sortFieldMenuGap: number;
-  sortAddTop: number;
-  sortFooterTop: number;
-  sortAddMenuWidth: number;
-  sortAddMenuHeight: number;
-  sortAddMenuListHeight: number;
-  sortAddMenuContentHeight: number;
-  sortAddMenuFirstRowTop: number;
-  sortAddMenuRowHeight: number;
-  sortAddMenuRowStride: number;
+  sortLayout: SortLayoutConstants;
 
   // Search
   searchButtonRef: RefObject<HTMLButtonElement | null>;
@@ -346,6 +274,7 @@ export function FunctionBar({
   handleFilterOperatorSelect,
   handleFilterValueChange,
   handleFilterDragStart,
+  handleGroupDragStart,
   addFilterCondition,
   addFilterGroup,
   hasFilterItems,
@@ -408,6 +337,7 @@ export function FunctionBar({
   openGroupPlusId,
   setOpenGroupPlusId,
   draggingGroupId,
+  dropTargetInfo,
   filterGroupEmptyWidth,
   filterGroupEmptyHeight,
   filterGroupPaddingTop,
@@ -443,35 +373,7 @@ export function FunctionBar({
   remainingSortColumns,
   sortAddVirtualItems,
   sortAddVirtualizerSize,
-  sortListHeight,
-  sortFieldTop,
-  sortFieldHeight,
-  sortRowStride,
-  sortConfiguredWidth,
-  sortConfiguredHeight,
-  sortLineWidth,
-  sortFieldLeft,
-  sortFieldWidth,
-  sortDirectionLeft,
-  sortDirectionWidth,
-  sortRemoveSize,
-  sortRemoveLeft,
-  sortReorderLeft,
-  sortReorderWidth,
-  sortFieldMenuWidth,
-  sortFieldMenuPadding,
-  sortFieldMenuFirstRowTop,
-  sortFieldMenuRowHeight: sortFieldMenuRowHeightVal,
-  sortFieldMenuGap,
-  sortAddTop,
-  sortFooterTop,
-  sortAddMenuWidth,
-  sortAddMenuHeight,
-  sortAddMenuListHeight,
-  sortAddMenuContentHeight,
-  sortAddMenuFirstRowTop,
-  sortAddMenuRowHeight,
-  sortAddMenuRowStride: _sortAddMenuRowStride,
+  sortLayout,
 
   // Search
   searchButtonRef,
@@ -540,29 +442,45 @@ export function FunctionBar({
 
   const sortExpansion = sortButtonWidth - 66;
 
+  // Grid view name width for arrow and Add 100k rows positioning
+  const gridViewNameRef = useRef<HTMLSpanElement>(null);
+  const [arrowLeft, setArrowLeft] = useState(37);
+  const [addButtonLeft, setAddButtonLeft] = useState(175);
+  const VIEW_SELECTOR_PADDING = 10; // padding between view selector and Add 100k rows
+  useEffect(() => {
+    if (gridViewNameRef.current) {
+      const textWidth = gridViewNameRef.current.scrollWidth;
+      const viewSelectorRight = 54 + 27 + textWidth + 10 + 10; // button left + text left + text + gap + arrow
+      setArrowLeft(27 + textWidth + 10);
+      setAddButtonLeft(viewSelectorRight + VIEW_SELECTOR_PADDING);
+    }
+  }, []);
+
   return (
     <div className="relative h-[46px] bg-white">
       <div className="relative h-full min-w-[940px] airtable-secondary-font-regular">
         <img
           alt=""
-          className="absolute left-[20px] top-[16px] h-[15px] w-[16px]"
+          className="absolute left-[20px] top-[13px] h-[15px] w-[16px]"
           src={threeLineIcon.src}
         />
-        <button type="button" className="absolute left-[54px] top-0 h-full w-[108px]">
+        <button type="button" className="absolute left-[54px] top-0 h-full min-w-[108px]">
           <img
             alt=""
-            className="absolute left-0 top-[15px] h-[16px] w-[18px]"
+            className="absolute left-[3px] top-[12px] h-[16px] w-[14px]"
             src={gridViewIcon.src}
           />
           <span
-            className="absolute left-[26px] top-[17px] block w-[66px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
+            ref={gridViewNameRef}
+            className="absolute left-[27px] top-[14px] block max-w-[120px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
             style={{ fontFamily: "Inter, sans-serif" }}
           >
             Grid view
           </span>
           <img
             alt=""
-            className="absolute left-[95px] top-[17.5px] h-[16px] w-[10px]"
+            className="absolute top-[18px] h-[6px] w-[10px]"
+            style={{ left: arrowLeft }}
             src={arrowIcon.src}
           />
         </button>
@@ -570,8 +488,9 @@ export function FunctionBar({
           type="button"
           onClick={handleAddBulkRows}
           disabled={bulkRowsDisabled}
+          style={{ left: addButtonLeft }}
           className={clsx(
-            "absolute left-[175px] top-[10px] flex h-[26px] items-center justify-center rounded-[6px] px-3 text-[13px] leading-[13px]",
+            "absolute top-[10px] flex h-[26px] items-center justify-center rounded-[6px] px-3 text-[13px] leading-[13px]",
             bulkRowsDisabled
               ? "cursor-not-allowed border border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
               : "airtable-outline airtable-selection-hover bg-white text-[#1d1f24] cursor-pointer"
@@ -898,6 +817,7 @@ export function FunctionBar({
                   handleFilterOperatorSelect={handleFilterOperatorSelect}
                   handleFilterValueChange={handleFilterValueChange}
                   handleFilterDragStart={handleFilterDragStart}
+                  handleGroupDragStart={handleGroupDragStart}
                   addFilterCondition={addFilterCondition}
                   addFilterGroup={addFilterGroup}
                   addFilterConditionToGroup={addFilterConditionToGroup}
@@ -907,6 +827,7 @@ export function FunctionBar({
                   openGroupPlusId={openGroupPlusId}
                   setOpenGroupPlusId={setOpenGroupPlusId}
                   draggingGroupId={draggingGroupId}
+                  dropTargetInfo={dropTargetInfo}
                   filterGroupEmptyWidth={filterGroupEmptyWidth}
                   filterGroupEmptyHeight={filterGroupEmptyHeight}
                   filterGroupPaddingTop={filterGroupPaddingTop}
@@ -1049,8 +970,8 @@ export function FunctionBar({
                   ref={sortMenuRef}
                   className="airtable-sort-dropdown airtable-dropdown-surface absolute right-[-8px] top-[40px] z-[120]"
                   style={{
-                    width: hasSort ? sortConfiguredWidth : 320,
-                    height: hasSort ? sortConfiguredHeight : sortListHeight,
+                    width: hasSort ? sortLayout.sortConfiguredWidth : 320,
+                    height: hasSort ? sortLayout.sortConfiguredHeight : sortLayout.sortListHeight,
                   }}
                   onClick={(event) => event.stopPropagation()}
                 >
@@ -1061,12 +982,12 @@ export function FunctionBar({
                     </div>
                     <div
                       className="absolute left-[20px] top-[41px] h-px bg-[#E5E5E5]"
-                      style={{ width: hasSort ? sortLineWidth : 280 }}
+                      style={{ width: hasSort ? sortLayout.sortLineWidth : 280 }}
                     />
                     {hasSort ? (
                       <>
                         {sortRows.map((sortItem, index) => {
-                          const rowTop = sortFieldTop + index * sortRowStride;
+                          const rowTop = sortLayout.sortFieldTop + index * sortLayout.sortRowStride;
                           const isDragging = draggingSortId === sortItem.columnId;
                           const displayTop =
                             isDragging && draggingSortTop !== null ? draggingSortTop : rowTop;
@@ -1076,18 +997,18 @@ export function FunctionBar({
                               !sortedColumnIds.has(column.id)
                           );
                           const fieldMenuHeight =
-                            sortFieldMenuFirstRowTop +
+                            sortLayout.sortFieldMenuFirstRowTop +
                             Math.max(0, fieldMenuColumns.length - 1) *
-                              (sortFieldMenuRowHeightVal + sortFieldMenuGap) +
+                              (sortLayout.sortFieldMenuRowHeight + sortLayout.sortFieldMenuGap) +
                             (fieldMenuColumns.length > 0
-                              ? sortFieldMenuRowHeightVal
+                              ? sortLayout.sortFieldMenuRowHeight
                               : 0) +
-                            sortFieldMenuPadding;
+                            sortLayout.sortFieldMenuPadding;
                           const directionLabels = getSortDirectionLabels(
                             sortItem.columnId
                           );
-                          const removeTop = (sortFieldHeight - sortRemoveSize) / 2;
-                          const reorderTop = (sortFieldHeight - 13) / 2;
+                          const removeTop = (sortLayout.sortFieldHeight - sortLayout.sortRemoveSize) / 2;
+                          const reorderTop = (sortLayout.sortFieldHeight - 13) / 2;
                           const isFieldMenuOpen =
                             openSortFieldId === sortItem.columnId;
                           const isDirectionMenuOpen =
@@ -1102,7 +1023,7 @@ export function FunctionBar({
                               className="airtable-sort-row absolute left-0 right-0"
                               style={{
                                 top: displayTop,
-                                height: sortFieldHeight,
+                                height: sortLayout.sortFieldHeight,
                                 zIndex: shouldElevateRow ? 30 : 0,
                                 transition: isDragging ? "none" : "top 0.15s ease",
                               }}
@@ -1110,7 +1031,7 @@ export function FunctionBar({
                               <button
                                 type="button"
                                 className="airtable-sort-field absolute"
-                                style={{ left: sortFieldLeft, width: sortFieldWidth }}
+                                style={{ left: sortLayout.sortFieldLeft, width: sortLayout.sortFieldWidth }}
                                 onClick={() => {
                                   setOpenSortFieldId((prev) =>
                                     prev === sortItem.columnId ? null : sortItem.columnId
@@ -1128,23 +1049,23 @@ export function FunctionBar({
                                   className="airtable-sort-field-menu z-30"
                                   ref={sortFieldMenuRef}
                                   style={{
-                                    left: sortFieldLeft,
-                                    top: sortFieldHeight + 1,
-                                    width: sortFieldMenuWidth,
+                                    left: sortLayout.sortFieldLeft,
+                                    top: sortLayout.sortFieldHeight + 1,
+                                    width: sortLayout.sortFieldMenuWidth,
                                     height: fieldMenuHeight,
                                   }}
                                 >
                                   <div
                                     className="absolute airtable-find-field-label"
-                                    style={{ left: 9, top: sortFieldMenuPadding }}
+                                    style={{ left: 9, top: sortLayout.sortFieldMenuPadding }}
                                   >
                                     Find a field
                                   </div>
                                   {fieldMenuColumns.map((column, itemIndex) => {
                                     const itemTop =
-                                      sortFieldMenuFirstRowTop +
+                                      sortLayout.sortFieldMenuFirstRowTop +
                                       itemIndex *
-                                        (sortFieldMenuRowHeightVal + sortFieldMenuGap);
+                                        (sortLayout.sortFieldMenuRowHeight + sortLayout.sortFieldMenuGap);
                                     const iconSrc = getColumnIconSrc(
                                       column.name,
                                       column.type
@@ -1210,8 +1131,8 @@ export function FunctionBar({
                                 type="button"
                                 className="airtable-sort-direction absolute"
                                 style={{
-                                  left: sortDirectionLeft,
-                                  width: sortDirectionWidth,
+                                  left: sortLayout.sortDirectionLeft,
+                                  width: sortLayout.sortDirectionWidth,
                                 }}
                                 onClick={() => {
                                   setOpenSortDirectionId((prev) =>
@@ -1233,9 +1154,9 @@ export function FunctionBar({
                                 <div
                                   className="airtable-sort-direction-menu absolute z-10"
                                   style={{
-                                    left: sortDirectionLeft,
-                                    top: sortFieldHeight + 1,
-                                    width: sortDirectionWidth,
+                                    left: sortLayout.sortDirectionLeft,
+                                    top: sortLayout.sortFieldHeight + 1,
+                                    width: sortLayout.sortDirectionWidth,
                                     height: 73,
                                   }}
                                 >
@@ -1276,7 +1197,7 @@ export function FunctionBar({
                               <button
                                 type="button"
                                 className="airtable-sort-remove absolute"
-                                style={{ left: sortRemoveLeft, top: removeTop }}
+                                style={{ left: sortLayout.sortRemoveLeft, top: removeTop }}
                                 onClick={() => {
                                   const nextSorts = sortRows.filter(
                                     (item) => item.columnId !== sortItem.columnId
@@ -1292,7 +1213,7 @@ export function FunctionBar({
                               <button
                                 type="button"
                                 className="airtable-sort-reorder absolute"
-                                style={{ left: sortReorderLeft, top: reorderTop }}
+                                style={{ left: sortLayout.sortReorderLeft, top: reorderTop }}
                                 onMouseDown={(event) =>
                                   handleSortDragStart(event, sortItem.columnId)
                                 }
@@ -1300,14 +1221,14 @@ export function FunctionBar({
                               >
                                 <img
                                   alt=""
-                                  style={{ width: sortReorderWidth, height: 13 }}
+                                  style={{ width: sortLayout.sortReorderWidth, height: 13 }}
                                   src={reorderIcon.src}
                                 />
                               </button>
                             </div>
                           );
                         })}
-                        <div className="absolute" style={{ left: 23, top: sortAddTop }}>
+                        <div className="absolute" style={{ left: 23, top: sortLayout.sortAddTop }}>
                           <button
                             type="button"
                             className="airtable-sort-add"
@@ -1328,8 +1249,8 @@ export function FunctionBar({
                               className="airtable-sort-add-menu absolute z-10"
                               style={{
                                 top: "calc(100% + 7px)",
-                                width: sortAddMenuWidth,
-                                height: sortAddMenuHeight,
+                                width: sortLayout.sortAddMenuWidth,
+                                height: sortLayout.sortAddMenuHeight,
                               }}
                             >
                               <div
@@ -1342,10 +1263,10 @@ export function FunctionBar({
                                 ref={sortAddMenuListRef}
                                 className="airtable-sort-add-menu-list absolute left-0 right-0"
                                 style={{
-                                  top: sortAddMenuFirstRowTop,
-                                  height: sortAddMenuListHeight,
+                                  top: sortLayout.sortAddMenuFirstRowTop,
+                                  height: sortLayout.sortAddMenuListHeight,
                                   overflowY:
-                                    sortAddMenuContentHeight > sortAddMenuHeight
+                                    sortLayout.sortAddMenuContentHeight > sortLayout.sortAddMenuHeight
                                       ? "auto"
                                       : "hidden",
                                 }}
@@ -1369,7 +1290,7 @@ export function FunctionBar({
                                         className="airtable-sort-add-menu-item"
                                         style={{
                                           top: virtualRow.start,
-                                          height: sortAddMenuRowHeight,
+                                          height: sortLayout.sortAddMenuRowHeight,
                                         }}
                                         onClick={() => {
                                           const nextSorts = [
@@ -1406,13 +1327,13 @@ export function FunctionBar({
                         </div>
                         <div
                           className="absolute left-px right-px h-px bg-[#E4E4E4]"
-                          style={{ top: sortFooterTop - 1 }}
+                          style={{ top: sortLayout.sortFooterTop - 1 }}
                           aria-hidden="true"
                         />
                         <div
                           className="airtable-sort-footer absolute left-0 right-0"
                           style={{
-                            top: sortFooterTop,
+                            top: sortLayout.sortFooterTop,
                             bottom: 0,
                             paddingLeft: 22,
                           }}

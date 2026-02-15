@@ -547,10 +547,10 @@ export function FilterDropdown({
     requestAnimationFrame(() => {
       setFlipDeltas({});
     });
-
+  
+    // Update prev tops for next change
     prevTopsRef.current = nextTops;
-}, [filterLayout.entries]);
-
+  }, [filterLayout.entries]);
 
   return (
     <div
@@ -631,11 +631,19 @@ export function FilterDropdown({
                 const showConnectorControl = group.showConnectorControl;
                 const connectorLabel = group.connector;
                 const isConnectorOpen = openFilterConnectorId === group.connectorKey;
+                const isGroupPlusOpen = openGroupPlusId === group.group.id;
+                // Boost z-index if this group is inside another group that has its plus dropdown open
+                const isInsideGroupWithOpenDropdown =
+                  openGroupPlusId && group.parentGroupId === openGroupPlusId;
+                const groupKey = group.group.id;
+                const groupDelta = flipDeltas[groupKey] ?? 0;
+                const GROUP_MENU_Z = 20000; // higher than any row/menu you have
+                const GROUP_BASE_Z = 10 + group.depth * 10;
 
                 return (
                   <React.Fragment key={group.group.id}>
-                    {/* Connector for nested groups */}
-                    {group.showConnector && group.depth > 0 && (
+                    {/* Connector for groups */}
+                    {group.showConnector && !isGroupDragging && (
                       <div
                         className="absolute"
                         style={{
@@ -733,13 +741,17 @@ export function FilterDropdown({
                         left: group.left,
                         top: group.top,
                         width: group.width,
-                        height: group.height,
+                        height: isGroupDragging && group.height > filterGroupEmptyHeight ? filterGroupEmptyHeight : group.height,
                         borderRadius: 3,
                         border: "1px solid #E4E4E4",
                         background: "#F7F8FC",
-                        transition: "height 0.15s ease, width 0.15s ease",
-                        opacity: isGroupDragging ? 0.5 : 1,
-                        zIndex: 10 + group.depth * 10, // Nested groups appear on top
+                        transition: groupDelta ? "none" : "height 0.15s ease, width 0.15s ease, transform 150ms ease",
+                        transform: groupDelta ? `translateY(${groupDelta}px)` : "translateY(0px)",
+                        willChange: "transform",
+                        overflow: isGroupDragging ? "hidden" : "visible",
+                        zIndex: isGroupPlusOpen
+                        ? GROUP_MENU_Z
+                        : GROUP_BASE_Z,
                       }}
                     >
                     {group.isEmpty && (
@@ -806,83 +818,6 @@ export function FilterDropdown({
                       />
                     </button>
 
-                    {/* Plus dropdown */}
-                    {openGroupPlusId === group.group.id && (
-                      <div
-                        className="airtable-dropdown-surface absolute"
-                        style={{
-                          left: group.width - 105,
-                          top: 3 + 32 + 8,
-                          width: 174,
-                          height: 92,
-                          borderRadius: 3,
-                          zIndex: 5000,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className="absolute text-[13px] font-normal text-[#1D1F24] cursor-pointer"
-                          style={{
-                            left: 12,
-                            top: 12,
-                            width: 150,
-                            height: 35,
-                            borderRadius: 3,
-                            background: "transparent",
-                            border: "none",
-                            textAlign: "left",
-                            paddingLeft: 8,
-                            transition: "background 0.15s ease",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = "#F2F2F2";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "transparent";
-                          }}
-                          onClick={() => {
-                            addFilterConditionToGroup(group.group.id, group.parentGroupId);
-                          }}
-                        >
-                          Add condition
-                        </button>
-                        <button
-                          type="button"
-                          className="absolute text-[13px] font-normal cursor-pointer"
-                          style={{
-                            left: 12,
-                            top: 46,
-                            width: 150,
-                            height: 35,
-                            borderRadius: 3,
-                            background: "transparent",
-                            border: "none",
-                            textAlign: "left",
-                            paddingLeft: 8,
-                            transition: "background 0.15s ease",
-                            color: group.depth === 1 ? "#8E8F92" : "#1D1F24",
-                            cursor: group.depth === 1 ? "not-allowed" : "pointer",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (group.depth !== 1) {
-                              e.currentTarget.style.background = "#F2F2F2";
-                            }
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "transparent";
-                          }}
-                          onClick={() => {
-                            if (group.depth !== 1) {
-                              addFilterGroupToGroup(group.group.id, group.parentGroupId);
-                            }
-                          }}
-                          disabled={group.depth === 1}
-                        >
-                          Add condition group
-                        </button>
-                      </div>
-                    )}
-
                     {/* Delete button - positioned relative to right edge */}
                     <button
                       type="button"
@@ -924,6 +859,83 @@ export function FilterDropdown({
                       />
                     </button>
                   </div>
+
+                  {/* Plus dropdown - rendered as sibling to group box for independent z-index */}
+                  {openGroupPlusId === group.group.id && (
+                    <div
+                      className="airtable-dropdown-surface absolute"
+                      style={{
+                        left: group.left + group.width - 105,
+                        top: group.top + 3 + 32 + 8,
+                        width: 174,
+                        height: 92,
+                        borderRadius: 3,
+                        zIndex: 25000,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="absolute text-[13px] font-normal text-[#1D1F24] cursor-pointer"
+                        style={{
+                          left: 12,
+                          top: 12,
+                          width: 150,
+                          height: 35,
+                          borderRadius: 3,
+                          background: "transparent",
+                          border: "none",
+                          textAlign: "left",
+                          paddingLeft: 8,
+                          transition: "background 0.15s ease",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "#F2F2F2";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                        onClick={() => {
+                          addFilterConditionToGroup(group.group.id, group.parentGroupId);
+                        }}
+                      >
+                        Add condition
+                      </button>
+                      <button
+                        type="button"
+                        className="absolute text-[13px] font-normal cursor-pointer"
+                        style={{
+                          left: 12,
+                          top: 46,
+                          width: 150,
+                          height: 35,
+                          borderRadius: 3,
+                          background: "transparent",
+                          border: "none",
+                          textAlign: "left",
+                          paddingLeft: 8,
+                          transition: "background 0.15s ease",
+                          color: group.depth === 1 ? "#8E8F92" : "#1D1F24",
+                          cursor: group.depth === 1 ? "not-allowed" : "pointer",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (group.depth !== 1) {
+                            e.currentTarget.style.background = "#F2F2F2";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                        onClick={() => {
+                          if (group.depth !== 1) {
+                            addFilterGroupToGroup(group.group.id, group.parentGroupId);
+                          }
+                        }}
+                        disabled={group.depth === 1}
+                      >
+                        Add condition group
+                      </button>
+                    </div>
+                  )}
                   </React.Fragment>
                 );
               }
@@ -981,19 +993,25 @@ export function FilterDropdown({
                 (filterRowHeight - filterFieldHeight) / 2 + dragOffset;
               const fieldMenuTop = fieldTop + filterFieldHeight + 2;
               const operatorMenuTop = fieldMenuTop;
-              const baseRowZIndex = 10 + row.depth * 10;
-
-              const rowZIndex = isOperatorMenuOpen
-                ? baseRowZIndex + 30
+              const baseRowZIndex = isOperatorMenuOpen
+                ? 40
                 : isDraggingRow
-                ? baseRowZIndex + 20
+                ? 30
                 : isFieldMenuOpen || isConnectorOpen
-                ? baseRowZIndex + 15
-                : baseRowZIndex;
+                ? 25
+                : 10;
+              // Boost z-index if this row is inside a group that has its plus dropdown open
+              const isInsideGroupWithOpenDropdown =
+                openGroupPlusId &&
+                (row.parentGroupId === openGroupPlusId || row.grandparentGroupId === openGroupPlusId);
+              const rowZIndex = isInsideGroupWithOpenDropdown
+                ? baseRowZIndex + row.depth * 10 + 20000
+                : baseRowZIndex + row.depth * 10;
               const hideConnectorControl =
                 showConnectorControl && isDraggingRow;
-                const rowKey = row.condition.id;
-                const flipDelta = flipDeltas[rowKey] ?? 0;
+              const rowKey = row.condition.id;
+              const flipDelta = flipDeltas[rowKey] ?? 0;
+
               return (
                 <div
                   key={row.condition.id}
@@ -1005,11 +1023,8 @@ export function FilterDropdown({
                     height: filterRowHeight,
                     zIndex: rowZIndex,
                     transform: flipDelta ? `translateY(${flipDelta}px)` : "translateY(0px)",
-                    transition:
-                      isDraggingRow || flipDelta
-                        ? "none"
-                        : "transform 150ms ease",
-                    willChange: "transform, top",
+                    transition: flipDelta ? "none" : "transform 150ms ease",
+                    willChange: "transform",
                     overflow: "visible",
                   }}
                 >
@@ -1072,9 +1087,7 @@ export function FilterDropdown({
                           top: filterConnectorHeight,
                           borderRadius: 2,
                           background: "#ffffff",
-                          zIndex: 10000,
-                          overflow: "visible",
-                          position: "absolute"
+                          zIndex: 5000,
                         }}
                       >
                         {FILTER_CONNECTORS.map((connector, index) => (
@@ -1573,28 +1586,14 @@ export function FilterDropdown({
                     onClick={() => {
                       if (row.scope === "root") {
                         setFilterItems((prev) =>
-                          prev.filter(
-                            (item) =>
-                              item.type !== "condition" ||
-                              item.id !== row.condition.id
-                          )
+                          prev.filter((item) => item.type !== "condition" || item.id !== row.condition.id)
                         );
-                      } else if (row.groupId) {
+                      } else {
+                        const targetGroupId = row.parentGroupId ?? row.groupId; // parentGroupId is the group that contains the row
+                        if (!targetGroupId) return;
+                    
                         setFilterItems((prev) =>
-                          prev.flatMap((item) => {
-                            if (
-                              item.type !== "group" ||
-                              item.id !== row.groupId
-                            ) {
-                              return [item];
-                            }
-                            const nextConditions = item.conditions.filter(
-                              (condition) =>
-                                condition.id !== row.condition.id
-                            );
-                            if (nextConditions.length === 0) return [];
-                            return [{ ...item, conditions: nextConditions }];
-                          })
+                          removeConditionFromGroupTree(prev, targetGroupId, row.condition.id)
                         );
                       }
                     }}
@@ -1742,6 +1741,24 @@ export function FilterDropdown({
                 {draggedRow.condition.value || "Enter a value"}
               </span>
             )}
+            <span
+              style={{
+                position: "absolute",
+                left: filterFieldSeparatorValueLeft,
+                top: 0,
+                width: filterFieldSeparatorActionsLeft - filterFieldSeparatorValueLeft,
+                height: filterFieldHeight,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <img
+                alt=""
+                style={{ width: 13.15, height: 15.45, opacity: 0.9 }}
+                src={deleteIcon.src}
+              />
+            </span>
             <span
               style={{
                 position: "absolute",

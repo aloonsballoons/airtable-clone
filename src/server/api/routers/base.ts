@@ -10,7 +10,7 @@ const MAX_TABLES = 1000;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const MAX_BULK_ROWS = 100_000;
-const BULK_INSERT_BATCH_SIZE = 1_000;
+const BULK_INSERT_BATCH_SIZE = 5_000;
 const MAX_ROWS_QUERY_LIMIT = 2_000;
 
 const baseNameSchema = z.string().min(1).max(120);
@@ -42,10 +42,19 @@ const filterConditionSchema = z.object({
 	operator: filterOperatorSchema,
 	value: z.string().optional().default(""),
 });
-const filterGroupSchema = z.object({
+const filterGroupSchema: z.ZodType<{
+	type: "group";
+	connector: "and" | "or";
+	conditions: Array<
+		| { type: "condition"; columnId: string; operator: string; value: string }
+		| { type: "group"; connector: "and" | "or"; conditions: any[] }
+	>;
+}> = z.object({
 	type: z.literal("group"),
 	connector: filterConnectorSchema,
-	conditions: z.array(filterConditionSchema),
+	conditions: z.array(
+		z.union([filterConditionSchema, z.lazy(() => filterGroupSchema)])
+	),
 });
 const filterSchema = z.object({
 	connector: filterConnectorSchema,
@@ -326,8 +335,17 @@ const buildBulkPopulateSqlExpressions = (columns: Array<{ id: string; type: stri
 		sql`, `,
 	)})`;
 
+	// Build search text expression by concatenating all values with spaces
+	const searchTextExpression = valueColumns.length > 0
+		? sql`concat_ws(' ', ${sql.join(
+				valueColumns.map((column) => column.expression),
+				sql`, `,
+			)})`
+		: sql`''`;
+
 	return {
 		dataExpression,
+		searchTextExpression,
 	};
 };
 
@@ -713,6 +731,88 @@ export const baseRouter = createTRPCRouter({
 				markPhase("preflight");
 
 				if (input.populateWithFaker) {
+					// Optimize: defer column loading until needed
+					if (!input.ids) {
+						mode = "populate-sql";
+						// Load columns only for SQL-based population
+						const columns = await ctx.db.query.tableColumn.findMany({
+							where: eq(tableColumn.tableId, input.tableId),
+						});
+						const normalizedColumns = columns.map((column) => ({
+							id: column.id,
+							type: column.type ?? "single_line_text",
+						}));
+						markPhase("load-columns");
+
+						// OPTIMIZATION: Batch inserts for better performance with indexes
+						// Large single inserts are slow due to index updates
+						// Breaking into batches and running in parallel is much faster
+						const BATCH_SIZE = 20_000; // Increased from 10k for faster inserts
+						const MAX_PARALLEL = 10; // Increased from 5 for higher throughput
+						const numBatches = Math.ceil(input.count / BATCH_SIZE);
+
+						if (normalizedColumns.length === 0) {
+							// Insert empty rows in parallel batches
+							const insertBatch = async (batchIndex: number) => {
+								const offset = batchIndex * BATCH_SIZE;
+								const batchSize = Math.min(BATCH_SIZE, input.count - offset);
+								await ctx.db.execute(sql`
+									INSERT INTO table_row (id, table_id, data, search_text)
+									SELECT
+										gen_random_uuid(),
+										${input.tableId}::uuid,
+										'{}'::jsonb,
+										''
+									FROM generate_series(1::int, ${sql.raw(String(batchSize))}::int)
+								`);
+							};
+
+							// Process batches in parallel groups
+							for (let i = 0; i < numBatches; i += MAX_PARALLEL) {
+								const batchPromises = [];
+								for (let j = 0; j < MAX_PARALLEL && i + j < numBatches; j++) {
+									batchPromises.push(insertBatch(i + j));
+								}
+								await Promise.all(batchPromises);
+							}
+							markPhase("insert");
+							return { added: input.count };
+						}
+
+						// Use lexicon-based data generation for UNIQUE data across all 100k rows
+						// The row_num-based formulas ensure each row has different combinations
+						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
+
+						// Insert in parallel batches for maximum throughput
+						const insertBatch = async (batchIndex: number) => {
+							const offset = batchIndex * BATCH_SIZE;
+							const batchSize = Math.min(BATCH_SIZE, input.count - offset);
+							const startNum = offset + 1;
+							const endNum = offset + batchSize;
+							await ctx.db.execute(sql`
+								INSERT INTO table_row (id, table_id, data, search_text)
+								SELECT
+									gen_random_uuid(),
+									${input.tableId}::uuid,
+									${bulkExpressions.dataExpression},
+									${bulkExpressions.searchTextExpression}
+								FROM generate_series(${sql.raw(String(startNum))}::int, ${sql.raw(String(endNum))}::int) AS series(row_num)
+							`);
+						};
+
+						// Process batches in parallel groups
+						for (let i = 0; i < numBatches; i += MAX_PARALLEL) {
+							const batchPromises = [];
+							for (let j = 0; j < MAX_PARALLEL && i + j < numBatches; j++) {
+								batchPromises.push(insertBatch(i + j));
+							}
+							await Promise.all(batchPromises);
+						}
+						markPhase("insert");
+						return { added: input.count };
+					}
+
+					// Load columns only when using JS-based population with explicit IDs
 					const columns = await ctx.db.query.tableColumn.findMany({
 						where: eq(tableColumn.tableId, input.tableId),
 					});
@@ -721,111 +821,6 @@ export const baseRouter = createTRPCRouter({
 						type: column.type ?? "single_line_text",
 					}));
 					markPhase("load-columns");
-					if (!input.ids) {
-						mode = "populate-sql";
-						if (normalizedColumns.length === 0) {
-							const insertedAtIso = new Date().toISOString();
-							await ctx.db.execute(sql`
-								INSERT INTO table_row (id, table_id, data, created_at, updated_at)
-								SELECT
-									gen_random_uuid(),
-									${input.tableId}::uuid,
-									'{}'::jsonb,
-									${insertedAtIso}::timestamptz,
-									${insertedAtIso}::timestamptz
-								FROM generate_series(1, ${input.count})
-							`);
-							markPhase("insert");
-							if (input.count >= 10_000) {
-								searchBackfillScheduled = true;
-								const backfillStart = process.hrtime.bigint();
-								void ctx.db
-									.execute(sql`
-										UPDATE table_row
-										SET search_text = COALESCE(
-											(SELECT string_agg(value, ' ') FROM jsonb_each_text(table_row.data)),
-											''
-										)
-										WHERE table_id = ${input.tableId}::uuid
-											AND updated_at = ${insertedAtIso}::timestamptz
-											AND search_text = ''
-									`)
-									.then(() => {
-										console.info("[base.addRows.searchBackfill]", {
-											tableId: input.tableId,
-											count: input.count,
-											ms: roundMilliseconds(
-												nanosecondsToMilliseconds(
-													process.hrtime.bigint() - backfillStart,
-												),
-											),
-										});
-									})
-									.catch((backfillError) => {
-										console.error("[base.addRows.searchBackfill.error]", {
-											tableId: input.tableId,
-											count: input.count,
-											message:
-												backfillError instanceof Error
-													? backfillError.message
-													: String(backfillError),
-										});
-									});
-							}
-							return { added: input.count };
-						}
-						const bulkExpressions =
-							buildBulkPopulateSqlExpressions(normalizedColumns);
-						const insertedAtIso = new Date().toISOString();
-						await ctx.db.execute(sql`
-							INSERT INTO table_row (id, table_id, data, created_at, updated_at)
-							SELECT
-								gen_random_uuid(),
-								${input.tableId}::uuid,
-								${bulkExpressions.dataExpression},
-								${insertedAtIso}::timestamptz,
-								${insertedAtIso}::timestamptz
-							FROM generate_series(1, ${input.count}) AS series(row_num)
-						`);
-						markPhase("insert");
-						if (input.count >= 10_000) {
-							searchBackfillScheduled = true;
-							const backfillStart = process.hrtime.bigint();
-							void ctx.db
-								.execute(sql`
-									UPDATE table_row
-									SET search_text = COALESCE(
-										(SELECT string_agg(value, ' ') FROM jsonb_each_text(table_row.data)),
-										''
-									)
-									WHERE table_id = ${input.tableId}::uuid
-										AND updated_at = ${insertedAtIso}::timestamptz
-										AND search_text = ''
-								`)
-								.then(() => {
-									console.info("[base.addRows.searchBackfill]", {
-										tableId: input.tableId,
-										count: input.count,
-										ms: roundMilliseconds(
-											nanosecondsToMilliseconds(
-												process.hrtime.bigint() - backfillStart,
-											),
-										),
-									});
-								})
-								.catch((backfillError) => {
-									console.error("[base.addRows.searchBackfill.error]", {
-										tableId: input.tableId,
-										count: input.count,
-										message:
-											backfillError instanceof Error
-												? backfillError.message
-												: String(backfillError),
-									});
-								});
-						}
-						return { added: input.count };
-					}
 
 					mode = "populate-js";
 					await ctx.db.transaction(async (tx) => {
@@ -877,11 +872,12 @@ export const baseRouter = createTRPCRouter({
 					mode = "blank-sql";
 					// Let PostgreSQL generate UUIDs - even faster
 					await ctx.db.execute(sql`
-					INSERT INTO table_row (id, table_id, data, created_at, updated_at)
-					SELECT 
+					INSERT INTO table_row (id, table_id, data, search_text, created_at, updated_at)
+					SELECT
 						gen_random_uuid(),
 						${input.tableId}::uuid,
 						'{}'::jsonb,
+						'',
 						NOW(),
 						NOW()
 					FROM generate_series(1, ${input.count})
@@ -955,6 +951,33 @@ export const baseRouter = createTRPCRouter({
 
 			await ctx.db.delete(baseTable).where(eq(baseTable.id, input.tableId));
 			return { success: true };
+		}),
+
+	renameTable: protectedProcedure
+		.input(z.object({ tableId: z.string().uuid(), name: tableNameSchema }))
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const [updated] = await ctx.db
+				.update(baseTable)
+				.set({ name: input.name, updatedAt: new Date() })
+				.where(eq(baseTable.id, input.tableId))
+				.returning({ id: baseTable.id, name: baseTable.name });
+
+			if (!updated) {
+				throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+			}
+
+			return updated;
 		}),
 
 	deleteColumn: protectedProcedure
@@ -1458,19 +1481,20 @@ export const baseRouter = createTRPCRouter({
 			let filterExpression: SqlExpression | null = null;
 			if (input.filter && input.filter.items.length > 0) {
 				const filterColumnIds = new Set<string>();
-				input.filter.items.forEach((item) => {
+
+				// Recursive function to collect column IDs from nested groups
+				const collectColumnIds = (item: typeof input.filter.items[number]) => {
 					if (item.type === "condition") {
 						if (!hiddenColumnIdSet.has(item.columnId)) {
 							filterColumnIds.add(item.columnId);
 						}
 						return;
 					}
-					item.conditions.forEach((condition) => {
-						if (!hiddenColumnIdSet.has(condition.columnId)) {
-							filterColumnIds.add(condition.columnId);
-						}
-					});
-				});
+					// Recursively process group conditions (may contain nested groups)
+					item.conditions.forEach((child) => collectColumnIds(child));
+				};
+
+				input.filter.items.forEach(collectColumnIds);
 
 				const filterColumns = filterColumnIds.size
 					? await ctx.db.query.tableColumn.findMany({
@@ -1569,16 +1593,20 @@ export const baseRouter = createTRPCRouter({
 					) ?? null;
 				};
 
+				// Recursive function to build expressions for groups and nested groups
+				const buildItemExpression = (item: typeof input.filter.items[number]): SqlExpression | null => {
+					if (item.type === "condition") {
+						return buildConditionExpression(item);
+					}
+					// Process group: recursively handle both conditions and nested groups
+					const childExpressions = item.conditions.map((child) =>
+						buildItemExpression(child)
+					);
+					return combineConditions(childExpressions, item.connector);
+				};
+
 				const topLevelConditions = input.filter.items
-					.map((item) => {
-						if (item.type === "condition") {
-							return buildConditionExpression(item);
-						}
-						const groupConditions = item.conditions.map((condition) =>
-							buildConditionExpression(condition),
-						);
-						return combineConditions(groupConditions, item.connector);
-					})
+					.map(buildItemExpression)
 					.filter(Boolean) as Array<SqlExpression>;
 
 				filterExpression = combineConditions(

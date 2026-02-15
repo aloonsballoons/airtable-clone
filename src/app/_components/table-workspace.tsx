@@ -42,7 +42,13 @@ import toggleIcon from "~/assets/toggle.svg";
 import xIcon from "~/assets/x.svg";
 import { authClient } from "~/server/better-auth/client";
 import { api, type RouterInputs } from "~/trpc/react";
+import { GridViewContainer } from "./grid-view-component";
 import { TableView } from "./table-view";
+import { useTableSort, type SortConfig, getSortAddMenuIconSpec } from "./use-table-sort";
+import { useHideFields } from "./use-hide-fields";
+import { useTableSearch } from "./use-table-search";
+import { useTableFilter, type FilterItem, type FilterConnector, type FilterOperator, type FilterConditionItem, type FilterGroupItem, FILTER_CONNECTORS, FILTER_TEXT_OPERATORS, FILTER_NUMBER_OPERATORS, FILTER_OPERATOR_LABELS, FILTER_OPERATOR_REQUIRES_VALUE, getDefaultFilterOperator, getFilterOperatorsForType, formatFilterOperatorLabel, createFilterCondition, createFilterGroup } from "./use-table-filter";
+import { useBulkRows } from "./use-bulk-rows";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -50,8 +56,6 @@ const inter = Inter({
 });
 
 const MAX_TABLES = 1000;
-const MAX_ROWS = 2_000_000;
-const BULK_ROWS = 100_000;
 const PAGE_ROWS = 1000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
 const MAX_PREFETCH_PAGES_PER_BURST = 3;
@@ -67,40 +71,7 @@ const ADD_COLUMN_MENU_WIDTH = 400;
 const ADD_COLUMN_OPTION_WIDTH = 380;
 const MAX_NUMBER_DECIMALS = 8;
 const STATUS_ICON_SCALE = 1.1;
-const STATUS_MENU_ICON_SIZE = 15 * STATUS_ICON_SCALE;
 const STATUS_HEADER_ICON_SIZE = 13 * STATUS_ICON_SCALE;
-const HIDE_FIELDS_DROPDOWN_WIDTH = 320;
-const HIDE_FIELDS_HEADER_LEFT = 16;
-const HIDE_FIELDS_HEADER_TOP = 18;
-const HIDE_FIELDS_HELP_LEFT = 289;
-const HIDE_FIELDS_HELP_TOP = 18;
-const HIDE_FIELDS_SEPARATOR_LEFT = 16;
-const HIDE_FIELDS_SEPARATOR_TOP = 44;
-const HIDE_FIELDS_SEPARATOR_WIDTH = 288;
-const HIDE_FIELDS_SEPARATOR_HEIGHT = 2;
-const HIDE_FIELDS_TEXT_LEFT = 73;
-const HIDE_FIELDS_FIRST_TEXT_TOP = 61;
-const HIDE_FIELDS_TEXT_HEIGHT = 13;
-const HIDE_FIELDS_TEXT_ROW_GAP = HIDE_FIELDS_TEXT_HEIGHT + 13;
-const HIDE_FIELDS_HOVER_LEFT = 16;
-const HIDE_FIELDS_HOVER_WIDTH = 272;
-const HIDE_FIELDS_HOVER_HEIGHT = 18;
-const HIDE_FIELDS_TOGGLE_LEFT = 20;
-const HIDE_FIELDS_TOGGLE_WIDTH = 13;
-const HIDE_FIELDS_TOGGLE_HEIGHT = 8;
-const HIDE_FIELDS_REORDER_WIDTH = 9;
-const HIDE_FIELDS_REORDER_HEIGHT = 12;
-const HIDE_FIELDS_REORDER_RIGHT_OFFSET = 20;
-const HIDE_FIELDS_REORDER_LEFT =
-  HIDE_FIELDS_DROPDOWN_WIDTH -
-  HIDE_FIELDS_REORDER_RIGHT_OFFSET -
-  HIDE_FIELDS_REORDER_WIDTH;
-const HIDE_FIELDS_REORDER_TOP = 62;
-const HIDE_FIELDS_REORDER_ROW_GAP = HIDE_FIELDS_REORDER_HEIGHT + 14;
-const HIDE_FIELDS_BUTTON_WIDTH = 136;
-const HIDE_FIELDS_BUTTON_HEIGHT = 26;
-const HIDE_FIELDS_BUTTON_GAP = 24;
-const HIDE_FIELDS_BUTTON_BOTTOM_PADDING = 10;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
@@ -109,69 +80,6 @@ type ColumnFieldType = "single_line_text" | "long_text" | "number";
 const coerceColumnType = (value?: string | null): ColumnFieldType =>
   value === "long_text" || value === "number" ? value : "single_line_text";
 
-const sortAddMenuIconSpecByName: Record<
-  string,
-  { src: string; width: number; height: number; left: number }
-> = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
-  Status: {
-    src: statusIcon.src,
-    width: STATUS_MENU_ICON_SIZE,
-    height: STATUS_MENU_ICON_SIZE,
-    left: 10,
-  },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
-  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
-};
-
-const sortAddMenuIconSpecByType: Record<
-  ColumnFieldType,
-  { src: string; width: number; height: number; left: number }
-> = {
-  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
-};
-
-const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
-  const resolvedType = coerceColumnType(type);
-  return (
-    sortAddMenuIconSpecByName[name] ?? sortAddMenuIconSpecByType[resolvedType]
-  );
-};
-
-const hideFieldsIconSpecByName: Record<
-  string,
-  { src: string; width: number; height: number; gap: number }
-> = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, gap: 9 },
-  Status: { src: statusIcon.src, width: 17, height: 17, gap: 7 },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, gap: 9 },
-  Name: { src: nameIcon.src, width: 12.6, height: 12.6, gap: 10 },
-  Notes: { src: notesIcon.src, width: 15, height: 13, gap: 8 },
-  Number: { src: numberIcon.src, width: 13, height: 13, gap: 9.5 },
-};
-
-const hideFieldsIconSpecByType: Record<
-  ColumnFieldType,
-  { src: string; width: number; height: number; gap: number }
-> = {
-  // Non-null assertions are safe here: these keys are defined in hideFieldsIconSpecByName.
-  single_line_text: hideFieldsIconSpecByName["Name"]!,
-  long_text: hideFieldsIconSpecByName["Notes"]!,
-  number: hideFieldsIconSpecByName["Number"]!,
-};
-
-const getHideFieldsIconSpec = (name: string, type?: string | null) => {
-  const resolvedType = coerceColumnType(type);
-  return (
-    hideFieldsIconSpecByName[name] ??
-    hideFieldsIconSpecByType[resolvedType] ??
-    hideFieldsIconSpecByName["Name"]!
-  );
-};
 
 const addColumnDefaultBaseNameByType: Record<ColumnFieldType, string> = {
   single_line_text: "Label",
@@ -215,38 +123,6 @@ const imgEllipse3 =
   "https://www.figma.com/api/mcp/asset/42309589-dc81-48ef-80de-6483844e93cc";
 
 type TableRow = Record<string, string> & { id: string };
-type SortConfig = { columnId: string; direction: "asc" | "desc" };
-type FilterConnector = "and" | "or";
-type FilterOperator =
-  | "contains"
-  | "does_not_contain"
-  | "is"
-  | "is_not"
-  | "is_empty"
-  | "is_not_empty"
-  | "eq"
-  | "neq"
-  | "lt"
-  | "gt"
-  | "lte"
-  | "gte";
-
-type FilterConditionItem = {
-  id: string;
-  type: "condition";
-  columnId: string | null;
-  operator: FilterOperator;
-  value: string;
-};
-
-type FilterGroupItem = {
-  id: string;
-  type: "group";
-  connector: FilterConnector;
-  conditions: (FilterConditionItem | FilterGroupItem)[];
-};
-
-type FilterItem = FilterConditionItem | FilterGroupItem;
 
 type TableWorkspaceProps = {
   baseId: string;
@@ -276,28 +152,6 @@ const formatUserInitial = (name: string) => {
   return /[a-zA-Z]/.test(first) ? first.toUpperCase() : first;
 };
 
-const normalizeSortDirection = (direction?: string | null): "asc" | "desc" =>
-  direction === "desc" ? "desc" : "asc";
-
-const normalizeSortList = (
-  sort?: Array<{ columnId: string; direction?: string | null }> | null
-): SortConfig[] | null => {
-  if (!sort || sort.length === 0) return null;
-  return sort.map((item) => ({
-    columnId: item.columnId,
-    direction: normalizeSortDirection(item.direction),
-  }));
-};
-
-const areSortsEqual = (left: SortConfig[], right: SortConfig[]) => {
-  if (left.length !== right.length) return false;
-  return left.every(
-    (item, index) =>
-      item.columnId === right[index]?.columnId &&
-      item.direction === right[index]?.direction
-  );
-};
-
 const isValidNumberDraft = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) return true;
@@ -307,78 +161,6 @@ const isValidNumberDraft = (value: string) => {
   return decimals.length <= MAX_NUMBER_DECIMALS;
 };
 
-const FILTER_CONNECTORS: FilterConnector[] = ["and", "or"];
-const FILTER_TEXT_OPERATORS: FilterOperator[] = [
-  "contains",
-  "does_not_contain",
-  "is",
-  "is_not",
-  "is_empty",
-  "is_not_empty",
-];
-const FILTER_NUMBER_OPERATORS: FilterOperator[] = [
-  "eq",
-  "neq",
-  "lt",
-  "gt",
-  "lte",
-  "gte",
-  "is_empty",
-  "is_not_empty",
-];
-const FILTER_OPERATOR_LABELS: Record<FilterOperator, string> = {
-  contains: "contains...",
-  does_not_contain: "does not contain...",
-  is: "is...",
-  is_not: "is not...",
-  is_empty: "is empty",
-  is_not_empty: "is not empty",
-  eq: "=",
-  neq: "≠",
-  lt: "<",
-  gt: ">",
-  lte: "≤",
-  gte: "≥",
-};
-const FILTER_OPERATOR_REQUIRES_VALUE = new Set<FilterOperator>([
-  "contains",
-  "does_not_contain",
-  "is",
-  "is_not",
-  "eq",
-  "neq",
-  "lt",
-  "gt",
-  "lte",
-  "gte",
-]);
-
-const getDefaultFilterOperator = (columnType: ColumnFieldType) =>
-  columnType === "number" ? "eq" : "contains";
-
-const getFilterOperatorsForType = (columnType: ColumnFieldType) =>
-  columnType === "number" ? FILTER_NUMBER_OPERATORS : FILTER_TEXT_OPERATORS;
-
-const formatFilterOperatorLabel = (label: string) =>
-  label.length > 12 ? `${label.slice(0, 11)}...` : label;
-
-const createFilterCondition = (
-  columnId: string | null = null,
-  columnType: ColumnFieldType = "single_line_text"
-): FilterConditionItem => ({
-  id: crypto.randomUUID(),
-  type: "condition",
-  columnId,
-  operator: getDefaultFilterOperator(columnType),
-  value: "",
-});
-
-const createFilterGroup = (): FilterGroupItem => ({
-  id: crypto.randomUUID(),
-  type: "group",
-  connector: "and",
-  conditions: [],  // Empty - shows placeholder text
-});
 
 const getLastViewedTableKey = (baseId: string) =>
   `airtable:last-viewed-table:${baseId}`;
@@ -409,22 +191,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     rowId: string;
     columnId: string;
   } | null>(null);
-  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
-  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
-  const [isHideFieldsMenuOpen, setIsHideFieldsMenuOpen] = useState(false);
-  const [isSearchMenuOpen, setIsSearchMenuOpen] = useState(false);
-  const [searchValue, setSearchValue] = useState("");
-  const [openSortDirectionId, setOpenSortDirectionId] = useState<string | null>(null);
-  const [openSortFieldId, setOpenSortFieldId] = useState<string | null>(null);
-  const [isAddSortMenuOpen, setIsAddSortMenuOpen] = useState(false);
-  const [sortOrderOverride, setSortOrderOverride] = useState<SortConfig[] | null>(
-    null
-  );
-  const [sortOverride, setSortOverride] = useState<SortConfig[] | null>(null);
-  const [draggingSortId, setDraggingSortId] = useState<string | null>(null);
-  const [draggingSortTop, setDraggingSortTop] = useState<number | null>(null);
-  const [filterItems, setFilterItems] = useState<FilterItem[]>([]);
-  const [filterConnector, setFilterConnector] = useState<FilterConnector>("and");
   const [activeFilterAdd, setActiveFilterAdd] = useState<"condition" | "group" | null>(
     null
   );
@@ -447,22 +213,19 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [phantomFilterY, setPhantomFilterY] = useState<number | null>(null);
   const [openGroupPlusId, setOpenGroupPlusId] = useState<string | null>(null);
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
-  const sortButtonRef = useRef<HTMLButtonElement>(null);
-  const filterButtonRef = useRef<HTMLButtonElement>(null);
-  const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
-  const searchButtonRef = useRef<HTMLButtonElement>(null);
-  const sortMenuRef = useRef<HTMLDivElement>(null);
-  const filterMenuRef = useRef<HTMLDivElement>(null);
-  const hideFieldsMenuRef = useRef<HTMLDivElement>(null);
-  const searchMenuRef = useRef<HTMLDivElement>(null);
-  const sortFieldMenuRef = useRef<HTMLDivElement>(null);
+  const [addTableDropdownStage, setAddTableDropdownStage] = useState<"add-options" | "name-input" | null>(null);
+  const [tableName, setTableName] = useState("");
+  const [pendingTableId, setPendingTableId] = useState<string | null>(null);
+  const [dropdownPosition, setDropdownPosition] = useState<{ left: number; top: number } | null>(null);
+  const [newTableId, setNewTableId] = useState<string | null>(null);
+  const addTableButtonRef = useRef<HTMLButtonElement>(null);
+  const tableNameInputRef = useRef<HTMLInputElement>(null);
+  const addTableDropdownRef = useRef<HTMLDivElement>(null);
+  const newTableTabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const filterFieldMenuListRef = useRef<HTMLDivElement>(null);
   const filterOperatorMenuListRef = useRef<HTMLDivElement>(null);
-  const sortAddMenuListRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const searchMaskId = useId().replace(/:/g, "");
   const closeMaskId = useId().replace(/:/g, "");
-  const sortRowsRef = useRef<SortConfig[]>([]);
   const filterDragOffsetRef = useRef(0);
   const phantomOffsetRef = useRef({ x: 0, y: 0 });
   const filterDragIndexRef = useRef(0);
@@ -494,10 +257,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [baseId]);
 
   useEffect(() => {
-    if (!activeTableId) return;
-    setSearchValue("");
-  }, [activeTableId]);
-  useEffect(() => {
     utils.base.list.prefetch();
   }, [utils.base.list]);
   const tableMetaQuery = api.base.getTableMeta.useQuery(
@@ -509,13 +268,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       hasLoadedTableMetaRef.current = true;
     }
   }, [tableMetaQuery.data]);
-  const rawSortConfig = tableMetaQuery.data?.sort ?? null;
-  const sortConfigList: SortConfig[] = Array.isArray(rawSortConfig)
-    ? rawSortConfig.map((item) => ({
-        columnId: item.columnId,
-        direction: normalizeSortDirection(item.direction),
-      }))
-    : [];
   const hiddenColumnIds = tableMetaQuery.data?.hiddenColumnIds ?? [];
   const hiddenColumnIdSet = useMemo(
     () => new Set(hiddenColumnIds),
@@ -526,9 +278,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeTable = tableMetaQuery.data?.table ?? null;
   const activeColumns = tableMetaQuery.data?.columns ?? [];
   const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
-  const rawSearchQuery = searchValue.trim();
-  const searchQuery = rawSearchQuery;
-  const hasSearchQuery = searchQuery.length > 0;
   const columnById = useMemo(
     () => new Map(activeColumns.map((column) => [column.id, column])),
     [activeColumns]
@@ -552,158 +301,52 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     () => new Set(orderedColumns.map((column) => column.id)),
     [orderedColumns]
   );
-  const hideFieldColumns = useMemo(
-    () => orderedAllColumns.filter((column) => column.name !== "Name"),
-    [orderedAllColumns]
-  );
-  const hideFieldsLayout = useMemo(() => {
-    const rows = hideFieldColumns.map((column, index) => {
-      const textTop = HIDE_FIELDS_FIRST_TEXT_TOP + index * HIDE_FIELDS_TEXT_ROW_GAP;
-      const hoverTop =
-        textTop - (HIDE_FIELDS_HOVER_HEIGHT - HIDE_FIELDS_TEXT_HEIGHT) / 2;
-      const toggleTop =
-        hoverTop + (HIDE_FIELDS_HOVER_HEIGHT - HIDE_FIELDS_TOGGLE_HEIGHT) / 2;
-      const reorderTop = HIDE_FIELDS_REORDER_TOP + index * HIDE_FIELDS_REORDER_ROW_GAP;
-      const iconSpec = getHideFieldsIconSpec(column.name, column.type);
-      const iconLeft = HIDE_FIELDS_TEXT_LEFT - iconSpec.gap - iconSpec.width;
-      const iconTop = textTop - (iconSpec.height - HIDE_FIELDS_TEXT_HEIGHT) / 2;
-      return {
-        column,
-        hoverTop,
-        textOffset: textTop - hoverTop,
-        iconSpec,
-        iconLeftOffset: iconLeft - HIDE_FIELDS_HOVER_LEFT,
-        iconTopOffset: iconTop - hoverTop,
-        toggleOffset: toggleTop - hoverTop,
-        reorderOffset: reorderTop - hoverTop,
-      };
-    });
-    const lastTextTop =
-      hideFieldColumns.length > 0
-        ? HIDE_FIELDS_FIRST_TEXT_TOP +
-          (hideFieldColumns.length - 1) * HIDE_FIELDS_TEXT_ROW_GAP
-        : HIDE_FIELDS_FIRST_TEXT_TOP;
-    const buttonTop =
-      lastTextTop + HIDE_FIELDS_TEXT_HEIGHT + HIDE_FIELDS_BUTTON_GAP;
-    const dropdownHeight =
-      buttonTop + HIDE_FIELDS_BUTTON_HEIGHT + HIDE_FIELDS_BUTTON_BOTTOM_PADDING;
-    return {
-      rows,
-      buttonTop,
-      dropdownHeight,
-    };
-  }, [hideFieldColumns]);
-  const filterInput: RouterInputs["base"]["getRows"]["filter"] = useMemo(() => {
-    const items: Array<
-      | { type: "condition"; columnId: string; operator: FilterOperator; value: string }
-      | {
-          type: "group";
-          connector: FilterConnector;
-          conditions: Array<{
-            type: "condition";
-            columnId: string;
-            operator: FilterOperator;
-            value: string;
-          }>;
-        }
-    > = [];
 
-    const normalizeCondition = (
-      condition: FilterConditionItem
-    ): { type: "condition"; columnId: string; operator: FilterOperator; value: string } | null => {
-      if (!condition.columnId) return null;
-      if (hiddenColumnIdSet.has(condition.columnId)) return null;
-      const column = columnById.get(condition.columnId);
-      if (!column) return null;
-      const columnType = coerceColumnType(column.type);
-      const allowedOperators = getFilterOperatorsForType(columnType);
-      if (!allowedOperators.includes(condition.operator)) return null;
-      const trimmedValue = condition.value.trim();
-      if (FILTER_OPERATOR_REQUIRES_VALUE.has(condition.operator) && !trimmedValue) {
-        return null;
-      }
-      return {
-        type: "condition",
-        columnId: condition.columnId,
-        operator: condition.operator,
-        value: trimmedValue,
-      };
-    };
+  // Initialize search hook
+  const searchHook = useTableSearch({
+    tableId: activeTableId,
+  });
+  const { searchValue, searchQuery, hasSearchQuery } = searchHook;
 
-    // Recursive function to normalize groups (flatten nested groups for server)
-    const normalizeGroup = (
-      item: FilterGroupItem
-    ): Array<{ type: "condition"; columnId: string; operator: FilterOperator; value: string }> => {
-      const result: Array<{ type: "condition"; columnId: string; operator: FilterOperator; value: string }> = [];
-      item.conditions.forEach((child) => {
-        if (child.type === "condition") {
-          const normalized = normalizeCondition(child);
-          if (normalized) result.push(normalized);
-        } else {
-          // Nested group - flatten into parent group
-          result.push(...normalizeGroup(child));
-        }
-      });
-      return result;
-    };
+  // Initialize filter hook
+  const filterHook = useTableFilter({
+    tableId: activeTableId,
+    columns: activeColumns,
+    hiddenColumnIdSet,
+  });
+  const {
+    filterItems,
+    setFilterItems,
+    filterConnector,
+    setFilterConnector,
+    filterInput,
+    activeFilterConditions,
+    filteredColumnIds,
+    filteredColumnNames,
+    hasActiveFilters,
+  } = filterHook;
 
-    filterItems.forEach((item) => {
-      if (item.type === "condition") {
-        const normalized = normalizeCondition(item);
-        if (normalized) items.push(normalized);
-        return;
-      }
-      const normalizedGroup = normalizeGroup(item);
-      if (normalizedGroup.length > 0) {
-        items.push({
-          type: "group",
-          connector: item.connector,
-          conditions: normalizedGroup,
-        });
-      }
-    });
+  // Initialize table sort hook
+  const tableSortHook = useTableSort({
+    tableId: activeTableId,
+    columns: orderedColumns,
+    visibleColumnIdSet,
+    tableMetaQuery,
+    hasLoadedTableMetaRef,
+  });
 
-    if (items.length === 0) return undefined;
-    return {
-      connector: filterConnector,
-      items,
-    };
-  }, [columnById, filterConnector, filterItems, hiddenColumnIdSet]);
+  // Initialize hide fields hook
+  const hideFieldsHook = useHideFields({
+    orderedAllColumns,
+    hiddenColumnIdSet,
+    activeTableId,
+    setHiddenColumns: (params) => setHiddenColumns.mutate(params),
+  });
 
-  const activeFilterConditions = useMemo(() => {
-    if (!filterInput) return [];
-    return filterInput.items.flatMap((item) =>
-      item.type === "condition" ? [item] : item.conditions
-    );
-  }, [filterInput]);
+  const sortParam = tableSortHook.sortParam;
+  const hasSort = tableSortHook.hasSort;
+  const shouldIncludeSortInQuery = tableSortHook.shouldIncludeSortInQuery;
 
-  const filteredColumnIds = useMemo(() => {
-    const ids = new Set<string>();
-    activeFilterConditions.forEach((condition) => ids.add(condition.columnId));
-    return ids;
-  }, [activeFilterConditions]);
-
-  const filteredColumnNames = useMemo(() => {
-    const names: string[] = [];
-    const seen = new Set<string>();
-    activeFilterConditions.forEach((condition) => {
-      const column = columnById.get(condition.columnId);
-      if (!column || seen.has(column.id)) return;
-      seen.add(column.id);
-      names.push(column.name);
-    });
-    return names;
-  }, [activeFilterConditions, columnById]);
-  const hasActiveFilters = activeFilterConditions.length > 0;
-  const filterActiveSorts = (sorts: SortConfig[]) => {
-    if (visibleColumnIdSet.size === 0) return sorts;
-    return sorts.filter((sort) => visibleColumnIdSet.has(sort.columnId));
-  };
-  const sortParamSource = sortOverride ?? sortConfigList;
-  const sortParam = filterActiveSorts(sortParamSource);
-  const hasSort = sortParam.length > 0;
-  const shouldIncludeSortInQuery =
-    sortOverride !== null || hasLoadedTableMetaRef.current;
   const getRowsQueryKeyForSort = (
     tableId: string,
     sort: SortConfig[]
@@ -733,13 +376,75 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     {
       enabled: Boolean(activeTableId),
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+      placeholderData: (previousData) => previousData,
     }
   );
 
+  // Initialize bulk rows hook
+  const bulkRowsHook = useBulkRows({
+    activeTableId,
+    activeRowCount,
+    hasActiveFilters,
+    utils,
+    getRowsQueryKey,
+  });
+  const { handleAddBulkRows, bulkRowsDisabled, addRowsMutate, addRowsIsPending } = bulkRowsHook;
+
   const addTable = api.base.addTable.useMutation({
-    onSuccess: async (data) => {
-      await utils.base.get.invalidate({ baseId });
+    onMutate: async ({ name }) => {
+      await utils.base.get.cancel({ baseId });
+      const previousData = utils.base.get.getData({ baseId });
+
+      // Generate optimistic ID
+      const optimisticId = `temp-${Date.now()}`;
+      const tableName = name ?? `Table ${(previousData?.tables.length ?? 0) + 1}`;
+
+      // Optimistically update the cache
+      utils.base.get.setData({ baseId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tables: [
+            ...old.tables,
+            { id: optimisticId, name: tableName },
+          ],
+        };
+      });
+
+      // Set active table and newTableId immediately
+      setActiveTableId(optimisticId);
+      setNewTableId(optimisticId);
+
+      return { previousData, optimisticId, tableName };
+    },
+    onSuccess: async (data, _variables, context) => {
+      if (!context) return;
+
+      // Replace optimistic ID with real ID
+      utils.base.get.setData({ baseId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tables: old.tables.map((table) =>
+            table.id === context.optimisticId
+              ? { id: data.id, name: data.name }
+              : table
+          ),
+        };
+      });
+
+      // Update active table ID to real ID
       setActiveTableId(data.id);
+      setNewTableId(data.id);
+
+      await utils.base.get.invalidate({ baseId });
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        utils.base.get.setData({ baseId }, context.previousData);
+      }
+      setActiveTableId(null);
+      setNewTableId(null);
     },
   });
 
@@ -747,6 +452,34 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     onSuccess: async () => {
       await utils.base.get.invalidate({ baseId });
       setActiveTableId(null);
+    },
+  });
+
+  const renameTable = api.base.renameTable.useMutation({
+    onMutate: async ({ tableId, name }) => {
+      await utils.base.get.cancel({ baseId });
+      const previousData = utils.base.get.getData({ baseId });
+
+      // Optimistically update the table name
+      utils.base.get.setData({ baseId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tables: old.tables.map((table) =>
+            table.id === tableId ? { ...table, name } : table
+          ),
+        };
+      });
+
+      return { previousData };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousData) {
+        utils.base.get.setData({ baseId }, context.previousData);
+      }
+    },
+    onSettled: async () => {
+      await utils.base.get.invalidate({ baseId });
     },
   });
 
@@ -795,136 +528,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
   });
 
-  const addRows = api.base.addRows.useMutation({
-    onMutate: async ({ tableId, count, ids }) => {
-      if (!activeTableId || tableId !== activeTableId) {
-        return { queryKey: null, tableId };
-      }
-      const queryKey = getRowsQueryKey(tableId);
-      await utils.base.getRows.cancel(queryKey);
-
-      if (ids?.length && !hasActiveFilters) {
-        const optimisticRows = ids.map((id) => ({ id, data: {} }));
-        utils.base.getRows.setInfiniteData(queryKey, (data) => {
-          if (!data) return data;
-          if (data.pages.length === 0) {
-            return {
-              ...data,
-              pages: [{ rows: optimisticRows, nextCursor: null }],
-            };
-          }
-          const pages = [...data.pages];
-          if (sortParam[0]?.direction === "asc") {
-            const firstPage = pages[0]!;
-            pages[0] = {
-              ...firstPage,
-              rows: [...optimisticRows, ...firstPage.rows],
-            };
-          } else {
-            const lastIndex = pages.length - 1;
-            const lastPage = pages[lastIndex]!;
-            pages[lastIndex] = {
-              ...lastPage,
-              rows: [...lastPage.rows, ...optimisticRows],
-            };
-          }
-          return { ...data, pages };
-        });
-      }
-
-      utils.base.getTableMeta.setData({ tableId }, (current) => {
-        if (!current) return current;
-        return { ...current, rowCount: current.rowCount + count };
-      });
-
-      return { queryKey, tableId };
-    },
-    onError: (_error, variables, context) => {
-      if (context?.queryKey && variables.ids?.length) {
-        const removeIds = new Set(variables.ids);
-        utils.base.getRows.setInfiniteData(context.queryKey, (data) => {
-          if (!data) return data;
-          return {
-            ...data,
-            pages: data.pages.map((page) => ({
-              ...page,
-              rows: page.rows.filter((row) => !removeIds.has(row.id)),
-            })),
-          };
-        });
-      }
-      if (context?.tableId) {
-        utils.base.getTableMeta.setData({ tableId: context.tableId }, (current) => {
-          if (!current) return current;
-          return {
-            ...current,
-            rowCount: Math.max(0, current.rowCount - variables.count),
-          };
-        });
-      }
-    },
-    onSuccess: (_data, variables) => {
-      if (variables.ids?.length) return;
-      void utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
-      void utils.base.getRows.invalidate(getRowsQueryKey(variables.tableId));
-    },
-  });
-
-  const setTableSort = api.base.setTableSort.useMutation({
-    onMutate: async ({ tableId, sort }) => {
-      await utils.base.getTableMeta.cancel({ tableId });
-      const previous = utils.base.getTableMeta.getData({ tableId });
-      const previousSort = normalizeSortList(previous?.sort ?? null);
-      const nextSort = sort ?? [];
-      utils.base.getTableMeta.setData({ tableId }, (current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          sort: nextSort.length ? nextSort : null,
-        };
-      });
-      const nextKey = getRowsQueryKeyForSort(
-        tableId,
-        filterActiveSorts(normalizeSortList(nextSort) ?? [])
-      );
-      const prevKey = getRowsQueryKeyForSort(
-        tableId,
-        filterActiveSorts(previousSort ?? [])
-      );
-      const keysMatch = JSON.stringify(nextKey) === JSON.stringify(prevKey);
-      await utils.base.getRows.invalidate(nextKey);
-      if (!keysMatch) {
-        await utils.base.getRows.invalidate(prevKey);
-      }
-      return { previous, previousSort, tableId };
-    },
-    onError: (_error, _variables, context) => {
-      if (context?.previous) {
-        utils.base.getTableMeta.setData(
-          { tableId: context.tableId },
-          context.previous
-        );
-      }
-      setSortOverride(context?.previousSort ?? null);
-    },
-    onSettled: async (_data, _error, variables, context) => {
-      await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
-      const nextSort = filterActiveSorts(
-        normalizeSortList(variables.sort ?? null) ?? []
-      );
-      const previousSort = filterActiveSorts(
-        normalizeSortList(context?.previousSort ?? null) ?? []
-      );
-      const nextKey = getRowsQueryKeyForSort(variables.tableId, nextSort);
-      const prevKey = getRowsQueryKeyForSort(variables.tableId, previousSort);
-      const keysMatch = JSON.stringify(nextKey) === JSON.stringify(prevKey);
-      await utils.base.getRows.invalidate(nextKey);
-      if (!keysMatch) {
-        await utils.base.getRows.invalidate(prevKey);
-      }
-    },
-  });
-
   const setTableSearch = api.base.setTableSearch.useMutation({
     onMutate: async ({ tableId, search }) => {
       await utils.base.getTableMeta.cancel({ tableId });
@@ -955,14 +558,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     if (!activeTableId) return;
     const currentSearch = tableMetaQuery.data?.searchQuery ?? "";
-    if (rawSearchQuery === currentSearch) return;
+    if (searchQuery === currentSearch) return;
     const timeout = window.setTimeout(() => {
-      setTableSearch.mutate({ tableId: activeTableId, search: rawSearchQuery });
+      setTableSearch.mutate({ tableId: activeTableId, search: searchQuery });
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [
     activeTableId,
-    rawSearchQuery,
+    searchQuery,
     setTableSearch,
     tableMetaQuery.data?.searchQuery,
   ]);
@@ -1058,7 +661,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setEnsuredTableId(null);
     setSelectedCell(null);
     setEditingCell(null);
-    setSortOverride(null);
   }, [baseId]);
 
   useEffect(() => {
@@ -1127,75 +729,20 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [highlightedFilterFieldId, highlightedFilterOperatorId]);
 
   useEffect(() => {
-    if (!isSortMenuOpen) return;
-    const handleClick = (event: Event) => {
-      const target = event.target as Node | null;
-      if (sortMenuRef.current?.contains(target)) return;
-      if (sortButtonRef.current?.contains(target)) return;
-      setIsSortMenuOpen(false);
-      setOpenSortDirectionId(null);
-      setOpenSortFieldId(null);
-      setIsAddSortMenuOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsSortMenuOpen(false);
-        setOpenSortDirectionId(null);
-        setOpenSortFieldId(null);
-        setIsAddSortMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("scroll", handleClick, true);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("scroll", handleClick, true);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [isSortMenuOpen]);
-
-  useEffect(() => {
-    if (!openSortFieldId) return;
+    if (!filterHook.isFilterMenuOpen) return;
     const handleClick = (event: Event) => {
       const target = event.target as Node | null;
       if (!target) return;
-      if (sortFieldMenuRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest(".airtable-sort-field")) {
-        return;
-      }
-      setOpenSortFieldId(null);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpenSortFieldId(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("scroll", handleClick, true);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("scroll", handleClick, true);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [openSortFieldId]);
-
-  useEffect(() => {
-    if (!isFilterMenuOpen) return;
-    const handleClick = (event: Event) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (filterMenuRef.current?.contains(target)) return;
-      if (filterButtonRef.current?.contains(target)) return;
-      setIsFilterMenuOpen(false);
+      if (filterHook.filterMenuRef.current?.contains(target)) return;
+      if (filterHook.filterButtonRef.current?.contains(target)) return;
+      filterHook.setIsFilterMenuOpen(false);
       setOpenFilterFieldId(null);
       setOpenFilterOperatorId(null);
       setOpenFilterConnectorId(null);
     };
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setIsFilterMenuOpen(false);
+        filterHook.setIsFilterMenuOpen(false);
         setOpenFilterFieldId(null);
         setOpenFilterOperatorId(null);
         setOpenFilterConnectorId(null);
@@ -1209,54 +756,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       document.removeEventListener("scroll", handleClick, true);
       document.removeEventListener("keydown", handleKey);
     };
-  }, [isFilterMenuOpen]);
-
-  useEffect(() => {
-    if (!isHideFieldsMenuOpen) return;
-    const handleClick = (event: Event) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (hideFieldsMenuRef.current?.contains(target)) return;
-      if (hideFieldsButtonRef.current?.contains(target)) return;
-      setIsHideFieldsMenuOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsHideFieldsMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("scroll", handleClick, true);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("scroll", handleClick, true);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [isHideFieldsMenuOpen]);
-
-  useEffect(() => {
-    if (!isSearchMenuOpen) return;
-    const handleClick = (event: Event) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (searchMenuRef.current?.contains(target)) return;
-      if (searchButtonRef.current?.contains(target)) return;
-      setIsSearchMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-    };
-  }, [isSearchMenuOpen]);
-
-  useEffect(() => {
-    if (!isSearchMenuOpen) return;
-    const frame = requestAnimationFrame(() => {
-      searchInputRef.current?.focus();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [isSearchMenuOpen]);
+  }, [filterHook]);
 
   useEffect(() => {
     if (!openFilterFieldId) return;
@@ -1348,11 +848,99 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     };
   }, [openFilterConnectorId]);
 
-  const sortRows = sortOrderOverride ?? sortOverride ?? sortConfigList;
-  const sortedColumnIds = useMemo(
-    () => new Set(sortRows.map((sort) => sort.columnId)),
-    [sortRows]
-  );
+  // Handle click outside for add table dropdown
+  useEffect(() => {
+    if (!addTableDropdownStage) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (target instanceof Element) {
+        if (addTableDropdownRef.current?.contains(target)) return;
+        if (addTableButtonRef.current?.contains(target)) return;
+      }
+      setAddTableDropdownStage(null);
+      setTableName("");
+      setDropdownPosition(null);
+      setNewTableId(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAddTableDropdownStage(null);
+        setTableName("");
+        setDropdownPosition(null);
+        setNewTableId(null);
+      } else if (event.key === "Enter" && addTableDropdownStage === "name-input") {
+        event.preventDefault();
+        setTableName((currentName) => {
+          if (currentName.trim() && newTableId) {
+            renameTable.mutate({ tableId: newTableId, name: currentName.trim() });
+            setAddTableDropdownStage(null);
+            setDropdownPosition(null);
+            setNewTableId(null);
+            return "";
+          }
+          return currentName;
+        });
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [addTableDropdownStage, addTable, baseId, newTableId, renameTable]);
+
+  // Show naming dropdown when new table is created
+  useEffect(() => {
+    if (!newTableId || addTableDropdownStage === "name-input") return;
+    // Wait for the table tab to render
+    const timer = setTimeout(() => {
+      const tabElement = newTableTabRefs.current.get(newTableId);
+      if (!tabElement) {
+        // Tab not found yet, wait a bit longer
+        setTimeout(() => {
+          const retryElement = newTableTabRefs.current.get(newTableId);
+          if (!retryElement) return;
+          positionDropdown(retryElement);
+        }, 50);
+        return;
+      }
+      positionDropdown(tabElement);
+    }, 100);
+
+    const positionDropdown = (tabElement: HTMLButtonElement) => {
+      const tabRect = tabElement.getBoundingClientRect();
+      // Position left edge of dropdown 12px to the left of the right edge of the tab, 6px below
+      let left = tabRect.right - 12;
+      const top = tabRect.bottom + 6;
+      const dropdownWidth = 335;
+
+      // Keep within viewport
+      if (left + dropdownWidth > window.innerWidth) {
+        left = Math.max(0, window.innerWidth - dropdownWidth - 10);
+      }
+      left = Math.max(0, left);
+
+      setDropdownPosition({ left, top });
+      setAddTableDropdownStage("name-input");
+
+      // Focus and select input
+      setTimeout(() => {
+        if (tableNameInputRef.current) {
+          tableNameInputRef.current.select();
+        }
+      }, 0);
+    };
+
+    return () => clearTimeout(timer);
+  }, [newTableId, addTableDropdownStage]);
+
+  // Get sort data from hook
+  const sortRows = tableSortHook.sortRows;
+  const sortedColumnIds = tableSortHook.sortedColumnIds;
+  const sortLayout = tableSortHook.sortLayout;
+
   const [filterDragPreview, setFilterDragPreview] = useState<{
     scope: "root" | "group";
     groupId?: string;
@@ -1387,51 +975,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     }
     return filterItems;
   }, [filterDragPreview, filterItems]);
-  const hasFilterItems = filterItems.length > 0;
+  const hasFilterItems = filterHook.hasFilterItems;
   const hasFilterGroups = useMemo(
     () => filterItems.some((item) => item.type === "group"),
     [filterItems]
   );
-  const sortListHeight = 97 + activeColumns.length * 32;
-  const sortFieldTop = 52;
-  const sortFieldHeight = 28;
-  const sortRowGap = 8;
-  const sortRowStride = sortFieldHeight + sortRowGap;
-  const sortRowsHeight =
-    sortRows.length > 0
-      ? sortRows.length * sortFieldHeight + (sortRows.length - 1) * sortRowGap
-      : 0;
-  const sortAddTop = sortFieldTop + sortRowsHeight + 18;
-  const sortFooterTop = sortAddTop + 41;
-  const sortFooterHeight = 42;
-  const sortConfiguredHeight = sortFooterTop + sortFooterHeight;
-  const sortFieldLeft = 20;
-  const sortFieldWidth = 250;
-  const sortDirectionLeft = 282;
-  const sortDirectionWidth = 120;
-  const sortRemoveSize = 28;
-  const sortRemoveLeft = 422;
-  const sortReorderLeft = sortRemoveLeft + sortRemoveSize + 17;
-  const sortReorderWidth = 10;
-  const sortConfiguredWidth = sortReorderLeft + sortReorderWidth + 20;
-  const sortLineWidth = sortConfiguredWidth - 40;
-  const sortFieldMenuWidth = 244;
-  const sortFieldMenuPadding = 11.5;
-  const sortFieldMenuHeaderGap = 15;
-  const sortFieldMenuGap = 6;
-  const sortFieldMenuRowHeight = 26;
-  const sortFieldMenuFindHeight = 13;
-  const sortFieldMenuFirstRowTop =
-    sortFieldMenuPadding + sortFieldMenuFindHeight + sortFieldMenuHeaderGap;
-  const sortAddMenuWidth = 432;
-  const sortAddMenuHeaderTop = 10;
-  const sortAddMenuHeaderHeight = 13;
-  const sortAddMenuHeaderGap = 15;
-  const sortAddMenuFirstRowTop =
-    sortAddMenuHeaderTop + sortAddMenuHeaderHeight + sortAddMenuHeaderGap;
-  const sortAddMenuRowHeight = 26;
-  const sortAddMenuRowStride = 32;
-  const sortAddMenuBottomPadding = 10;
   const filterDropdownBaseWidth = 332;
   const filterDropdownExpandedWidth = 590;
   const filterDropdownBaseHeight = 166;
@@ -1777,9 +1325,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterDropdownHeight = hasFilterItems
     ? filterFooterTop + filterFooterHeight + filterBottomPadding
     : filterDropdownBaseHeight;
-  const remainingSortColumns = orderedColumns.filter(
-    (column) => !sortedColumnIds.has(column.id)
-  );
   const filterFieldMenuWidth = 204;
   const filterFieldMenuMaxHeight = 277;
   const filterFieldMenuTopPadding = 20;
@@ -1826,18 +1371,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterOperatorMenuHoverPadding = (filterOperatorMenuRowHeight - filterOperatorMenuTextHeight) / 2;
   const filterOperatorMenuFirstRowTop =
     filterFieldMenuTopPadding + filterFieldMenuHeaderHeight + filterFieldMenuHeaderGap;
-  const sortAddMenuContentHeight =
-    sortAddMenuFirstRowTop +
-    (remainingSortColumns.length > 0
-      ? (remainingSortColumns.length - 1) * sortAddMenuRowStride +
-        sortAddMenuRowHeight
-      : 0) +
-    sortAddMenuBottomPadding;
-  const sortAddMenuHeight = Math.min(256, sortAddMenuContentHeight);
-  const sortAddMenuListHeight = Math.max(
-    0,
-    sortAddMenuHeight - sortAddMenuFirstRowTop - sortAddMenuBottomPadding
-  );
   const canDeleteTable = activeTables.length > 1;
   const canDeleteColumn = activeColumns.length > 1;
   const canDeleteRow = activeRowCount > 1;
@@ -1847,51 +1380,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       (contextMenu.type === "column" && canDeleteColumn) ||
       (contextMenu.type === "row" && canDeleteRow));
 
-  const applySorts = useCallback(
-    (next: SortConfig[] | null) => {
-      if (!activeTableId) return;
-      const normalizedNext = next && next.length > 0 ? next : null;
-      setSortOverride(next ?? []);
-      setTableSort.mutate({
-        tableId: activeTableId,
-        sort: normalizedNext,
-      });
-    },
-    [activeTableId, setTableSort]
-  );
-
-  const toggleHiddenColumn = useCallback(
-    (columnId: string) => {
-      if (!activeTableId) return;
-      const nextHidden = new Set(hiddenColumnIdSet);
-      if (nextHidden.has(columnId)) {
-        nextHidden.delete(columnId);
-      } else {
-        nextHidden.add(columnId);
-      }
-      setHiddenColumns.mutate({
-        tableId: activeTableId,
-        hiddenColumnIds: Array.from(nextHidden),
-      });
-    },
-    [activeTableId, hiddenColumnIdSet, setHiddenColumns]
-  );
-
-  const hideAllColumns = useCallback(() => {
-    if (!activeTableId) return;
-    setHiddenColumns.mutate({
-      tableId: activeTableId,
-      hiddenColumnIds: hideFieldColumns.map((column) => column.id),
-    });
-  }, [activeTableId, hideFieldColumns, setHiddenColumns]);
-
-  const showAllColumns = useCallback(() => {
-    if (!activeTableId) return;
-    setHiddenColumns.mutate({
-      tableId: activeTableId,
-      hiddenColumnIds: [],
-    });
-  }, [activeTableId, setHiddenColumns]);
 
   const updateFilterCondition = useCallback(
     (
@@ -1947,14 +1435,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [orderedColumns]);
 
   const addFilterCondition = useCallback(() => {
-    setFilterItems((prev) => [...prev, getDefaultFilterCondition()]);
+    const defaultColumn = orderedColumns[0];
+    filterHook.addFilterCondition(defaultColumn?.id ?? null);
     setActiveFilterAdd("condition");
-  }, [getDefaultFilterCondition]);
+  }, [filterHook, orderedColumns]);
 
   const addFilterGroup = useCallback(() => {
-    setFilterItems((prev) => [...prev, createFilterGroup()]);
+    filterHook.addFilterGroup();
     setActiveFilterAdd("group");
-  }, []);
+  }, [filterHook]);
 
   const addFilterConditionToGroup = useCallback(
     (groupId: string, parentGroupId?: string) => {
@@ -2168,39 +1657,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     [columnById, filterItems, updateFilterCondition]
   );
 
-  const getSortDirectionLabels = useCallback(
-    (columnId: string) => {
-      const column = columnById.get(columnId);
-      const columnType = coerceColumnType(column?.type);
-      const isNumber = columnType === "number";
-      return {
-        asc: isNumber ? "1 → 9" : "A → Z",
-        desc: isNumber ? "9 → 1" : "Z → A",
-      };
-    },
-    [columnById]
-  );
-
-  useEffect(() => {
-    if (sortConfigList.length === 0) return;
-    const nextSorts = sortConfigList.filter((sort) =>
-      visibleColumnIdSet.has(sort.columnId)
-    );
-    if (nextSorts.length !== sortConfigList.length) {
-      applySorts(nextSorts.length ? nextSorts : null);
-    }
-  }, [applySorts, sortConfigList, visibleColumnIdSet]);
-
-  useEffect(() => {
-    sortRowsRef.current = sortRows;
-  }, [sortRows]);
-
   useEffect(() => {
     hydratedFilterTableIdRef.current = null;
-    setFilterItems([]);
-    setFilterConnector("and");
+    filterHook.setFilterItems([]);
+    filterHook.setFilterConnector("and");
     setActiveFilterAdd(null);
-    setIsFilterMenuOpen(false);
+    filterHook.setIsFilterMenuOpen(false);
     setOpenFilterFieldId(null);
     setOpenFilterOperatorId(null);
     setOpenFilterConnectorId(null);
@@ -2253,41 +1715,61 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         if (parsed.connector === "and" || parsed.connector === "or") {
           nextConnector = parsed.connector;
         }
+        // Recursive function to parse groups and nested groups
+        const parseGroup = (value: unknown): FilterGroupItem | null => {
+          if (!value || typeof value !== "object") return null;
+          const rawGroup = value as {
+            id?: unknown;
+            type?: unknown;
+            connector?: unknown;
+            conditions?: unknown;
+          };
+          if (rawGroup.type !== "group" || !Array.isArray(rawGroup.conditions)) {
+            return null;
+          }
+
+          const conditions: (FilterConditionItem | FilterGroupItem)[] = [];
+          rawGroup.conditions.forEach((child) => {
+            if (!child || typeof child !== "object") return;
+            const rawChild = child as { type?: unknown };
+
+            if (rawChild.type === "condition") {
+              const parsed = parseCondition(child);
+              if (parsed) conditions.push(parsed);
+            } else if (rawChild.type === "group") {
+              const parsed = parseGroup(child);
+              if (parsed) conditions.push(parsed);
+            }
+          });
+
+          if (conditions.length === 0) return null;
+          const connector: FilterConnector =
+            rawGroup.connector === "or" ? "or" : "and";
+          return {
+            id:
+              typeof rawGroup.id === "string" && rawGroup.id.length > 0
+                ? rawGroup.id
+                : crypto.randomUUID(),
+            type: "group",
+            connector,
+            conditions,
+          };
+        };
+
         if (Array.isArray(parsed.items)) {
           nextItems = parsed.items.flatMap<FilterItem>((item) => {
             if (!item || typeof item !== "object") return [];
-            const rawItem = item as {
-              id?: unknown;
-              type?: unknown;
-              connector?: unknown;
-              conditions?: unknown;
-            };
+            const rawItem = item as { type?: unknown };
+
             if (rawItem.type === "condition") {
-              const condition = parseCondition(rawItem);
+              const condition = parseCondition(item);
               return condition ? [condition] : [];
             }
-            if (rawItem.type !== "group" || !Array.isArray(rawItem.conditions)) {
-              return [];
+            if (rawItem.type === "group") {
+              const group = parseGroup(item);
+              return group ? [group] : [];
             }
-            const conditions = rawItem.conditions
-              .map((condition) => parseCondition(condition))
-              .filter(
-                (condition): condition is FilterConditionItem => Boolean(condition)
-              );
-            if (conditions.length === 0) return [];
-            const connector: FilterConnector =
-              rawItem.connector === "or" ? "or" : "and";
-            return [
-              {
-                id:
-                  typeof rawItem.id === "string" && rawItem.id.length > 0
-                    ? rawItem.id
-                    : crypto.randomUUID(),
-                type: "group",
-                connector,
-                conditions,
-              },
-            ];
+            return [];
           });
         }
       }
@@ -2379,15 +1861,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       return changed ? next : prev;
     });
   }, [hiddenColumnIdSet]);
-
-  useEffect(() => {
-    if (!sortOverride) return;
-    if (setTableSort.isPending) return;
-    if (areSortsEqual(sortOverride, sortConfigList)) {
-      setSortOverride(null);
-    }
-  }, [sortConfigList, sortOverride, setTableSort.isPending]);
-
 
   useEffect(() => {
     if (!activeColumns.length || !activeTableId) return;
@@ -2528,21 +2001,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       ? rowsQuery.error.message
       : "Try refreshing again.";
 
-  const sortAddVirtualizer = useVirtualizer({
-    count: remainingSortColumns.length,
-    getScrollElement: () => sortAddMenuListRef.current,
-    estimateSize: () => sortAddMenuRowStride,
-    overscan: 4,
-  });
-
-  const sortAddVirtualItems = sortAddVirtualizer.getVirtualItems();
-  const sortAddVirtualizerSize = Math.max(
-    0,
-    sortAddVirtualizer.getTotalSize() -
-      (remainingSortColumns.length > 0
-        ? sortAddMenuRowStride - sortAddMenuRowHeight
-        : 0)
-  );
+  const sortAddVirtualItems = tableSortHook.sortAddVirtualItems;
+  const sortAddVirtualizerSize = tableSortHook.sortAddVirtualizerSize;
 
   const filterFieldVirtualizer = useVirtualizer({
     count: orderedColumns.length,
@@ -2556,7 +2016,48 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     filterFieldVirtualizer.getTotalSize();
 
   const handleAddTable = () => {
-    addTable.mutate({ baseId });
+    if (!addTableButtonRef.current) return;
+    const buttonRect = addTableButtonRef.current.getBoundingClientRect();
+    // Position 14px to the left and 18px down from plus.svg
+    let left = buttonRect.left - 14;
+    const top = buttonRect.bottom + 18;
+    // Keep within viewport
+    const dropdownWidth = 281;
+    if (left + dropdownWidth > window.innerWidth) {
+      left = Math.max(0, window.innerWidth - dropdownWidth - 10);
+    }
+    left = Math.max(0, left);
+    setDropdownPosition({ left, top });
+    setAddTableDropdownStage("add-options");
+  };
+
+  const handleStartFromScratch = () => {
+    const tableCount = activeTables.length;
+    const defaultName = `Table ${tableCount + 1}`;
+    setTableName(defaultName);
+
+    // Close the first dropdown
+    setAddTableDropdownStage(null);
+
+    // Create the table immediately with default name
+    addTable.mutate({ baseId, name: defaultName });
+  };
+
+  const handleConfirmTableName = () => {
+    if (!tableName.trim() || !newTableId) return;
+    // Rename the newly created table
+    renameTable.mutate({ tableId: newTableId, name: tableName.trim() });
+    setAddTableDropdownStage(null);
+    setTableName("");
+    setDropdownPosition(null);
+    setNewTableId(null);
+  };
+
+  const handleCancelTableName = () => {
+    setAddTableDropdownStage(null);
+    setTableName("");
+    setDropdownPosition(null);
+    setNewTableId(null);
   };
 
   const handleSelectTable = (tableId: string) => {
@@ -2571,15 +2072,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const handleDeleteColumn = (columnId: string) => {
     deleteColumn.mutate({ columnId });
     setContextMenu(null);
-  };
-
-  const handleAddBulkRows = () => {
-    if (!activeTableId) return;
-    addRows.mutate({
-      tableId: activeTableId,
-      count: BULK_ROWS,
-      populateWithFaker: true,
-    });
   };
 
   const handleDeleteRow = (rowId: string) => {
@@ -2606,78 +2098,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setContextMenu({ type, id, x: event.clientX, y: event.clientY });
   };
 
-  const handleSortDragStart = (event: ReactMouseEvent, columnId: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const containerRect = sortMenuRef.current?.getBoundingClientRect();
-    if (!containerRect) return;
-    const currentOrder = sortRowsRef.current;
-    const startIndex = currentOrder.findIndex(
-      (sort) => sort.columnId === columnId
-    );
-    if (startIndex < 0) return;
-    const startTop = sortFieldTop + startIndex * sortRowStride;
-    dragOffsetRef.current = event.clientY - (containerRect.top + startTop);
-    dragIndexRef.current = startIndex;
-    setSortOrderOverride(currentOrder);
-    setDraggingSortId(columnId);
-    setDraggingSortTop(startTop);
-    setOpenSortDirectionId(null);
-    setOpenSortFieldId(null);
-    setIsAddSortMenuOpen(false);
-    document.body.style.cursor = "grabbing";
-    document.body.style.userSelect = "none";
-    document.body.classList.add("airtable-dragging");
-
-    const handleMove = (moveEvent: MouseEvent) => {
-      const order = sortRowsRef.current;
-      if (order.length === 0) return;
-      const maxTop = sortFieldTop + sortRowStride * (order.length - 1);
-      const nextTop = Math.min(
-        maxTop,
-        Math.max(
-          sortFieldTop,
-          moveEvent.clientY - containerRect.top - dragOffsetRef.current
-        )
-      );
-      setDraggingSortTop(nextTop);
-      const targetIndex = Math.min(
-        order.length - 1,
-        Math.max(
-          0,
-          Math.floor((nextTop - sortFieldTop + sortFieldHeight / 2) / sortRowStride)
-        )
-      );
-      const fromIndex = dragIndexRef.current;
-      if (targetIndex === fromIndex) return;
-      const nextOrder = [...order];
-      const [moved] = nextOrder.splice(fromIndex, 1);
-      if (!moved) return;
-      nextOrder.splice(targetIndex, 0, moved);
-      sortRowsRef.current = nextOrder;
-      dragIndexRef.current = targetIndex;
-      setSortOrderOverride(nextOrder);
-    };
-
-    const handleUp = () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      document.body.classList.remove("airtable-dragging");
-      const finalOrder = sortRowsRef.current;
-      if (!areSortsEqual(finalOrder, sortConfigList)) {
-        applySorts(finalOrder.length ? finalOrder : null);
-      }
-      setDraggingSortId(null);
-      setDraggingSortTop(null);
-      setSortOrderOverride(null);
-    };
-
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-  };
-
   const handleFilterDragStart = (
     event: ReactMouseEvent,
     conditionId: string,
@@ -2687,7 +2107,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     event.preventDefault();
     event.stopPropagation();
     if (scope === "root" && hasFilterGroups) return;
-    const containerRect = filterMenuRef.current?.getBoundingClientRect();
+    const containerRect = filterHook.filterMenuRef.current?.getBoundingClientRect();
     if (!containerRect) return;
     let list: FilterConditionItem[] = [];
     let listStartTop = filterFirstRowTop;
@@ -2702,7 +2122,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       );
       if (!group) return;
       list = group.conditions.filter(
-        (child): child is FilterConditionItem => child.type === "condition"
+        (item): item is FilterConditionItem => item.type === "condition"
       );
       listStartTop =
         filterLayout.groupMetaMap.get(groupId)?.startTop ?? filterFirstRowTop;
@@ -2729,32 +2149,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setFilterDragPreview({ scope, groupId, order: initialOrder });
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "none";
-    document.body.classList.add("airtable-dragging");
-
-    // Set initial phantom position from mouse – spawn so the cursor
-    // holds the phantom exactly where it pressed the original field.
-    const phantomW = filterFieldWidth;
-    const phantomH = filterFieldHeight;
-    const fieldElement = (event.currentTarget as HTMLElement).parentElement;
-    const fieldRect = fieldElement?.getBoundingClientRect();
-    if (fieldRect) {
-      phantomOffsetRef.current = {
-        x: event.clientX - fieldRect.left,
-        y: event.clientY - fieldRect.top,
-      };
-    } else {
-      // Fallback: centre on the reorder icon area
-      phantomOffsetRef.current = {
-        x: filterFieldSeparatorActionsLeft + (filterFieldWidth - filterFieldSeparatorActionsLeft) / 2,
-        y: filterFieldHeight / 2,
-      };
-    }
-    setPhantomFilterX(
-      Math.max(0, Math.min(event.clientX - phantomOffsetRef.current.x, window.innerWidth - phantomW))
-    );
-    setPhantomFilterY(
-      Math.max(0, Math.min(event.clientY - phantomOffsetRef.current.y, window.innerHeight - phantomH))
-    );
 
     const handleMove = (moveEvent: MouseEvent) => {
       const ctx = filterDragScopeRef.current;
@@ -2768,15 +2162,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         )
       );
       setDraggingFilterTop(nextTop);
-
-      // Update phantom position, clamped to viewport
-      setPhantomFilterX(
-        Math.max(0, Math.min(moveEvent.clientX - phantomOffsetRef.current.x, window.innerWidth - phantomW))
-      );
-      setPhantomFilterY(
-        Math.max(0, Math.min(moveEvent.clientY - phantomOffsetRef.current.y, window.innerHeight - phantomH))
-      );
-
       const targetIndex = Math.min(
         ctx.rowCount - 1,
         Math.max(
@@ -2807,7 +2192,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       window.removeEventListener("mouseup", handleUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      document.body.classList.remove("airtable-dragging");
       const ctx = filterDragScopeRef.current;
       if (ctx && ctx.rowCount > 1) {
         const finalOrder = ctx.order;
@@ -2818,36 +2202,37 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               (item): item is FilterConditionItem => item.type === "condition"
             );
             if (rootItems.length < 2) return prev;
-            const byId = new Map(rootItems.map((item) => [item.id, item]));
-            const nextRoot = finalOrder
-              .map((id) => byId.get(id))
-              .filter((item): item is FilterConditionItem => Boolean(item));
-            return nextRoot.length === rootItems.length ? nextRoot : prev;
+            const reordered: FilterItem[] = [];
+            for (const conditionId of finalOrder) {
+              const condition = rootItems.find((c) => c.id === conditionId);
+              if (condition) reordered.push(condition);
+            }
+            return reordered;
           });
         } else if (ctx.groupId) {
           setFilterItems((prev) =>
             prev.map((item) => {
               if (item.type !== "group" || item.id !== ctx.groupId) return item;
-              if (item.conditions.length < 2) return item;
-              const byId = new Map(
-                item.conditions.map((condition) => [condition.id, condition])
+              const groupConditions = item.conditions.filter(
+                (child): child is FilterConditionItem => child.type === "condition"
               );
-              const nextConditions = finalOrder
-                .map((id) => byId.get(id))
-                .filter(
-                  (condition): condition is FilterConditionItem => Boolean(condition)
-                );
-              return nextConditions.length === item.conditions.length
-                ? { ...item, conditions: nextConditions }
-                : item;
+              if (groupConditions.length < 2) return item;
+              const reordered: (FilterConditionItem | FilterGroupItem)[] = [];
+              for (const conditionId of finalOrder) {
+                const condition = groupConditions.find((c) => c.id === conditionId);
+                if (condition) reordered.push(condition);
+              }
+              // Add back any nested groups
+              for (const child of item.conditions) {
+                if (child.type === "group") reordered.push(child);
+              }
+              return { ...item, conditions: reordered };
             })
           );
         }
       }
       setDraggingFilterId(null);
       setDraggingFilterTop(null);
-      setPhantomFilterX(null);
-      setPhantomFilterY(null);
       filterDragScopeRef.current = null;
       setFilterDragPreview(null);
     };
@@ -2856,8 +2241,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     window.addEventListener("mouseup", handleUp);
   };
 
-  const bulkRowsDisabled =
-    !activeTableId || addRows.isPending || activeRowCount + BULK_ROWS > MAX_ROWS;
   const addTableDisabled = activeTables.length >= MAX_TABLES || addTable.isPending;
 
   const baseName = baseDetailsQuery.data?.name ?? "Base";
@@ -2868,7 +2251,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       tableMetaQuery.isLoading &&
       !activeTable) ||
     showRowsInitialLoading ||
-    addColumn.isPending;
+    addColumn.isPending ||
+    addRowsIsPending;
 
   return (
     <div className={clsx("h-screen overflow-hidden bg-white text-[#1d1f24]", inter.className)}>
@@ -2952,6 +2336,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             aria-hidden="true"
                           />
                           <button
+                            ref={(el) => {
+                              if (el) {
+                                newTableTabRefs.current.set(tableItem.id, el);
+                              } else {
+                                newTableTabRefs.current.delete(tableItem.id);
+                              }
+                            }}
                             type="button"
                             onClick={() => handleSelectTable(tableItem.id)}
                             onMouseEnter={() => {
@@ -3036,17 +2427,105 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       src={lightArrowIcon.src}
                     />
                     <button
+                      ref={addTableButtonRef}
                       type="button"
                       onClick={handleAddTable}
                       disabled={addTableDisabled}
                       className={clsx(
-                        "ml-[30px] mt-[10px] h-[12px] w-[12px] flex-shrink-0",
+                        "relative ml-[30px] mt-[10px] h-[12px] w-[12px] flex-shrink-0",
                         addTableDisabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"
                       )}
                       aria-label="Add table"
                     >
                       <img alt="" className="h-[12px] w-[12px]" src={plusIcon.src} />
                     </button>
+                    {addTableDropdownStage === "add-options" && dropdownPosition && (
+                      <div
+                        ref={addTableDropdownRef}
+                        className="fixed z-50"
+                        style={{
+                          left: dropdownPosition.left,
+                          top: dropdownPosition.top,
+                          width: 281,
+                          height: 70,
+                        }}
+                      >
+                        <div
+                          className="relative h-full w-full rounded-[6px] border-[1px] border-[#DADADA] bg-white shadow-[0_10px_24px_rgba(15,23,42,0.12)]"
+                        >
+                          <div className={clsx(inter.className, "absolute left-[16px] top-[7px]")}>
+                            <p className="text-[11px] font-normal leading-[11px] text-[#616670]">
+                              Add a blank table
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleStartFromScratch}
+                            className="group absolute cursor-pointer"
+                            style={{ left: 0, top: 0, width: 281, height: 70 }}
+                          >
+                            <span className="absolute left-[8px] top-[26px] h-[34px] w-[263px] rounded-[3px] bg-transparent group-hover:bg-[#F2F2F2]" />
+                            <span
+                              className={clsx(inter.className, "absolute z-10 text-[13px] font-normal leading-[13px] text-[#1D1F24]")}
+                              style={{ left: 16, top: 36 }}
+                            >
+                              Start from scratch
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {addTableDropdownStage === "name-input" && dropdownPosition && (
+                      <div
+                        ref={addTableDropdownRef}
+                        className="fixed z-50"
+                        style={{
+                          left: dropdownPosition.left,
+                          top: dropdownPosition.top,
+                          width: 335,
+                        }}
+                      >
+                        <div
+                          className="flex flex-col rounded-[6px] border-[2px] border-[#E5E5E5]/90 bg-white px-[18px] pb-[18px] pt-[18px]"
+                        >
+                          <input
+                            ref={tableNameInputRef}
+                            type="text"
+                            value={tableName}
+                            onChange={(e) => setTableName(e.target.value)}
+                            className={clsx(
+                              inter.className,
+                              "h-[38px] w-[299px] rounded-[3px] border-[2px] border-[#176EE1] px-[10px] text-[14px] font-normal leading-[14px] text-[#1D1F24] outline-none"
+                            )}
+                            placeholder=""
+                          />
+                          <div className="mt-[18px] flex items-center justify-end gap-[23px]">
+                            <button
+                              type="button"
+                              onClick={handleCancelTableName}
+                              className={clsx(
+                                inter.className,
+                                "group relative cursor-pointer text-[13px] font-medium leading-[13px] text-[#1D1F24]"
+                              )}
+                            >
+                              <span className="pointer-events-none absolute left-[-8px] top-[-6px] h-[28px] w-[58px] rounded-[5px] bg-transparent group-hover:bg-[#F2F2F2]" />
+                              <span className="relative z-10">Cancel</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleConfirmTableName}
+                              disabled={!tableName.trim()}
+                              className={clsx(
+                                inter.className,
+                                "flex h-[28px] w-[46px] cursor-pointer items-center justify-center rounded-[5px] bg-[#176EE1] text-[13px] font-medium leading-[13px] text-white shadow-[0_0_6.5px_rgba(0,0,0,0.0578)] transition-shadow hover:shadow-[0_1px_6.5px_rgba(199,200,201,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
+                              )}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="relative flex h-full flex-shrink-0 pr-[19px]">
@@ -3068,28 +2547,28 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             <FunctionBar
               bulkRowsDisabled={bulkRowsDisabled}
               handleAddBulkRows={handleAddBulkRows}
-              hideFieldsButtonRef={hideFieldsButtonRef}
-              hideFieldsMenuRef={hideFieldsMenuRef}
-              isHideFieldsMenuOpen={isHideFieldsMenuOpen}
-              setIsHideFieldsMenuOpen={setIsHideFieldsMenuOpen}
-              hiddenFieldCount={hiddenFieldCount}
+              hideFieldsButtonRef={hideFieldsHook.hideFieldsButtonRef}
+              hideFieldsMenuRef={hideFieldsHook.hideFieldsMenuRef}
+              isHideFieldsMenuOpen={hideFieldsHook.isHideFieldsMenuOpen}
+              setIsHideFieldsMenuOpen={hideFieldsHook.setIsHideFieldsMenuOpen}
+              hiddenFieldCount={hideFieldsHook.hiddenFieldCount}
               hiddenColumnIdSet={hiddenColumnIdSet}
-              hideFieldsLayout={hideFieldsLayout}
-              toggleHiddenColumn={toggleHiddenColumn}
-              hideAllColumns={hideAllColumns}
-              showAllColumns={showAllColumns}
-              filterButtonRef={filterButtonRef}
-              isFilterMenuOpen={isFilterMenuOpen}
-              setIsFilterMenuOpen={setIsFilterMenuOpen}
-              hasActiveFilters={hasActiveFilters}
-              filteredColumnNames={filteredColumnNames}
-              filterMenuRef={filterMenuRef}
+              hideFieldsLayout={hideFieldsHook.hideFieldsLayout}
+              toggleHiddenColumn={hideFieldsHook.toggleHiddenColumn}
+              hideAllColumns={hideFieldsHook.hideAllColumns}
+              showAllColumns={hideFieldsHook.showAllColumns}
+              filterButtonRef={filterHook.filterButtonRef}
+              isFilterMenuOpen={filterHook.isFilterMenuOpen}
+              setIsFilterMenuOpen={filterHook.setIsFilterMenuOpen}
+              hasActiveFilters={filterHook.hasActiveFilters}
+              filteredColumnNames={filterHook.filteredColumnNames}
+              filterMenuRef={filterHook.filterMenuRef}
               filterFieldMenuListRef={filterFieldMenuListRef}
               filterOperatorMenuListRef={filterOperatorMenuListRef}
-              filterItems={filterItems}
-              setFilterItems={setFilterItems}
-              filterConnector={filterConnector}
-              setFilterConnector={setFilterConnector}
+              filterItems={filterHook.filterItems}
+              setFilterItems={filterHook.setFilterItems}
+              filterConnector={filterHook.filterConnector}
+              setFilterConnector={filterHook.setFilterConnector}
               openFilterFieldId={openFilterFieldId}
               setOpenFilterFieldId={setOpenFilterFieldId}
               openFilterOperatorId={openFilterOperatorId}
@@ -3181,72 +2660,46 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               filterOperatorMenuHoverPadding={filterOperatorMenuHoverPadding}
               filterFieldVirtualItems={filterFieldVirtualItems}
               filterFieldVirtualizerSize={filterFieldVirtualizerSize}
-              sortButtonRef={sortButtonRef}
-              sortMenuRef={sortMenuRef}
-              sortFieldMenuRef={sortFieldMenuRef}
-              sortAddMenuListRef={sortAddMenuListRef}
-              isSortMenuOpen={isSortMenuOpen}
-              setIsSortMenuOpen={setIsSortMenuOpen}
-              openSortDirectionId={openSortDirectionId}
-              setOpenSortDirectionId={setOpenSortDirectionId}
-              openSortFieldId={openSortFieldId}
-              setOpenSortFieldId={setOpenSortFieldId}
-              isAddSortMenuOpen={isAddSortMenuOpen}
-              setIsAddSortMenuOpen={setIsAddSortMenuOpen}
+              sortButtonRef={tableSortHook.sortButtonRef}
+              sortMenuRef={tableSortHook.sortMenuRef}
+              sortFieldMenuRef={tableSortHook.sortFieldMenuRef}
+              sortAddMenuListRef={tableSortHook.sortAddMenuListRef}
+              isSortMenuOpen={tableSortHook.isSortMenuOpen}
+              setIsSortMenuOpen={tableSortHook.setIsSortMenuOpen}
+              openSortDirectionId={tableSortHook.openSortDirectionId}
+              setOpenSortDirectionId={tableSortHook.setOpenSortDirectionId}
+              openSortFieldId={tableSortHook.openSortFieldId}
+              setOpenSortFieldId={tableSortHook.setOpenSortFieldId}
+              isAddSortMenuOpen={tableSortHook.isAddSortMenuOpen}
+              setIsAddSortMenuOpen={tableSortHook.setIsAddSortMenuOpen}
               hasSort={hasSort}
               sortRows={sortRows}
               sortedColumnIds={sortedColumnIds}
-              draggingSortId={draggingSortId}
-              draggingSortTop={draggingSortTop}
-              applySorts={applySorts}
-              handleSortDragStart={handleSortDragStart}
-              getSortDirectionLabels={getSortDirectionLabels}
-              remainingSortColumns={remainingSortColumns}
+              draggingSortId={tableSortHook.draggingSortId}
+              draggingSortTop={tableSortHook.draggingSortTop}
+              applySorts={tableSortHook.applySorts}
+              handleSortDragStart={tableSortHook.handleSortDragStart}
+              getSortDirectionLabels={tableSortHook.getSortDirectionLabels}
+              remainingSortColumns={tableSortHook.remainingSortColumns}
               sortAddVirtualItems={sortAddVirtualItems}
               sortAddVirtualizerSize={sortAddVirtualizerSize}
-              sortListHeight={sortListHeight}
-              sortFieldTop={sortFieldTop}
-              sortFieldHeight={sortFieldHeight}
-              sortRowStride={sortRowStride}
-              sortConfiguredWidth={sortConfiguredWidth}
-              sortConfiguredHeight={sortConfiguredHeight}
-              sortLineWidth={sortLineWidth}
-              sortFieldLeft={sortFieldLeft}
-              sortFieldWidth={sortFieldWidth}
-              sortDirectionLeft={sortDirectionLeft}
-              sortDirectionWidth={sortDirectionWidth}
-              sortRemoveSize={sortRemoveSize}
-              sortRemoveLeft={sortRemoveLeft}
-              sortReorderLeft={sortReorderLeft}
-              sortReorderWidth={sortReorderWidth}
-              sortFieldMenuWidth={sortFieldMenuWidth}
-              sortFieldMenuPadding={sortFieldMenuPadding}
-              sortFieldMenuFirstRowTop={sortFieldMenuFirstRowTop}
-              sortFieldMenuRowHeight={sortFieldMenuRowHeight}
-              sortFieldMenuGap={sortFieldMenuGap}
-              sortAddTop={sortAddTop}
-              sortFooterTop={sortFooterTop}
-              sortAddMenuWidth={sortAddMenuWidth}
-              sortAddMenuHeight={sortAddMenuHeight}
-              sortAddMenuListHeight={sortAddMenuListHeight}
-              sortAddMenuContentHeight={sortAddMenuContentHeight}
-              sortAddMenuFirstRowTop={sortAddMenuFirstRowTop}
-              sortAddMenuRowHeight={sortAddMenuRowHeight}
-              sortAddMenuRowStride={sortAddMenuRowStride}
-              searchButtonRef={searchButtonRef}
-              searchMenuRef={searchMenuRef}
-              searchInputRef={searchInputRef}
-              isSearchMenuOpen={isSearchMenuOpen}
-              setIsSearchMenuOpen={setIsSearchMenuOpen}
-              searchValue={searchValue}
-              setSearchValue={setSearchValue}
+              sortLayout={sortLayout}
+              searchButtonRef={searchHook.searchButtonRef}
+              searchMenuRef={searchHook.searchMenuRef}
+              searchInputRef={searchHook.searchInputRef}
+              isSearchMenuOpen={searchHook.isSearchMenuOpen}
+              setIsSearchMenuOpen={searchHook.setIsSearchMenuOpen}
+              searchValue={searchHook.searchValue}
+              setSearchValue={searchHook.setSearchValue}
               showSearchSpinner={showSearchSpinner}
               showNoSearchResults={showNoSearchResults}
             />
           </section>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <section className="w-[281px] flex-shrink-0 border-r border-[#DDE1E3] bg-white" />
+            <section className="min-w-[280px] w-[280px] flex-shrink-0">
+              <GridViewContainer />
+            </section>
 
             <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
               {baseDetailsQuery.isError && (
@@ -3297,13 +2750,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   showRowsInitialLoading={showRowsInitialLoading}
                   rowsErrorMessage={rowsErrorMessage}
                   updateCellMutate={updateCell.mutate}
-                  addRowsMutate={addRows.mutate}
+                  addRowsMutate={addRowsMutate}
                   addColumnMutate={addColumn.mutate}
                   addColumnIsPending={addColumn.isPending}
                   setContextMenu={setContextMenu}
-                  isFilterMenuOpen={isFilterMenuOpen}
                   activeRowCount={activeRowCount}
-                  onClearSearch={() => setSearchValue("")}
+                  onClearSearch={searchHook.clearSearch}
                 />
               )}
             </section>

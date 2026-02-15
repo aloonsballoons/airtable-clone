@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import arrowIcon from "~/assets/arrow.svg";
 import launchIcon from "~/assets/launch.svg";
 import logoIcon from "~/assets/logo.svg";
 import timeIcon from "~/assets/time.svg";
@@ -22,13 +23,42 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
   const router = useRouter();
   const savedTextRef = useRef<HTMLSpanElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
+  const baseNameRef = useRef<HTMLSpanElement>(null);
   const [spinnerLeft, setSpinnerLeft] = useState<number | null>(null);
+  const [arrowLeft, setArrowLeft] = useState<number | null>(null);
+  const [showSaved, setShowSaved] = useState(false);
+  const savedTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const measureArrow = () => {
+      if (!baseNameRef.current || !headerRef.current) return;
+      const nameRect = baseNameRef.current.getBoundingClientRect();
+      const headerRect = headerRef.current.getBoundingClientRect();
+      setArrowLeft(nameRect.right - headerRect.left + 8);
+    };
+    measureArrow();
+    const raf = requestAnimationFrame(measureArrow);
+    window.addEventListener("resize", measureArrow);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", measureArrow);
+    };
+  }, [baseName]);
 
   useEffect(() => {
     if (!isLoading) {
       setSpinnerLeft(null);
+      // When loading finishes, show "Changes saved" for 5 seconds
+      setShowSaved(true);
+      if (savedTimerRef.current) {
+        clearTimeout(savedTimerRef.current);
+      }
+      savedTimerRef.current = setTimeout(() => {
+        setShowSaved(false);
+      }, 5000);
       return;
     }
+    setShowSaved(false);
     const measure = () => {
       if (!savedTextRef.current || !headerRef.current) return;
       const textRect = savedTextRef.current.getBoundingClientRect();
@@ -41,6 +71,9 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", measure);
+      if (savedTimerRef.current) {
+        clearTimeout(savedTimerRef.current);
+      }
     };
   }, [isLoading]);
 
@@ -50,8 +83,8 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
         ref={headerRef}
         className="relative flex flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6"
       >
-        {/* Left: base icon + name, shifted 8px left */}
-        <div className="flex items-center gap-3" style={{ marginLeft: -8 }}>
+        {/* Left: base icon + name, shifted 13px left (8 + 5 for base name) */}
+        <div className="flex items-center gap-3" style={{ marginLeft: -13 }}>
           <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[6px] bg-[#8c3f78]">
             <img
               alt=""
@@ -65,13 +98,27 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
             onClick={() => router.push("/bases")}
             className="flex items-center gap-2 text-[16px] font-semibold text-[#1d1f24]"
           >
-            <span>{baseName}</span>
-            <span className="airtable-nav-chevron rotate-90 text-[#1d1f24]" />
+            <span ref={baseNameRef}>{baseName}</span>
           </button>
         </div>
+        {/* arrow.svg: 11×6, y=24, 8px right of base name — positioned relative to header */}
+        {arrowLeft !== null && (
+          <img
+            alt=""
+            src={arrowIcon.src}
+            className="pointer-events-none"
+            style={{
+              position: "absolute",
+              left: arrowLeft,
+              top: 24,
+              width: 11,
+              height: 6,
+            }}
+          />
+        )}
 
-        {/* Center: nav tabs — original ml was 118px, shifted 30px right = 148px */}
-        <nav className="ml-[148px] flex flex-wrap items-center gap-5 airtable-secondary-font">
+        {/* Center: nav tabs — 148px - 32px = 116px (shifted 32px left) */}
+        <nav className="ml-[116px] flex flex-wrap items-center gap-5 airtable-secondary-font">
           <button type="button" className="relative text-[#1d1f24]">
             Data
             <span className="absolute -bottom-[19px] left-1/2 h-[2px] w-[28.5px] -translate-x-1/2 bg-[#8c3f78]" />
@@ -83,7 +130,7 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
 
         {/* Right side: Saved/Saving, time icon, Launch, Share — shifted 8px left */}
         <div className="flex flex-wrap items-center" style={{ marginRight: -8 }}>
-          {/* "Saved"/"Saving..." — Inter Regular 13, #8E8F91, 24px left of time.svg */}
+          {/* "Saving..."/"Changes saved" — Inter Regular 13, #8E8F91, 24px left of time.svg */}
           <span
             ref={savedTextRef}
             className={inter.className}
@@ -94,12 +141,13 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
               lineHeight: "13px",
               marginRight: 24,
               whiteSpace: "nowrap",
+              visibility: isLoading || showSaved ? "visible" : "hidden",
             }}
           >
-            {isLoading ? "Saving..." : "Saved"}
+            {isLoading ? "Saving..." : "Changes saved"}
           </span>
 
-          {/* time.svg: 16×15, 6px left of Launch, y=20 within header */}
+          {/* time.svg: 16×15, 6px left of Launch, shifted 9px left */}
           <img
             alt=""
             src={timeIcon.src}
@@ -107,6 +155,7 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
               width: 16,
               height: 15,
               marginRight: 6,
+              marginLeft: -9,
             }}
           />
 
@@ -134,14 +183,14 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
             aria-hidden="true"
             style={{
               position: "absolute",
-              top: 23,
+              top: 21,
               left: spinnerLeft,
               zIndex: 10,
             }}
           >
             <svg
-              width="10"
-              height="10"
+              width="12"
+              height="12"
               viewBox="0 0 10 10"
               aria-hidden="true"
             >
@@ -151,9 +200,9 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
                 r="4"
                 fill="none"
                 stroke="#8E8F91"
-                strokeWidth="1"
+                strokeWidth="1.5"
                 strokeLinecap="round"
-                strokeDasharray="0.788 0.212"
+                strokeDasharray="0.6 0.4"
                 pathLength="3"
               />
             </svg>

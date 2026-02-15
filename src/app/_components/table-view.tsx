@@ -10,10 +10,12 @@ import type {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 
@@ -208,7 +210,6 @@ export type TableViewProps = {
   }) => void;
   addColumnIsPending: boolean;
   setContextMenu: Dispatch<SetStateAction<ContextMenuState>>;
-  isFilterMenuOpen: boolean;
   activeRowCount: number;
   onClearSearch?: () => void;
 };
@@ -252,7 +253,6 @@ export function TableView({
   addColumnMutate,
   addColumnIsPending,
   setContextMenu,
-  isFilterMenuOpen,
   activeRowCount,
   onClearSearch,
 }: TableViewProps) {
@@ -260,13 +260,17 @@ export function TableView({
   // Internal state
   // -------------------------------------------------------------------------
   const [addRowHover, setAddRowHover] = useState(false);
-  const [hoveredHeaderId, setHoveredHeaderId] = useState<string | null>(null);
   const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
+  const [addColumnMenuPosition, setAddColumnMenuPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
 
   // -------------------------------------------------------------------------
   // Refs
   // -------------------------------------------------------------------------
   const parentRef = useRef<HTMLDivElement>(null);
+  const headerScrollRef = useRef<HTMLDivElement>(null);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<
@@ -278,6 +282,7 @@ export function TableView({
   } | null>(null);
   const focusTokenRef = useRef(0);
   const prefetchingRowsRef = useRef(false);
+  const isAddColumnMenuOpenRef = useRef(isAddColumnMenuOpen);
 
   // -------------------------------------------------------------------------
   // Computed values
@@ -475,7 +480,7 @@ export function TableView({
       column.type === "row-number" ||
       (column.type === "data" && column.name === "Name")
         ? "none"
-        : "0.5px solid #DDE1E3",
+        : "1px solid #DDE1E3",
     borderLeft: "none",
   });
 
@@ -484,12 +489,12 @@ export function TableView({
     isFirst: boolean,
     isLastRow: boolean,
   ) => ({
-    borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
+    borderBottom: isLastRow ? "none" : "1px solid #DDE1E3",
     borderRight:
       column.type === "row-number" ||
       (column.type === "data" && column.name === "Name")
         ? "none"
-        : "0.5px solid #DDE1E3",
+        : "1px solid #DDE1E3",
     borderLeft: "none",
   });
 
@@ -744,6 +749,74 @@ export function TableView({
   // Effects
   // -------------------------------------------------------------------------
   useEffect(() => {
+    isAddColumnMenuOpenRef.current = isAddColumnMenuOpen;
+  }, [isAddColumnMenuOpen]);
+
+  const updateAddColumnMenuPosition = useCallback(() => {
+    if (!addColumnButtonRef.current) return null;
+    const rect = addColumnButtonRef.current.getBoundingClientRect();
+    // Menu has width 400 and "right: 5" from anchor → align menu right with button right
+    const left = rect.right - 395;
+    const top = rect.bottom + 2;
+    setAddColumnMenuPosition({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isAddColumnMenuOpen) {
+      setAddColumnMenuPosition(null);
+      return;
+    }
+    updateAddColumnMenuPosition();
+    const onScrollOrResize = () => updateAddColumnMenuPosition();
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [isAddColumnMenuOpen, updateAddColumnMenuPosition]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+
+      // Check if clicking outside add column menu
+      if (
+        isAddColumnMenuOpenRef.current &&
+        addColumnMenuRef.current &&
+        !addColumnMenuRef.current.contains(target) &&
+        addColumnButtonRef.current &&
+        !addColumnButtonRef.current.contains(target)
+      ) {
+        setIsAddColumnMenuOpen(false);
+      }
+
+      // Don't clear selection if clicking on the add column button or menu
+      if (
+        addColumnButtonRef.current?.contains(target) ||
+        addColumnMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      // Don't clear selection if clicking on a cell
+      const isClickingCell = target.closest('.airtable-cell');
+      if (isClickingCell) {
+        return;
+      }
+
+      // Clear selection when clicking anywhere else
+      setSelectedCell(null);
+      setEditingCell(null);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [setSelectedCell, setEditingCell]);
+
+  useEffect(() => {
     rowVirtualizer.measure();
   }, [rowVirtualizer, expandedRowId]);
 
@@ -755,14 +828,6 @@ export function TableView({
     const focusTarget = editingCell ?? selectedCell;
     if (!focusTarget) {
       lastFocusedRef.current = null;
-      return;
-    }
-    if (
-      isFilterMenuOpen &&
-      document.activeElement &&
-      parentRef.current &&
-      !parentRef.current.contains(document.activeElement)
-    ) {
       return;
     }
     const token = (focusTokenRef.current += 1);
@@ -792,7 +857,6 @@ export function TableView({
     });
   }, [
     editingCell,
-    isFilterMenuOpen,
     selectedCell,
     rowVirtualRange.start,
     rowVirtualRange.end,
@@ -832,22 +896,20 @@ export function TableView({
   // Render
   // -------------------------------------------------------------------------
   return (
-    <div className="h-full">
-      <div className="relative h-full w-full">
+    <div className="relative h-full flex flex-col">
+      <div className="relative flex-1 w-full flex flex-col" style={{ minHeight: 0 }}>
+        {/* Header section - outside scrollable area so scrollbar doesn't extend into it */}
         <div
-          ref={parentRef}
-          className="h-full w-full overflow-auto"
-          style={{ backgroundColor: "#F7F8FC" }}
+          ref={headerScrollRef}
+          className="airtable-header-scroll relative shrink-0 w-full overflow-x-auto overflow-y-visible"
+          style={{
+            backgroundColor: "#ffffff",
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
+          }}
         >
           <div
-            className="relative"
-            style={{ minWidth: totalColumnsWidth, minHeight: "100%" }}
-            onMouseLeave={() => {
-              setHoveredHeaderId(null);
-            }}
-          >
-          <div
-            className="sticky top-0 z-10 flex text-[13px] font-medium text-[#1d1f24] relative"
+            className="flex text-[13px] font-medium text-[#1d1f24] relative"
             style={{ width: totalColumnsWidth }}
           >
             {rowNumberColumn && (
@@ -874,26 +936,22 @@ export function TableView({
             )}
             {nameColumn && (
               <div
-                className="relative flex h-[33px] items-center gap-2 px-2"
+                className="airtable-header-cell relative flex h-[33px] items-center gap-2 px-2"
                 style={{
                   ...headerCellBorder(nameColumn, true),
                   width: nameColumnWidth,
                   minWidth: nameColumnWidth,
                   maxWidth: nameColumnWidth,
                   flex: "0 0 auto",
-                  backgroundColor: filteredColumnIds.has(nameColumn.id)
+                  ["--header-base-bg" as string]: filteredColumnIds.has(nameColumn.id)
                     ? "#F6FBF9"
                     : sortedColumnIds.has(nameColumn.id)
                     ? "var(--airtable-sort-header-bg)"
-                    : hoveredHeaderId === nameColumn.id
-                    ? "var(--airtable-cell-hover-bg)"
                     : "#ffffff",
                   position: "sticky",
                   left: rowNumberColumnWidth,
                   zIndex: 30,
                 }}
-                onMouseEnter={() => setHoveredHeaderId(nameColumn.id)}
-                onMouseLeave={() => setHoveredHeaderId(null)}
                 onContextMenu={(event) =>
                   handleOpenContextMenu(
                     event,
@@ -908,12 +966,10 @@ export function TableView({
                   <img
                     alt=""
                     className={clsx(
-                      "h-[13px] w-[13px]",
+                      "airtable-header-icon h-[13px] w-[13px]",
                       (sortedColumnIds.has(nameColumn.id) ||
                         filteredColumnIds.has(nameColumn.id)) &&
-                        "airtable-column-icon--sorted",
-                      hoveredHeaderId === nameColumn.id &&
-                        "airtable-column-icon--hover"
+                        "airtable-column-icon--sorted"
                     )}
                     style={
                       nameColumn.name === "Status"
@@ -951,35 +1007,35 @@ export function TableView({
                 column.type === "data" && sortedColumnIds.has(column.id);
               const isFilteredColumn =
                 column.type === "data" && filteredColumnIds.has(column.id);
-              const backgroundColor =
+              const baseBackgroundColor =
                 isFilteredColumn
                   ? "#F6FBF9"
                   : isSortedColumn
                   ? "var(--airtable-sort-header-bg)"
-                  : hoveredHeaderId === column.id
-                  ? "var(--airtable-cell-hover-bg)"
                   : "#ffffff";
 
               if (column.type === "add") {
                 return (
                   <div
                     key={column.id}
-                    className="relative"
-                    onMouseEnter={() => setHoveredHeaderId(column.id)}
-                    onMouseLeave={() => setHoveredHeaderId(null)}
+                    className="airtable-header-cell relative"
                     style={{
                       ...cellStyle,
                       width: virtualColumn.size,
                       flex: "0 0 auto",
-                      backgroundColor,
+                      ["--header-base-bg" as string]: baseBackgroundColor,
                     }}
                   >
                     <button
                       ref={addColumnButtonRef}
                       type="button"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         if (activeColumns.length >= MAX_COLUMNS) return;
                         setIsAddColumnMenuOpen((prev) => !prev);
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
                       }}
                       disabled={activeColumns.length >= MAX_COLUMNS}
                       className="flex h-[33px] w-full cursor-pointer items-center justify-center text-[#1d1f24] disabled:cursor-not-allowed"
@@ -987,15 +1043,28 @@ export function TableView({
                     >
                       <span className="airtable-plus-icon" aria-hidden="true" />
                     </button>
-                    {isAddColumnMenuOpen && (
-                      <div ref={addColumnMenuRef}>
-                        <AddColumnMenu
-                          existingColumnNames={activeColumns.map((col) => col.name)}
-                          onCreateColumn={handleCreateColumn}
-                          onClose={() => setIsAddColumnMenuOpen(false)}
-                        />
-                      </div>
-                    )}
+                    {isAddColumnMenuOpen &&
+                      addColumnMenuPosition &&
+                      typeof document !== "undefined" &&
+                      createPortal(
+                        <div
+                          ref={addColumnMenuRef}
+                          style={{
+                            position: "fixed",
+                            top: addColumnMenuPosition.top,
+                            left: addColumnMenuPosition.left,
+                            width: 400,
+                            zIndex: 9999,
+                          }}
+                        >
+                          <AddColumnMenu
+                            existingColumnNames={activeColumns.map((col) => col.name)}
+                            onCreateColumn={handleCreateColumn}
+                            onClose={() => setIsAddColumnMenuOpen(false)}
+                          />
+                        </div>,
+                        document.body
+                      )}
                   </div>
                 );
               }
@@ -1003,15 +1072,13 @@ export function TableView({
               return (
                 <div
                   key={column.id}
-                  className="relative flex h-[33px] items-center gap-2 px-2"
+                  className="airtable-header-cell relative flex h-[33px] items-center gap-2 px-2"
                   style={{
                     ...cellStyle,
                     width: virtualColumn.size,
                     flex: "0 0 auto",
-                    backgroundColor,
+                    ["--header-base-bg" as string]: baseBackgroundColor,
                   }}
-                  onMouseEnter={() => setHoveredHeaderId(column.id)}
-                  onMouseLeave={() => setHoveredHeaderId(null)}
                   onContextMenu={(event) =>
                     handleOpenContextMenu(
                       event,
@@ -1026,11 +1093,9 @@ export function TableView({
                     <img
                       alt=""
                       className={clsx(
-                        "h-[13px] w-[13px]",
+                        "airtable-header-icon h-[13px] w-[13px]",
                         (isSortedColumn || isFilteredColumn) &&
-                          "airtable-column-icon--sorted",
-                        hoveredHeaderId === column.id &&
-                          "airtable-column-icon--hover"
+                          "airtable-column-icon--sorted"
                       )}
                       style={
                         column.name === "Status"
@@ -1066,10 +1131,29 @@ export function TableView({
               aria-hidden="true"
             />
           </div>
+        </div>
 
+        {/* Scrollable rows container */}
+        <div
+          ref={parentRef}
+          className="relative flex-1 w-full overflow-auto"
+          style={{
+            backgroundColor: "#F7F8FC",
+            minHeight: 0,
+          }}
+          onScroll={(e) => {
+            // Sync horizontal scroll with header
+            if (headerScrollRef.current) {
+              headerScrollRef.current.scrollLeft = e.currentTarget.scrollLeft;
+            }
+          }}
+        >
           <div
             className="relative"
-            style={{ height: rowCanvasHeight }}
+            style={{
+              minWidth: totalColumnsWidth,
+              height: rowCanvasHeight,
+            }}
           >
             {rowVirtualItems.map((virtualRow) => {
             const row = sortedTableData[virtualRow.index];
@@ -1142,7 +1226,7 @@ export function TableView({
                     <div
                       className="airtable-cell flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
                       style={{
-                        borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
+                        borderBottom: isLastRow ? "none" : "1px solid #DDE1E3",
                         borderLeft: "none",
                         borderRight: "none",
                         width: rowNumberColumnWidth,
@@ -1179,7 +1263,11 @@ export function TableView({
                         backgroundColor: nameBaseBackground,
                       }}
                     >
-                      <span className="block w-full truncate">{nameValue}</span>
+                      <span className="block w-full truncate">
+                        {nameHasSearchMatch
+                          ? renderSearchHighlight(nameValue, searchQuery)
+                          : nameValue}
+                      </span>
                     </div>
                   )}
                   {scrollablePaddingLeft > 0 && (
@@ -1241,7 +1329,9 @@ export function TableView({
                             textAlign: isNumber ? "right" : "left",
                           }}
                         >
-                          {value}
+                          {cellHasSearchMatch
+                            ? renderSearchHighlight(value, searchQuery)
+                            : value}
                         </span>
                       </div>
                     );
@@ -1279,7 +1369,7 @@ export function TableView({
                   <div
                     className="airtable-cell relative flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
                     style={{
-                      borderBottom: isLastRow ? "none" : "0.5px solid #DDE1E3",
+                      borderBottom: isLastRow ? "none" : "1px solid #DDE1E3",
                       borderLeft: "none",
                       borderRight: "none",
                       width: rowNumberColumnWidth,
@@ -1986,8 +2076,8 @@ export function TableView({
                   maxWidth: rowNumberColumnWidth,
                   flex: "0 0 auto",
                   backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                  borderTop: "0.5px solid #DDE1E3",
-                  borderBottom: "0.5px solid #DDE1E3",
+                  borderTop: "1px solid #DDE1E3",
+                  borderBottom: "1px solid #DDE1E3",
                   borderLeft: "none",
                   borderRight: "none",
                   position: "sticky",
@@ -2035,8 +2125,8 @@ export function TableView({
                     maxWidth: nameColumnWidth,
                     flex: "0 0 auto",
                     backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                    borderTop: "0.5px solid #DDE1E3",
-                    borderBottom: "0.5px solid #DDE1E3",
+                    borderTop: "1px solid #DDE1E3",
+                    borderBottom: "1px solid #DDE1E3",
                     borderLeft: "none",
                     borderRight: "none",
                     position: "sticky",
@@ -2051,9 +2141,9 @@ export function TableView({
                     width: Math.max(0, dataColumnsWidth - nameColumnWidth),
                     flex: "0 0 auto",
                     backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                    borderTop: "0.5px solid #DDE1E3",
-                    borderBottom: "0.5px solid #DDE1E3",
-                    borderRight: "0.5px solid #DDE1E3",
+                    borderTop: "1px solid #DDE1E3",
+                    borderBottom: "1px solid #DDE1E3",
+                    borderRight: "1px solid #DDE1E3",
                   }}
                   aria-hidden="true"
                 />
@@ -2068,10 +2158,10 @@ export function TableView({
                   width: dataColumnsWidth,
                   flex: "0 0 auto",
                   backgroundColor: addRowHover ? "#F7F8FC" : "#ffffff",
-                  borderTop: "0.5px solid #DDE1E3",
-                  borderBottom: "0.5px solid #DDE1E3",
+                  borderTop: "1px solid #DDE1E3",
+                  borderBottom: "1px solid #DDE1E3",
                   borderLeft: "none",
-                  borderRight: "0.5px solid #DDE1E3",
+                  borderRight: "1px solid #DDE1E3",
                   position: "sticky",
                   left: rowNumberColumnWidth,
                 }}
@@ -2088,15 +2178,38 @@ export function TableView({
             />
           </div>
         </div>
-        </div>
-        {nameColumn && nameColumnWidth > 0 && (
-          <div
-            className="pointer-events-none absolute top-0 bottom-0 z-40 w-px bg-[#CBCBCB]"
-            style={{ left: `${rowNumberColumnWidth + nameColumnWidth}px` }}
-            aria-hidden="true"
-          />
-        )}
+        {/* End of scrollable rows container */}
       </div>
+
+      {/* Footer section with record count */}
+      <div
+        className="shrink-0 flex items-center border-t-[1px] border-[#DDE1E3] bg-[#FBFCFE]"
+        style={{
+          height: "34px",
+          paddingLeft: "8px",
+          paddingTop: "6px",
+        }}
+      >
+        <span
+          className="text-[11px] text-[#1D1F24]"
+          style={{ fontFamily: "Inter", fontWeight: 400 }}
+        >
+          {activeRowCount.toLocaleString()} {activeRowCount === 1 ? "record" : "records"}
+        </span>
+      </div>
+
+      {/* Name column vertical divider - from top of header row to bottom of view */}
+      {nameColumn && nameColumnWidth > 0 && (
+        <div
+          className="pointer-events-none absolute z-40 w-px bg-[#CBCBCB]"
+          style={{
+            left: `${rowNumberColumnWidth + nameColumnWidth}px`,
+            top: 0,
+            bottom: 0,
+          }}
+          aria-hidden="true"
+        />
+      )}
 
       {!activeColumns.length && (
         <div className="p-6 text-center text-[12px] text-[#94a3b8]">
