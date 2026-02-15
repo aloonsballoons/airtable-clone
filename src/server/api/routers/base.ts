@@ -46,7 +46,7 @@ const filterGroupSchema: z.ZodType<{
 	type: "group";
 	connector: "and" | "or";
 	conditions: Array<
-		| { type: "condition"; columnId: string; operator: string; value: string }
+		| { type: "condition"; columnId: string; operator: string; value?: string }
 		| { type: "group"; connector: "and" | "or"; conditions: any[] }
 	>;
 }> = z.object({
