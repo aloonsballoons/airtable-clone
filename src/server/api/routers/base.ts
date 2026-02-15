@@ -42,14 +42,14 @@ const filterConditionSchema = z.object({
 	operator: filterOperatorSchema,
 	value: z.string().optional(),
 });
-const filterGroupSchema: z.ZodType<{
+type FilterCondition = z.infer<typeof filterConditionSchema>;
+type FilterGroup = {
 	type: "group";
 	connector: "and" | "or";
-	conditions: Array<
-		| { type: "condition"; columnId: string; operator: string; value?: string }
-		| { type: "group"; connector: "and" | "or"; conditions: any[] }
-	>;
-}> = z.object({
+	conditions: Array<FilterCondition | FilterGroup>;
+};
+
+const filterGroupSchema: z.ZodType<FilterGroup> = z.object({
 	type: z.literal("group"),
 	connector: filterConnectorSchema,
 	conditions: z.array(
