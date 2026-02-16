@@ -1899,10 +1899,7 @@ export const baseRouter = createTRPCRouter({
 				sortConfig?: Array<{ columnId: string; direction: "asc" | "desc" }>;
 				hiddenColumnIds?: string[];
 				searchQuery?: string | null;
-				filterConfig?: {
-					connector: "and" | "or";
-					items: Array<unknown>;
-				} | null;
+				filterConfig?: z.infer<typeof filterStorageSchema> | null;
 			} = {};
 
 			if (input.sortConfig !== undefined) {
