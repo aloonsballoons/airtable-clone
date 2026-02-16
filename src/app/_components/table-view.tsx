@@ -2185,7 +2185,7 @@ export function TableView({
 
       {/* Footer section with record count */}
       <div
-        className="shrink-0 flex items-center border-t-[1px] border-l-[1px] border-[#DDE1E3] bg-[#FBFCFE]"
+        className="shrink-0 flex items-center border-t-[1px] border-[#DDE1E3] bg-[#FBFCFE]"
         style={{
           height: "34px",
           paddingLeft: "8px",

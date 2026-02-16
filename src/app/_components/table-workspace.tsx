@@ -2839,7 +2839,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
           </section>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <section className="min-w-[280px] w-[280px] flex-shrink-0">
+            <section className="min-w-[280px] w-[280px] flex-shrink-0 border-r border-[#DDE1E3]">
               <GridViewContainer
                 views={views}
                 activeViewId={activeViewId}

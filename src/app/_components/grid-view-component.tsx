@@ -101,7 +101,6 @@ export function GridViewContainer({
           minWidth: CONTAINER_WIDTH,
           flexShrink: 0,
           boxSizing: "border-box",
-          borderRight: "1px solid #DDE1E3",
           backgroundColor: "white",
           position: "relative",
         }}

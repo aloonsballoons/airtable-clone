@@ -807,7 +807,16 @@ export function FilterDropdown({
                                   top: index === 0 ? 10 : 46,
                                 }}
                                 onClick={() => {
-                                  setGroupConnector(group.group.id, connector, group.parentGroupId);
+                                  if (group.connectorKey === "root") {
+                                    setFilterConnector(connector);
+                                    setHighlightedFilterConnectorKey("root");
+                                  } else {
+                                    // Extract group ID from connectorKey (format: "group:${groupId}")
+                                    const targetGroupId = group.connectorKey.replace("group:", "");
+                                    setGroupConnector(targetGroupId, connector, group.parentGroupId);
+                                  }
+                                  setHighlightedFilterFieldId(null);
+                                  setHighlightedFilterOperatorId(null);
                                   setOpenFilterConnectorId(null);
                                 }}
                               >
