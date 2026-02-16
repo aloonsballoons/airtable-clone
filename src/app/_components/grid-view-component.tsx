@@ -6,6 +6,7 @@ import { useId, useRef, useState } from "react";
 
 import greySearchIcon from "~/assets/grey-search.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
+import greyGridViewIcon from "~/assets/grey-grid-view.svg";
 import plusIcon from "~/assets/plus.svg";
 import settingsIcon from "~/assets/settings.svg";
 import { CreateViewDropdown } from "./create-view-dropdown";
@@ -31,7 +32,7 @@ export type GridViewContainerProps = {
 
 const DEFAULT_VIEWS: ViewItem[] = [{ id: "default", name: "Grid view" }];
 
-const VIEW_ROW_STRIDE = 32;
+const VIEW_ROW_STRIDE = 30;
 
 // Targets:
 // - Text "Grid view" at (44, 95)
@@ -61,17 +62,17 @@ export function GridViewContainer({
 }: GridViewContainerProps) {
   const [isCreateDropdownOpen, setIsCreateDropdownOpen] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({ left: 0, top: 0 });
+  const [hoveredViewId, setHoveredViewId] = useState<string | null>(null);
   const containerRef = useRef<HTMLElement>(null);
   const createButtonRef = useRef<HTMLButtonElement>(null);
-  const gridViewIconMaskId = useId().replace(/:/g, "");
 
   const handleCreateClick = () => {
     if (containerRef.current && functionContainerRef?.current) {
       const containerRect = containerRef.current.getBoundingClientRect();
       const functionRect = functionContainerRef.current.getBoundingClientRect();
 
-      // Dropdown left edge is 1px left of grid-view container's right edge
-      const left = containerRect.right - 1 - 400; // 400 is dropdown width
+      // Dropdown left edge is 1px left of table view space (which starts at grid-view container's right edge)
+      const left = containerRect.right - 1;
 
       // Dropdown top edge is 10px below function container's bottom edge
       const top = functionRect.bottom + 10;
@@ -187,11 +188,16 @@ export function GridViewContainer({
           const isActive = activeViewId != null && activeViewId === view.id;
           const iconTopInHover = iconTop - hoverTop;
 
+          const isHovered = hoveredViewId === view.id;
+          const showGreyIcon = isActive || isHovered;
+
           return (
             <button
               key={view.id}
               type="button"
               onClick={() => onSelectView?.(view.id)}
+              onMouseEnter={() => setHoveredViewId(view.id)}
+              onMouseLeave={() => setHoveredViewId(null)}
               className="group/view absolute cursor-pointer border-none bg-transparent p-0 text-left outline-none"
               style={{
                 left: VIEW_HOVER_LEFT,
@@ -203,13 +209,14 @@ export function GridViewContainer({
               aria-current={isActive ? "true" : undefined}
             >
               <span
-                className="absolute rounded-[3px] bg-transparent transition-colors group-hover/view:bg-[#F2F2F2]"
+                className="absolute rounded-[3px] bg-transparent transition-colors"
                 style={{
                   left: 0,
                   top: 0,
                   width: VIEW_HOVER_WIDTH,
                   height: VIEW_HOVER_HEIGHT,
                   pointerEvents: "none",
+                  backgroundColor: isActive || isHovered ? "#F2F2F2" : "transparent",
                 }}
               />
               <span
@@ -217,16 +224,16 @@ export function GridViewContainer({
                 style={{
                   left: VIEW_ICON_LEFT - VIEW_HOVER_LEFT,
                   top: iconTopInHover,
-                  width: 17,
+                  width: 16,
                   height: 15,
                   pointerEvents: "none",
                 }}
               >
                 <Image
-                  src={gridViewIcon}
+                  src={showGreyIcon ? greyGridViewIcon : gridViewIcon}
                   alt=""
                   width={16}
-                  height={14}
+                  height={15}
                   className="flex-shrink-0"
                   style={{
                     display: "block",

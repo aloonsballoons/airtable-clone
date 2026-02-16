@@ -243,7 +243,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const hasLoadedTableMetaRef = useRef(false);
   const hydratedFilterTableIdRef = useRef<string | null>(null);
   const functionContainerRef = useRef<HTMLDivElement>(null);
-  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [activeViewId, setActiveViewId] = useState<string | null>("default");
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
 

@@ -78,7 +78,7 @@ export function CreateViewDropdown({
   return (
     <div
       ref={dropdownRef}
-      className={inter.className}
+      className={`${inter.className} airtable-dropdown-surface`}
       style={{
         position: "absolute",
         left: dropdownPosition.left,
@@ -87,7 +87,6 @@ export function CreateViewDropdown({
         height: 234,
         backgroundColor: "white",
         borderRadius: 6,
-        boxShadow: "0 3px 6px rgba(0, 0, 0, 0.1), 0 10px 20px rgba(0, 0, 0, 0.15)",
         zIndex: 1000,
       }}
     >
@@ -153,19 +152,35 @@ export function CreateViewDropdown({
           <div
             style={{
               position: "relative",
-              width: 8,
-              height: 8,
+              width: 16,
+              height: 16,
               borderRadius: "50%",
-              border: "2px solid #BFBFBF",
-              backgroundColor: selectedPermission === "collaborative" ? "#176EE1" : "transparent",
+              border: "2px solid #E5E5E5",
+              backgroundColor: "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxSizing: "border-box",
+              flexShrink: 0,
             }}
-          />
+          >
+            {selectedPermission === "collaborative" && (
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: "#176EE1",
+                }}
+              />
+            )}
+          </div>
           <Image
             src={peopleIcon}
             alt=""
             width={18}
             height={14}
-            style={{ marginLeft: 11 }}
+            style={{ marginLeft: 3 }}
           />
           <span
             style={{
@@ -199,19 +214,35 @@ export function CreateViewDropdown({
           <div
             style={{
               position: "relative",
-              width: 8,
-              height: 8,
+              width: 16,
+              height: 16,
               borderRadius: "50%",
-              border: "2px solid #BFBFBF",
-              backgroundColor: selectedPermission === "personal" ? "#176EE1" : "transparent",
+              border: "2px solid #E5E5E5",
+              backgroundColor: "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxSizing: "border-box",
+              flexShrink: 0,
             }}
-          />
+          >
+            {selectedPermission === "personal" && (
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: "#176EE1",
+                }}
+              />
+            )}
+          </div>
           <Image
             src={assigneeIcon}
             alt=""
             width={15}
             height={16}
-            style={{ marginLeft: 12 }}
+            style={{ marginLeft: 4 }}
           />
           <span
             style={{
@@ -245,19 +276,35 @@ export function CreateViewDropdown({
           <div
             style={{
               position: "relative",
-              width: 8,
-              height: 8,
+              width: 16,
+              height: 16,
               borderRadius: "50%",
-              border: "2px solid #BFBFBF",
-              backgroundColor: selectedPermission === "locked" ? "#176EE1" : "transparent",
+              border: "2px solid #E5E5E5",
+              backgroundColor: "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxSizing: "border-box",
+              flexShrink: 0,
             }}
-          />
+          >
+            {selectedPermission === "locked" && (
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: "#176EE1",
+                }}
+              />
+            )}
+          </div>
           <Image
             src={lockIcon}
             alt=""
             width={13.68}
             height={14.66}
-            style={{ marginLeft: 13 }}
+            style={{ marginLeft: 5 }}
           />
           <span
             style={{
@@ -291,7 +338,7 @@ export function CreateViewDropdown({
         onClick={onClose}
         style={{
           position: "absolute",
-          left: 271,
+          left: 213,
           top: 193,
           fontSize: 13,
           fontWeight: 400,
@@ -299,9 +346,10 @@ export function CreateViewDropdown({
           background: "transparent",
           border: "none",
           cursor: "pointer",
-          padding: "4px 12px",
+          padding: "7px 12px",
           borderRadius: 6,
           transition: "background-color 0.2s",
+          zIndex: 10,
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.backgroundColor = "#F2F2F2";
@@ -318,20 +366,25 @@ export function CreateViewDropdown({
         type="button"
         onClick={handleCreate}
         disabled={!viewName.trim()}
+        className="airtable-create-button"
         style={{
           position: "absolute",
-          left: 270,
-          top: 193,
+          left: 258,
+          top: 186,
+          width: 126,
+          height: 31,
           fontSize: 13,
           fontWeight: 500,
           color: "white",
-          backgroundColor: viewName.trim() ? "#09890E" : "#D9D9D9",
+          backgroundColor: viewName.trim() ? "#176EE1" : "#D9D9D9",
           border: "none",
           cursor: viewName.trim() ? "pointer" : "not-allowed",
-          padding: "6px 14px",
-          borderRadius: 6,
-          boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
-          marginLeft: 66,
+          borderRadius: 5,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          paddingLeft: 12,
+          zIndex: 10,
         }}
       >
         Create new view
