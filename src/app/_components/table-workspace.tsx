@@ -162,6 +162,11 @@ const isValidNumberDraft = (value: string) => {
 };
 
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isValidTableId = (id: string | null): id is string =>
+  typeof id === "string" && UUID_REGEX.test(id);
+
 const getLastViewedTableKey = (baseId: string) =>
   `airtable:last-viewed-table:${baseId}`;
 const getTableFilterStateKey = (baseId: string, tableId: string) =>
@@ -249,7 +254,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const viewsQuery = api.base.listViews.useQuery(
     { tableId: activeTableId! },
-    { enabled: Boolean(activeTableId) }
+    { enabled: isValidTableId(activeTableId) }
   );
   const createViewMutation = api.base.createView.useMutation({
     onSuccess: (newView) => {
@@ -294,7 +299,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     setPreferredTableBaseId(null);
     try {
       const storedId = window.localStorage.getItem(getLastViewedTableKey(baseId));
-      setPreferredTableId(storedId);
+      setPreferredTableId(
+        storedId && isValidTableId(storedId) ? storedId : null
+      );
     } catch {
       setPreferredTableId(null);
     } finally {
@@ -307,7 +314,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [utils.base.list]);
   const tableMetaQuery = api.base.getTableMeta.useQuery(
     { tableId: activeTableId! },
-    { enabled: Boolean(activeTableId) }
+    { enabled: isValidTableId(activeTableId) }
   );
   useEffect(() => {
     if (tableMetaQuery.data) {
@@ -466,7 +473,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const rowsQuery = api.base.getRows.useInfiniteQuery(
     getRowsQueryKey(activeTableId!),
     {
-      enabled: Boolean(activeTableId),
+      enabled: isValidTableId(activeTableId),
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
       placeholderData: (previousData) => previousData,
     }
@@ -800,7 +807,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (activeTableId && tables.some((table) => table.id === activeTableId)) {
       return;
     }
-    if (preferredTableId && tables.some((table) => table.id === preferredTableId)) {
+    // Only use preferredTableId from localStorage if it's a valid UUID and exists in this base
+    if (
+      isValidTableId(preferredTableId) &&
+      tables.some((table) => table.id === preferredTableId)
+    ) {
       setActiveTableId(preferredTableId);
       return;
     }
@@ -816,7 +827,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   ]);
 
   useEffect(() => {
-    if (!activeTableId || preferredTableBaseId !== baseId) return;
+    if (
+      !isValidTableId(activeTableId) ||
+      preferredTableBaseId !== baseId
+    )
+      return;
     try {
       window.localStorage.setItem(
         getLastViewedTableKey(baseId),

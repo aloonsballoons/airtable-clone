@@ -419,19 +419,49 @@ export function FunctionBar({
   // Dynamic filter button width
   const filterTextRef = useRef<HTMLSpanElement>(null);
   const [filterButtonWidth, setFilterButtonWidth] = useState(66);
+  const [filterTextWidth, setFilterTextWidth] = useState(0);
+  const [inactiveFilterTextWidth, setInactiveFilterTextWidth] = useState(0);
   const filterText = hasActiveFilters
     ? `Filtered by ${filteredColumnNames.join(", ")}`
     : "Filter";
 
+  // Spacing constants for Filter button - these must be preserved in both active and inactive states
+  const FILTER_ICON_LEFT = 4; // Icon left padding from button edge (preserved)
+  const FILTER_TEXT_LEFT = 13; // Text left position (inactive state) - gap from icon left is 9px
+  const FILTER_TEXT_LEFT_ACTIVE = FILTER_TEXT_LEFT + 5; // Text left position (active state) - shifted 5px right
+  const FILTER_TEXT_ICON_GAP = FILTER_TEXT_LEFT - FILTER_ICON_LEFT; // 9px gap between icon left and text left (inactive)
+  const FILTER_RIGHT_PADDING = 17; // Right padding from text end to button edge (preserved)
+
   useEffect(() => {
     if (filterTextRef.current) {
       const textWidth = filterTextRef.current.scrollWidth;
-      // text starts at left-[13px], right padding ~17px
-      setFilterButtonWidth(hasActiveFilters ? 13 + textWidth + 17 : 66);
+      setFilterTextWidth(textWidth);
+      
+      // Track inactive text width - measure "Filter" text width when inactive
+      if (!hasActiveFilters) {
+        setInactiveFilterTextWidth(textWidth);
+      } else if (inactiveFilterTextWidth === 0) {
+        // If we start in active state, calculate inactive width from inactive button width
+        // Inactive button: 66px = FILTER_TEXT_LEFT (13px) + textWidth + FILTER_RIGHT_PADDING (17px)
+        // So inactive textWidth = 66 - 13 - 17 = 36px
+        setInactiveFilterTextWidth(66 - FILTER_TEXT_LEFT - FILTER_RIGHT_PADDING);
+      }
+      
+      // Preserve all spacing: text left position + text width + right padding
+      // Active state uses FILTER_TEXT_LEFT_ACTIVE (18px) instead of FILTER_TEXT_LEFT (13px)
+      const textLeft = hasActiveFilters ? FILTER_TEXT_LEFT_ACTIVE : FILTER_TEXT_LEFT;
+      setFilterButtonWidth(hasActiveFilters ? textLeft + textWidth + FILTER_RIGHT_PADDING : 66);
     }
-  }, [filterText, hasActiveFilters]);
+  }, [filterText, hasActiveFilters, inactiveFilterTextWidth]);
 
   const filterExpansion = filterButtonWidth - 66;
+  // Calculate text expansion: how much the text width increased when active
+  const filterTextExpansion = hasActiveFilters && inactiveFilterTextWidth > 0 
+    ? filterTextWidth - inactiveFilterTextWidth 
+    : 0;
+  
+  // Filter button right edge anchor point (fixed position)
+  const FILTER_BUTTON_RIGHT_EDGE = 244;
 
   // Dynamic sort button width
   const sortTextRef = useRef<HTMLSpanElement>(null);
@@ -449,6 +479,9 @@ export function FunctionBar({
   }, [sortText, hasSort, sortRows.length]);
 
   const sortExpansion = sortButtonWidth - 66;
+
+  // Position Filter button from its right edge so it expands leftward (after sortExpansion is defined)
+  const filterButtonLeft = FILTER_BUTTON_RIGHT_EDGE - filterButtonWidth - sortExpansion;
 
   // Grid view name width for arrow and Add 100k rows positioning
   const gridViewNameRef = useRef<HTMLSpanElement>(null);
@@ -721,7 +754,7 @@ export function FunctionBar({
             </div>
 
             {/* ---- Filter ---- */}
-            <div className="absolute top-0" style={{ left: 178 - filterExpansion - sortExpansion }}>
+            <div className="absolute top-0" style={{ left: filterButtonLeft }}>
               <button
                 ref={filterButtonRef}
                 type="button"
@@ -754,7 +787,8 @@ export function FunctionBar({
                     width={18}
                     height={12}
                     viewBox="0 0 18 12"
-                    className="absolute left-[4px] top-[6px]"
+                    className="absolute top-[6px]"
+                    style={{ left: `${FILTER_ICON_LEFT}px` }}
                     aria-hidden="true"
                   >
                     <defs>
@@ -783,14 +817,18 @@ export function FunctionBar({
                 ) : (
                   <img
                     alt=""
-                    className="absolute left-[4px] top-[6px] h-[12px] w-[18px]"
+                    className="absolute top-[6px] h-[12px] w-[18px]"
+                    style={{ left: `${FILTER_ICON_LEFT}px` }}
                     src={filterIcon.src}
                   />
                 )}
                 <span
                   ref={filterTextRef}
-                  className="absolute left-[13px] top-[5px] block h-[16px] text-[13px] leading-[16px]"
-                  style={hasActiveFilters ? { whiteSpace: "nowrap" } : { width: "60px" }}
+                  className="absolute top-[5px] block h-[16px] text-[13px] leading-[16px]"
+                  style={{
+                    left: `${hasActiveFilters ? FILTER_TEXT_LEFT_ACTIVE : FILTER_TEXT_LEFT}px`,
+                    ...(hasActiveFilters ? { whiteSpace: "nowrap" } : { width: "60px" }),
+                  }}
                 >
                   {filterText}
                 </span>
