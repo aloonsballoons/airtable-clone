@@ -24,6 +24,7 @@ function useDebounced<T>(value: T, delay: number): T {
 
 export type UseTableSearchParams = {
   tableId: string | null;
+  viewId?: string | null;
   initialSearchQuery?: string;
 };
 
@@ -53,6 +54,7 @@ export type UseTableSearchReturn = {
 
 export function useTableSearch({
   tableId,
+  viewId,
   initialSearchQuery = "",
 }: UseTableSearchParams): UseTableSearchReturn {
   // Refs
@@ -81,11 +83,11 @@ export function useTableSearch({
     setSearchValue(initialSearchQuery);
   }, [initialSearchQuery]);
 
-  // Effect: Reset search when table changes
+  // Effect: Reset search when table or view changes
   useEffect(() => {
     setSearchValue("");
     setIsSearchMenuOpen(false);
-  }, [tableId]);
+  }, [tableId, viewId]);
 
   // Effect: Close search menu on outside click
   useEffect(() => {

@@ -32,6 +32,7 @@ type TableMetadata = {
 
 export type UseTableSortParams = {
   tableId: string | null;
+  viewId?: string | null;
   columns: Column[];
   visibleColumnIdSet: Set<string>;
   tableMetaQuery: {
@@ -311,6 +312,7 @@ export const computeSortLayout = (
 
 export function useTableSort({
   tableId,
+  viewId,
   columns,
   visibleColumnIdSet,
   tableMetaQuery,
@@ -323,6 +325,7 @@ export function useTableSort({
   const sortFieldMenuRef = useRef<HTMLDivElement>(null);
   const sortAddMenuListRef = useRef<HTMLDivElement>(null);
   const sortRowsRef = useRef<SortConfig[]>([]);
+  const prevSortConfigListRef = useRef<SortConfig[]>([]);
 
   // UI State
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
@@ -614,12 +617,26 @@ export function useTableSort({
     sortRowsRef.current = sortRows;
   }, [sortRows]);
 
-  // Effect: Clear sortOverride when it matches sortConfigList
+  // Effect: Clear sort overrides when table or view changes
   useEffect(() => {
-    if (!sortOverride) return;
-    if (setTableSort.isPending) return;
-    if (areSortsEqual(sortOverride, sortConfigList)) {
-      setSortOverride(null);
+    setSortOverride(null);
+    setSortOrderOverride(null);
+  }, [tableId, viewId]);
+
+  // Effect: Clear override when sortConfigList changes to a different value
+  // This handles view switches and when user changes are persisted
+  useEffect(() => {
+    const prevConfig = prevSortConfigListRef.current;
+    const configChanged = !areSortsEqual(prevConfig, sortConfigList);
+
+    if (configChanged) {
+      prevSortConfigListRef.current = sortConfigList;
+
+      // Clear override if it exists and we're not in the middle of a mutation
+      if (sortOverride && !setTableSort.isPending) {
+        setSortOverride(null);
+        setSortOrderOverride(null);
+      }
     }
   }, [sortConfigList, sortOverride, setTableSort.isPending]);
 

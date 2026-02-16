@@ -224,7 +224,7 @@ export function useTableFilter({
     effectiveFilterConfig?.connector ?? "and"
   );
 
-  // Effect: Initialize filter state from effective config when it changes (e.g., view switch)
+  // Effect: Initialize filter state from effective config when it changes (e.g., view/table switch)
   useEffect(() => {
     if (effectiveFilterConfig) {
       setFilterItems(effectiveFilterConfig.items);
@@ -233,7 +233,7 @@ export function useTableFilter({
       setFilterItems([]);
       setFilterConnector("and");
     }
-  }, [viewId, effectiveFilterConfig]);
+  }, [tableId, viewId, effectiveFilterConfig]);
 
   // Debounce filter items and connector for server queries (150ms delay for snappy feel)
   const debouncedFilterItems = useDebounced(filterItems, 150);

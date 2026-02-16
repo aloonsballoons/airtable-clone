@@ -1315,6 +1315,15 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   }
 }
 
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Hide scrollbar for header scroll container */
 .airtable-header-scroll::-webkit-scrollbar {
   display: none;

@@ -166,6 +166,8 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const isValidTableId = (id: string | null): id is string =>
   typeof id === "string" && UUID_REGEX.test(id);
+const isValidUUID = (id: string | null): id is string =>
+  typeof id === "string" && UUID_REGEX.test(id);
 
 const getLastViewedTableKey = (baseId: string) =>
   `airtable:last-viewed-table:${baseId}`;
@@ -249,6 +251,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const hydratedFilterTableIdRef = useRef<string | null>(null);
   const functionContainerRef = useRef<HTMLDivElement>(null);
   const [activeViewId, setActiveViewId] = useState<string | null>("default");
+  const [isViewSwitching, setIsViewSwitching] = useState(false);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
 
@@ -373,6 +376,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Initialize search hook
   const searchHook = useTableSearch({
     tableId: activeTableId,
+    viewId: activeViewId,
     initialSearchQuery: effectiveSearchQuery,
   });
   const { searchValue, searchQuery, hasSearchQuery } = searchHook;
@@ -406,6 +410,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Initialize table sort hook
   const tableSortHook = useTableSort({
     tableId: activeTableId,
+    viewId: activeViewId,
     columns: orderedColumns,
     visibleColumnIdSet,
     tableMetaQuery: {
@@ -448,7 +453,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const getRowsQueryKeyForSort = (
     tableId: string,
-    sort: SortConfig[]
+    sort: SortConfig[],
+    includeSearch: boolean = true
   ) => {
     const key: {
       tableId: string;
@@ -463,17 +469,30 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (filterInput) {
       key.filter = filterInput;
     }
-    if (hasSearchQuery) {
+    if (includeSearch && hasSearchQuery) {
       key.search = searchQuery;
     }
     return key;
   };
   const getRowsQueryKey = (tableId: string) =>
     getRowsQueryKeyForSort(tableId, sortParam);
+  const getRowsQueryKeyWithoutSearch = (tableId: string) =>
+    getRowsQueryKeyForSort(tableId, sortParam, false);
+
   const rowsQuery = api.base.getRows.useInfiniteQuery(
     getRowsQueryKey(activeTableId!),
     {
       enabled: isValidTableId(activeTableId),
+      getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+      placeholderData: (previousData) => previousData,
+    }
+  );
+
+  // Fallback query without search - used when search returns no results
+  const rowsQueryWithoutSearch = api.base.getRows.useInfiniteQuery(
+    getRowsQueryKeyWithoutSearch(activeTableId!),
+    {
+      enabled: isValidTableId(activeTableId) && !hasSearchQuery,
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
       placeholderData: (previousData) => previousData,
     }
@@ -501,9 +520,48 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [activeTableId, createViewMutation]);
 
   const handleSelectView = useCallback((viewId: string) => {
+    setIsViewSwitching(true);
     setActiveViewId(viewId);
     // When switching views, the queries will automatically refetch with the new viewId
   }, []);
+
+  // Clear view switching state once data is loaded
+  useEffect(() => {
+    if (!isViewSwitching) return;
+
+    // Check if view data is ready (for custom views, wait for query to finish)
+    const viewDataReady = !isCustomView ||
+      (activeViewQuery.data !== undefined && !activeViewQuery.isFetching) ||
+      activeViewQuery.isError;
+
+    // Check if rows data is ready - just need the first page to be available
+    const rowsDataReady =
+      (rowsQuery.data?.pages?.[0] !== undefined) ||
+      rowsQuery.isError;
+
+    if (viewDataReady && rowsDataReady) {
+      setIsViewSwitching(false);
+    }
+  }, [
+    isViewSwitching,
+    isCustomView,
+    activeViewQuery.data,
+    activeViewQuery.isFetching,
+    activeViewQuery.isError,
+    rowsQuery.data?.pages,
+    rowsQuery.isError,
+  ]);
+
+  // Fallback timeout to clear loading state after 500ms max
+  useEffect(() => {
+    if (!isViewSwitching) return;
+
+    const timeout = setTimeout(() => {
+      setIsViewSwitching(false);
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [isViewSwitching]);
 
   // Reset to default view when switching tables
   useEffect(() => {
@@ -1019,7 +1077,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       } else if (event.key === "Enter" && addTableDropdownStage === "name-input") {
         event.preventDefault();
         setTableName((currentName) => {
-          if (currentName.trim() && newTableId) {
+          if (currentName.trim() && newTableId && isValidUUID(newTableId)) {
             renameTable.mutate({ tableId: newTableId, name: currentName.trim() });
             setAddTableDropdownStage(null);
             setDropdownPosition(null);
@@ -1038,9 +1096,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     };
   }, [addTableDropdownStage, addTable, baseId, newTableId, renameTable]);
 
-  // Show naming dropdown when new table is created
+  // Show naming dropdown when new table is created (only after real UUID is available)
   useEffect(() => {
-    if (!newTableId || addTableDropdownStage === "name-input") return;
+    if (!newTableId || !isValidUUID(newTableId) || addTableDropdownStage === "name-input") return;
     // Wait for the table tab to render
     const timer = setTimeout(() => {
       const tabElement = newTableTabRefs.current.get(newTableId);
@@ -2077,7 +2135,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [resizing]);
 
   const rows = useMemo(() => {
-    const pages = rowsQuery.data?.pages ?? [];
+    // If search is active but returned no results, use the non-search query data
+    const searchPages = rowsQuery.data?.pages ?? [];
+    const hasSearchResults = searchPages.some(page => page.rows.length > 0);
+    const useWithoutSearchQuery = hasSearchQuery && !hasSearchResults && !rowsQuery.isFetching;
+
+    const pages = useWithoutSearchQuery
+      ? (rowsQueryWithoutSearch.data?.pages ?? [])
+      : searchPages;
+
     const seen = new Map<string, (typeof pages)[number]["rows"][number]>();
     const ordered: (typeof pages)[number]["rows"][number][] = [];
     pages.forEach((page) => {
@@ -2089,7 +2155,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       });
     });
     return ordered;
-  }, [rowsQuery.data?.pages]);
+  }, [rowsQuery.data?.pages, rowsQueryWithoutSearch.data?.pages, hasSearchQuery, rowsQuery.isFetching]);
 
   const tableData = useMemo<TableRow[]>(() => {
     if (!activeTable) return [];
@@ -2126,10 +2192,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     return matches;
   }, [cellEdits, normalizedSearch, orderedColumns, tableData]);
 
+  // Compute which columns have rows that match the search
+  const columnsWithSearchMatches = useMemo(() => {
+    if (!hasSearchQuery) return new Set<string>();
+    const columnSet = new Set<string>();
+    searchMatchesByRow.forEach((columnIds) => {
+      columnIds.forEach((columnId) => columnSet.add(columnId));
+    });
+    return columnSet;
+  }, [hasSearchQuery, searchMatchesByRow]);
+
   const sortedTableData = useMemo(() => {
-    if (!normalizedSearch) return tableData;
-    return tableData.filter((row) => searchMatchesByRow.has(row.id));
-  }, [normalizedSearch, searchMatchesByRow, tableData]);
+    // Search is handled at the database level
+    // When search returns no results, we fallback to showing all data (handled in rows query)
+    return tableData;
+  }, [tableData]);
   const showSearchSpinner = isSearchLoading;
   const showNoSearchResults =
     hasSearchQuery &&
@@ -2194,7 +2271,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   };
 
   const handleConfirmTableName = () => {
-    if (!tableName.trim() || !newTableId) return;
+    if (!tableName.trim() || !newTableId || !isValidUUID(newTableId)) return;
     // Rename the newly created table
     renameTable.mutate({ tableId: newTableId, name: tableName.trim() });
     setAddTableDropdownStage(null);
@@ -2495,14 +2572,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             }}
                             type="button"
                             onClick={() => handleSelectTable(tableItem.id)}
-                            onMouseEnter={() => {
-                              setHoveredTableTabId(tableItem.id);
-                            }}
-                            onMouseLeave={() => {
-                              setHoveredTableTabId((current) =>
-                                current === tableItem.id ? null : current
-                              );
-                            }}
+                            onMouseEnter={() => setHoveredTableTabId(tableItem.id)}
+                            onMouseLeave={() => setHoveredTableTabId(null)}
                             onContextMenu={(event) =>
                               handleOpenContextMenu(
                                 event,
@@ -2699,7 +2770,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                 viewName={activeViewName}
                 bulkRowsDisabled={bulkRowsDisabled}
                 handleAddBulkRows={handleAddBulkRows}
-              hideFieldsButtonRef={hideFieldsHook.hideFieldsButtonRef}
+                hideFieldsButtonRef={hideFieldsHook.hideFieldsButtonRef}
               hideFieldsMenuRef={hideFieldsHook.hideFieldsMenuRef}
               isHideFieldsMenuOpen={hideFieldsHook.isHideFieldsMenuOpen}
               setIsHideFieldsMenuOpen={hideFieldsHook.setIsHideFieldsMenuOpen}
@@ -2864,10 +2935,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               />
             </section>
 
-            <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
+            <section className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
               {baseDetailsQuery.isError && (
                 <div className="rounded-[6px] border border-[#FECACA] bg-[#FEF2F2] px-4 py-6 text-[12px] text-[#991b1b]">
-                  We couldn’t load this base. It may have been deleted or you may not have access.
+                  We couldn't load this base. It may have been deleted or you may not have access.
                 </div>
               )}
 
@@ -2877,50 +2948,167 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                 tableMetaQuery.isError &&
                 !activeTable && (
                   <div className="rounded-[6px] border border-[#FECACA] bg-[#FEF2F2] px-4 py-6 text-[12px] text-[#991b1b]">
-                    We couldn’t load this table. Try refreshing again.
+                    We couldn't load this table. Try refreshing again.
                   </div>
                 )}
 
-              {activeTable && !showRowsInitialLoading && (
-                <TableView
-                  activeTableId={activeTableId!}
-                  activeTable={activeTable}
-                  activeColumns={activeColumns}
-                  orderedColumns={orderedColumns}
-                  columnById={columnById}
-                  sortedTableData={sortedTableData}
-                  searchMatchesByRow={searchMatchesByRow}
-                  columnWidths={columnWidths}
-                  setColumnWidths={setColumnWidths}
-                  selectedCell={selectedCell}
-                  setSelectedCell={setSelectedCell}
-                  editingCell={editingCell}
-                  setEditingCell={setEditingCell}
-                  cellEdits={cellEdits}
-                  setCellEdits={setCellEdits}
-                  resizing={resizing}
-                  setResizing={setResizing}
-                  sortedColumnIds={sortedColumnIds}
-                  filteredColumnIds={filteredColumnIds}
-                  hiddenColumnIdSet={hiddenColumnIdSet}
-                  searchQuery={searchQuery}
-                  hasSearchQuery={hasSearchQuery}
-                  rowsHasNextPage={rowsQuery.hasNextPage ?? false}
-                  rowsIsFetchingNextPage={rowsQuery.isFetchingNextPage}
-                  rowsFetchNextPage={rowsQuery.fetchNextPage}
-                  showRowsError={showRowsError}
-                  showRowsEmpty={showRowsEmpty}
-                  showRowsInitialLoading={showRowsInitialLoading}
-                  rowsErrorMessage={rowsErrorMessage}
-                  updateCellMutate={updateCell.mutate}
-                  addRowsMutate={addRowsMutate}
-                  addColumnMutate={addColumn.mutate}
-                  addColumnIsPending={addColumn.isPending}
-                  setContextMenu={setContextMenu}
-                  activeRowCount={activeRowCount}
-                  totalRowCount={totalRowCount}
-                  onClearSearch={searchHook.clearSearch}
-                />
+              {(activeTableId && tableMetaQuery.isLoading && !activeTable) && (
+                <div
+                  className="pointer-events-none absolute inset-0 z-50"
+                  style={{
+                    animation: "fadeIn 0.2s ease-in-out",
+                  }}
+                >
+                  <span
+                    className="header-saving-spinner"
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute",
+                      left: 551,
+                      top: 343,
+                      width: 28,
+                      height: 28,
+                    }}
+                  >
+                    <svg
+                      width="28"
+                      height="28"
+                      viewBox="0 0 10 10"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        cx="5"
+                        cy="5"
+                        r="4"
+                        fill="none"
+                        stroke="#989AA1"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeDasharray="0.6 0.4"
+                        pathLength="3"
+                      />
+                    </svg>
+                  </span>
+                  <span
+                    className={inter.className}
+                    style={{
+                      position: "absolute",
+                      left: 496,
+                      top: 403,
+                      fontSize: 16,
+                      fontWeight: 400,
+                      color: "#989AA1",
+                      lineHeight: "16px",
+                    }}
+                  >
+                    Loading table...
+                  </span>
+                </div>
+              )}
+
+              {isViewSwitching && !activeTable && (
+                <div
+                  className="pointer-events-none absolute inset-0 z-50"
+                  style={{
+                    animation: "fadeIn 0.2s ease-in-out",
+                  }}
+                >
+                  <span
+                    className="header-saving-spinner"
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute",
+                      left: 551,
+                      top: 343,
+                      width: 28,
+                      height: 28,
+                    }}
+                  >
+                    <svg
+                      width="28"
+                      height="28"
+                      viewBox="0 0 10 10"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        cx="5"
+                        cy="5"
+                        r="4"
+                        fill="none"
+                        stroke="#989AA1"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeDasharray="0.6 0.4"
+                        pathLength="3"
+                      />
+                    </svg>
+                  </span>
+                  <span
+                    className={inter.className}
+                    style={{
+                      position: "absolute",
+                      left: 496,
+                      top: 403,
+                      fontSize: 16,
+                      fontWeight: 400,
+                      color: "#989AA1",
+                      lineHeight: "16px",
+                    }}
+                  >
+                    Loading this view...
+                  </span>
+                </div>
+              )}
+
+              {activeTable && (
+                <div
+                  className="h-full"
+                  style={{
+                    opacity: 1,
+                    transition: "opacity 0.2s ease-in-out",
+                  }}
+                >
+                  <TableView
+                    activeTableId={activeTableId!}
+                    activeTable={activeTable}
+                    activeColumns={activeColumns}
+                    orderedColumns={orderedColumns}
+                    columnById={columnById}
+                    sortedTableData={sortedTableData}
+                    searchMatchesByRow={searchMatchesByRow}
+                    columnsWithSearchMatches={columnsWithSearchMatches}
+                    columnWidths={columnWidths}
+                    setColumnWidths={setColumnWidths}
+                    selectedCell={selectedCell}
+                    setSelectedCell={setSelectedCell}
+                    editingCell={editingCell}
+                    setEditingCell={setEditingCell}
+                    cellEdits={cellEdits}
+                    setCellEdits={setCellEdits}
+                    resizing={resizing}
+                    setResizing={setResizing}
+                    sortedColumnIds={sortedColumnIds}
+                    filteredColumnIds={filteredColumnIds}
+                    hiddenColumnIdSet={hiddenColumnIdSet}
+                    searchQuery={searchQuery}
+                    hasSearchQuery={hasSearchQuery}
+                    rowsHasNextPage={rowsQuery.hasNextPage ?? false}
+                    rowsIsFetchingNextPage={rowsQuery.isFetchingNextPage}
+                    rowsFetchNextPage={rowsQuery.fetchNextPage}
+                    showRowsError={showRowsError}
+                    showRowsEmpty={showRowsEmpty}
+                    showRowsInitialLoading={showRowsInitialLoading}
+                    rowsErrorMessage={rowsErrorMessage}
+                    updateCellMutate={updateCell.mutate}
+                    addRowsMutate={addRowsMutate}
+                    addColumnMutate={addColumn.mutate}
+                    addColumnIsPending={addColumn.isPending}
+                    setContextMenu={setContextMenu}
+                    activeRowCount={activeRowCount}
+                    totalRowCount={totalRowCount}
+                    onClearSearch={searchHook.clearSearch}
+                  />
+                </div>
               )}
             </section>
           </div>

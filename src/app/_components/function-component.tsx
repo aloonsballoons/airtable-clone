@@ -542,8 +542,9 @@ export function FunctionBar({
         <div className="absolute right-[8.5px] top-0 flex h-full items-center">
           <div className="relative h-full w-[643px]">
             {/* ---- Hide fields ---- */}
-            <div className="absolute top-0" style={{ left: 68 - hideFieldsExpansion - filterExpansion - sortExpansion }}>
-              <button
+            {(
+              <div className="absolute top-0" style={{ left: 68 - hideFieldsExpansion - filterExpansion - sortExpansion }}>
+                <button
                 ref={hideFieldsButtonRef}
                 type="button"
                 className={clsx(
@@ -751,11 +752,13 @@ export function FunctionBar({
                   </div>
                 </div>
               )}
-            </div>
+              </div>
+            )}
 
             {/* ---- Filter ---- */}
-            <div className="absolute top-0" style={{ left: filterButtonLeft }}>
-              <button
+            {(
+              <div className="absolute top-0" style={{ left: filterButtonLeft }}>
+                <button
                 ref={filterButtonRef}
                 type="button"
                 className={clsx(
@@ -939,23 +942,27 @@ export function FunctionBar({
                   filterFieldVirtualizerSize={filterFieldVirtualizerSize}
                 />
               )}
-            </div>
+              </div>
+            )}
 
             {/* ---- Group ---- */}
-            <button
-              type="button"
-              className="absolute top-[10px] h-[26px] w-[60px] text-left"
-              style={{ left: 261 - sortExpansion }}
-            >
-              <img alt="" className="absolute left-0 top-[6px] h-[14px] w-[16px]" src={groupIcon.src} />
-              <span className="absolute left-[20px] top-[5px] block h-[16px] w-[40px] text-[13px] leading-[16px]">
-                Group
-              </span>
-            </button>
+            {(
+              <button
+                type="button"
+                className="absolute top-[10px] h-[26px] w-[60px] text-left"
+                style={{ left: 261 - sortExpansion }}
+              >
+                <img alt="" className="absolute left-0 top-[6px] h-[14px] w-[16px]" src={groupIcon.src} />
+                <span className="absolute left-[20px] top-[5px] block h-[16px] w-[40px] text-[13px] leading-[16px]">
+                  Group
+                </span>
+              </button>
+            )}
 
             {/* ---- Sort ---- */}
-            <div className="absolute top-0" style={{ left: 338 - sortExpansion }}>
-              <button
+            {(
+              <div className="absolute top-0" style={{ left: 338 - sortExpansion }}>
+                <button
                 ref={sortButtonRef}
                 type="button"
                 className={clsx(
@@ -1459,59 +1466,67 @@ export function FunctionBar({
                   </div>
                 </div>
               )}
-            </div>
+              </div>
+            )}
 
             {/* ---- Color ---- */}
-            <button
-              type="button"
-              className="absolute top-[10px] h-[26px] w-[68px] text-left"
-              style={{ left: 410 }}
-            >
-              <img
-                alt=""
-                className="absolute left-0 top-[3px] h-[19px] w-[20px]"
-                src={colourIcon.src}
-              />
-              <span className="absolute left-[20px] top-[5px] block h-[16px] w-[48px] text-[13px] leading-[16px]">
-                Color
-              </span>
-            </button>
+            {(
+              <button
+                type="button"
+                className="absolute top-[10px] h-[26px] w-[68px] text-left"
+                style={{ left: 410 }}
+              >
+                <img
+                  alt=""
+                  className="absolute left-0 top-[3px] h-[19px] w-[20px]"
+                  src={colourIcon.src}
+                />
+                <span className="absolute left-[20px] top-[5px] block h-[16px] w-[48px] text-[13px] leading-[16px]">
+                  Color
+                </span>
+              </button>
+            )}
 
             {/* ---- Row height ---- */}
-            <button
-              type="button"
-              className="absolute top-0 h-full w-[19px]"
-              style={{ left: 485 }}
-              aria-label="Row height"
-            >
-              <img
-                alt=""
-                className="absolute left-0 top-[16px] h-[15px] w-[19px]"
-                src={rowHeightIcon.src}
-              />
-            </button>
+            {(
+              <button
+                type="button"
+                className="absolute top-0 h-full w-[19px]"
+                style={{ left: 485 }}
+                aria-label="Row height"
+              >
+                <img
+                  alt=""
+                  className="absolute left-0 top-[16px] h-[15px] w-[19px]"
+                  src={rowHeightIcon.src}
+                />
+              </button>
+            )}
 
             {/* ---- Share and sync ---- */}
-            <button
-              type="button"
-              className="absolute top-[10px] h-[26px] w-[114px] text-left"
-              style={{ left: 528 }}
-            >
-              <img
-                alt=""
-                className="absolute left-0 top-[6px] h-[15px] w-[15px]"
-                src={shareSyncIcon.src}
-              />
-              <span className="absolute left-[19px] top-[5px] block h-[16px] w-[95px] whitespace-nowrap text-[13px] leading-[16px]">
-                Share and sync
-              </span>
-            </button>
+            {(
+              <button
+                type="button"
+                className="absolute top-[10px] h-[26px] w-[114px] text-left"
+                style={{ left: 528 }}
+              >
+                <img
+                  alt=""
+                  className="absolute left-0 top-[6px] h-[15px] w-[15px]"
+                  src={shareSyncIcon.src}
+                />
+                <span className="absolute left-[19px] top-[5px] block h-[16px] w-[95px] whitespace-nowrap text-[13px] leading-[16px]">
+                  Share and sync
+                </span>
+              </button>
+            )}
           </div>
 
           {/* ---- Search button ---- */}
-          <button
-            ref={searchButtonRef}
-            type="button"
+          {(
+            <button
+              ref={searchButtonRef}
+              type="button"
             className="airtable-table-feature-selection airtable-search-trigger ml-[21px]"
             onClick={() => setIsSearchMenuOpen((prev) => !prev)}
             aria-haspopup="dialog"
@@ -1554,6 +1569,7 @@ export function FunctionBar({
               </g>
             </svg>
           </button>
+          )}
         </div>
       </div>
       <div className="absolute bottom-0 left-0 right-0 h-px bg-[#DEDEDE]" aria-hidden="true" />

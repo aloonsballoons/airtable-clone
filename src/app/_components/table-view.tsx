@@ -163,6 +163,7 @@ export type TableViewProps = {
   columnById: Map<string, { id: string; name: string; type: string | null }>;
   sortedTableData: TableRow[];
   searchMatchesByRow: Map<string, Set<string>>;
+  columnsWithSearchMatches: Set<string>;
   columnWidths: Record<string, number>;
   setColumnWidths: Dispatch<SetStateAction<Record<string, number>>>;
   selectedCell: { rowId: string; columnId: string } | null;
@@ -227,6 +228,7 @@ export function TableView({
   columnById,
   sortedTableData,
   searchMatchesByRow,
+  columnsWithSearchMatches,
   columnWidths,
   setColumnWidths,
   selectedCell,
@@ -385,17 +387,52 @@ export function TableView({
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
-  const lastNonEmptyVirtualItemsRef = useRef(virtualItems);
-  useEffect(() => {
-    if (virtualItems.length > 0) {
-      lastNonEmptyVirtualItemsRef.current = virtualItems;
-    }
-  }, [virtualItems]);
-  const rowVirtualItems =
-    virtualItems.length > 0
-      ? virtualItems
-      : lastNonEmptyVirtualItemsRef.current;
+
+  // Use virtual items directly - no caching to avoid stale data during sorts/filters
+  const rowVirtualItems = virtualItems;
   const isScrolling = rowVirtualizer.isScrolling;
+
+  // Track when sortedTableData changes significantly and reset scroll if needed
+  const lastDataSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sortedTableData?.length) {
+      lastDataSignatureRef.current = null;
+      return;
+    }
+
+    try {
+      // Create a signature from first few row IDs only to detect data changes
+      // Don't include last row IDs to avoid triggering on pagination appends
+      const firstIds = sortedTableData.slice(0, 10).map(r => r?.id ?? '').filter(Boolean).join(',');
+      const currentSignature = `${firstIds}`;
+
+      if (lastDataSignatureRef.current !== null &&
+          lastDataSignatureRef.current !== currentSignature) {
+        // Data changed significantly (sort/filter applied)
+        // Force virtualizer to remeasure immediately
+        if (rowVirtualizer?.measure) {
+          rowVirtualizer.measure();
+        }
+
+        // Check if current scroll position is beyond new data bounds
+        // Use virtualizer's total size for accurate scroll calculations
+        const scrollElement = parentRef.current;
+        if (scrollElement) {
+          const virtualizerTotalSize = rowVirtualizer.getTotalSize();
+          const maxScroll = Math.max(0, virtualizerTotalSize - scrollElement.clientHeight);
+          if (scrollElement.scrollTop > maxScroll) {
+            // Scrolled beyond new data, reset to top
+            scrollElement.scrollTop = 0;
+          }
+        }
+      }
+
+      lastDataSignatureRef.current = currentSignature;
+    } catch (error) {
+      // Silently handle any errors in data signature calculation
+      console.warn('Error in scroll reset logic:', error);
+    }
+  }, [sortedTableData]);
   const rowCanvasHeight = Math.max(
     rowVirtualizer.getTotalSize(),
     showRowsInitialLoading || showRowsError || showRowsEmpty
@@ -945,7 +982,9 @@ export function TableView({
                   minWidth: nameColumnWidth,
                   maxWidth: nameColumnWidth,
                   flex: "0 0 auto",
-                  ["--header-base-bg" as string]: filteredColumnIds.has(nameColumn.id)
+                  ["--header-base-bg" as string]: columnsWithSearchMatches.has(nameColumn.id)
+                    ? "#F1EBD3"
+                    : filteredColumnIds.has(nameColumn.id)
                     ? "#F6FBF9"
                     : sortedColumnIds.has(nameColumn.id)
                     ? "var(--airtable-sort-header-bg)"
@@ -971,7 +1010,9 @@ export function TableView({
                       "airtable-header-icon h-[13px] w-[13px]",
                       (sortedColumnIds.has(nameColumn.id) ||
                         filteredColumnIds.has(nameColumn.id)) &&
-                        "airtable-column-icon--sorted"
+                        "airtable-column-icon--sorted",
+                      columnsWithSearchMatches.has(nameColumn.id) &&
+                        "airtable-column-icon--search-match"
                     )}
                     style={
                       nameColumn.name === "Status"
@@ -1009,8 +1050,12 @@ export function TableView({
                 column.type === "data" && sortedColumnIds.has(column.id);
               const isFilteredColumn =
                 column.type === "data" && filteredColumnIds.has(column.id);
+              const hasSearchMatch =
+                column.type === "data" && columnsWithSearchMatches.has(column.id);
               const baseBackgroundColor =
-                isFilteredColumn
+                hasSearchMatch
+                  ? "#F1EBD3"
+                  : isFilteredColumn
                   ? "#F6FBF9"
                   : isSortedColumn
                   ? "var(--airtable-sort-header-bg)"
@@ -1097,7 +1142,9 @@ export function TableView({
                       className={clsx(
                         "airtable-header-icon h-[13px] w-[13px]",
                         (isSortedColumn || isFilteredColumn) &&
-                          "airtable-column-icon--sorted"
+                          "airtable-column-icon--sorted",
+                        hasSearchMatch &&
+                          "airtable-column-icon--search-match"
                       )}
                       style={
                         column.name === "Status"
@@ -1158,6 +1205,11 @@ export function TableView({
             }}
           >
             {rowVirtualItems.map((virtualRow) => {
+              // Skip rendering if index is out of bounds (can happen during data transitions)
+              if (virtualRow.index >= rowCount) {
+                return null;
+              }
+
             const row = sortedTableData[virtualRow.index];
               if (!row) {
                 return (
@@ -1172,7 +1224,7 @@ export function TableView({
                   >
                     {rowsHasNextPage
                       ? "Loading more rows..."
-                      : "No more rows"}
+                      : ""}
                   </div>
                 );
               }
@@ -2032,27 +2084,13 @@ export function TableView({
               </div>
             );
           })}
-            {(showRowsError || showRowsEmpty) && (
+            {(showRowsError || (showRowsEmpty && !hasSearchQuery)) && (
               <div className="absolute inset-0 z-40 flex items-center justify-center px-4">
                 <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-3 text-[12px] text-[#616670] shadow-sm">
                   {showRowsError && (
                     <span>
                       We couldn&apos;t load table rows. {rowsErrorMessage}
                     </span>
-                  )}
-                  {showRowsEmpty && hasSearchQuery && (
-                    <div className="flex items-center gap-3">
-                      <span>No rows match &quot;{searchQuery}&quot;.</span>
-                      <button
-                        type="button"
-                        className="rounded-[4px] border border-[#DDE1E3] px-2 py-1 text-[11px] font-medium text-[#1D1F24] hover:bg-[#F7F8FC]"
-                        onClick={() => {
-                          onClearSearch?.();
-                        }}
-                      >
-                        Clear search
-                      </button>
-                    </div>
                   )}
                   {showRowsEmpty && !hasSearchQuery && <span>No rows yet.</span>}
                 </div>
