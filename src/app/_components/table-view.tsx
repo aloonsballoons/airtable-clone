@@ -210,7 +210,8 @@ export type TableViewProps = {
   }) => void;
   addColumnIsPending: boolean;
   setContextMenu: Dispatch<SetStateAction<ContextMenuState>>;
-  activeRowCount: number;
+  activeRowCount: number; // Filtered row count for display
+  totalRowCount: number; // Total unfiltered row count for max row validation
   onClearSearch?: () => void;
 };
 
@@ -254,6 +255,7 @@ export function TableView({
   addColumnIsPending,
   setContextMenu,
   activeRowCount,
+  totalRowCount,
   onClearSearch,
 }: TableViewProps) {
   // -------------------------------------------------------------------------
@@ -346,7 +348,7 @@ export function TableView({
 
   const rowCount = sortedTableData.length;
   const showRowLoader = rowsHasNextPage && !hasSearchQuery;
-  const addRowDisabled = !activeTableId || activeRowCount >= MAX_ROWS;
+  const addRowDisabled = !activeTableId || totalRowCount >= MAX_ROWS;
   const canDeleteColumn = activeColumns.length > 1;
   const canDeleteRow = activeRowCount > 1;
 

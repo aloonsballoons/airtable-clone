@@ -209,6 +209,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [draggingFilterTop, setDraggingFilterTop] = useState<number | null>(null);
   const [highlightedFilterFieldId, setHighlightedFilterFieldId] = useState<string | null>(null);
   const [highlightedFilterOperatorId, setHighlightedFilterOperatorId] = useState<string | null>(null);
+  const [highlightedFilterConnectorKey, setHighlightedFilterConnectorKey] = useState<string | null>(null);
   const [phantomFilterX, setPhantomFilterX] = useState<number | null>(null);
   const [phantomFilterY, setPhantomFilterY] = useState<number | null>(null);
   const [openGroupPlusId, setOpenGroupPlusId] = useState<string | null>(null);
@@ -241,8 +242,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const dragIndexRef = useRef(0);
   const hasLoadedTableMetaRef = useRef(false);
   const hydratedFilterTableIdRef = useRef<string | null>(null);
+  const functionContainerRef = useRef<HTMLDivElement>(null);
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
+
+  const viewsQuery = api.base.listViews.useQuery(
+    { tableId: activeTableId ?? "" },
+    { enabled: Boolean(activeTableId) }
+  );
+  const createViewMutation = api.base.createView.useMutation({
+    onSuccess: (newView) => {
+      void viewsQuery.refetch();
+      setActiveViewId(newView.id);
+    },
+  });
   useEffect(() => {
     setPreferredTableId(null);
     setPreferredTableBaseId(null);
@@ -277,7 +291,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const activeTables = baseDetailsQuery.data?.tables ?? [];
   const activeTable = tableMetaQuery.data?.table ?? null;
   const activeColumns = tableMetaQuery.data?.columns ?? [];
-  const activeRowCount = tableMetaQuery.data?.rowCount ?? 0;
+  const totalRowCount = tableMetaQuery.data?.rowCount ?? 0; // Total unfiltered count
   const columnById = useMemo(
     () => new Map(activeColumns.map((column) => [column.id, column])),
     [activeColumns]
@@ -380,15 +394,37 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     }
   );
 
+  // Get the filtered row count from the first page of the query
+  const activeRowCount = rowsQuery.data?.pages[0]?.totalCount ?? totalRowCount;
+
   // Initialize bulk rows hook
   const bulkRowsHook = useBulkRows({
     activeTableId,
-    activeRowCount,
+    activeRowCount: totalRowCount, // Use total count for max row validation
     hasActiveFilters,
     utils,
     getRowsQueryKey,
   });
   const { handleAddBulkRows, bulkRowsDisabled, addRowsMutate, addRowsIsPending } = bulkRowsHook;
+
+  const handleCreateView = useCallback((viewName: string) => {
+    if (!activeTableId) return;
+    createViewMutation.mutate({
+      tableId: activeTableId,
+      name: viewName,
+    });
+  }, [activeTableId, createViewMutation]);
+
+  const handleSelectView = useCallback((viewId: string) => {
+    setActiveViewId(viewId);
+  }, []);
+
+  // Always include the default "Grid view" as the first view, followed by any saved views
+  const savedViews = viewsQuery.data ?? [];
+  const views = [
+    { id: "default", name: "Grid view" },
+    ...savedViews,
+  ];
 
   const addTable = api.base.addTable.useMutation({
     onMutate: async ({ name }) => {
@@ -719,14 +755,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [contextMenu]);
 
   useEffect(() => {
-    if (!highlightedFilterFieldId && !highlightedFilterOperatorId) return;
+    if (!highlightedFilterFieldId && !highlightedFilterOperatorId && !highlightedFilterConnectorKey) return;
     const handleClick = () => {
       setHighlightedFilterFieldId(null);
       setHighlightedFilterOperatorId(null);
+      setHighlightedFilterConnectorKey(null);
     };
     document.addEventListener("click", handleClick);
     return () => document.removeEventListener("click", handleClick);
-  }, [highlightedFilterFieldId, highlightedFilterOperatorId]);
+  }, [highlightedFilterFieldId, highlightedFilterOperatorId, highlightedFilterConnectorKey]);
 
   useEffect(() => {
     if (!filterHook.isFilterMenuOpen) return;
@@ -1553,6 +1590,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
           });
         }
       });
+      setHighlightedFilterConnectorKey(`group:${groupId}`);
+      setHighlightedFilterFieldId(null);
+      setHighlightedFilterOperatorId(null);
     },
     []
   );
@@ -2544,9 +2584,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               </div>
             </div>
 
-            <FunctionBar
-              bulkRowsDisabled={bulkRowsDisabled}
-              handleAddBulkRows={handleAddBulkRows}
+            <div ref={functionContainerRef}>
+              <FunctionBar
+                bulkRowsDisabled={bulkRowsDisabled}
+                handleAddBulkRows={handleAddBulkRows}
               hideFieldsButtonRef={hideFieldsHook.hideFieldsButtonRef}
               hideFieldsMenuRef={hideFieldsHook.hideFieldsMenuRef}
               isHideFieldsMenuOpen={hideFieldsHook.isHideFieldsMenuOpen}
@@ -2585,6 +2626,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               phantomFilterY={phantomFilterY}
               highlightedFilterFieldId={highlightedFilterFieldId}
               highlightedFilterOperatorId={highlightedFilterOperatorId}
+              highlightedFilterConnectorKey={highlightedFilterConnectorKey}
+              setHighlightedFilterConnectorKey={setHighlightedFilterConnectorKey}
+              setHighlightedFilterFieldId={setHighlightedFilterFieldId}
+              setHighlightedFilterOperatorId={setHighlightedFilterOperatorId}
               activeFilterAdd={activeFilterAdd}
               handleFilterFieldSelect={handleFilterFieldSelect}
               handleFilterOperatorSelect={handleFilterOperatorSelect}
@@ -2694,11 +2739,18 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               showSearchSpinner={showSearchSpinner}
               showNoSearchResults={showNoSearchResults}
             />
+            </div>
           </section>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <section className="min-w-[280px] w-[280px] flex-shrink-0">
-              <GridViewContainer />
+              <GridViewContainer
+                views={views}
+                activeViewId={activeViewId}
+                onSelectView={handleSelectView}
+                onCreateView={handleCreateView}
+                functionContainerRef={functionContainerRef}
+              />
             </section>
 
             <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
@@ -2755,6 +2807,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   addColumnIsPending={addColumn.isPending}
                   setContextMenu={setContextMenu}
                   activeRowCount={activeRowCount}
+                  totalRowCount={totalRowCount}
                   onClearSearch={searchHook.clearSearch}
                 />
               )}

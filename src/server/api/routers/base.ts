@@ -4,7 +4,7 @@ import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
-import { base, baseTable, tableColumn, tableRow } from "~/server/db/schema";
+import { base, baseTable, tableColumn, tableRow, tableView } from "~/server/db/schema";
 
 const MAX_TABLES = 1000;
 const MAX_COLUMNS = 500;
@@ -1623,20 +1623,26 @@ export const baseRouter = createTRPCRouter({
 			}
 
 			const offset = input.cursor ?? 0;
-			const rows = await ctx.db.query.tableRow.findMany({
-				where: (() => {
-					const baseWhere = eq(tableRow.tableId, input.tableId);
-					if (filterExpression && searchExpression) {
-						return and(baseWhere, filterExpression, searchExpression);
-					}
-					if (filterExpression) {
-						return and(baseWhere, filterExpression);
-					}
-					if (searchExpression) {
-						return and(baseWhere, searchExpression);
-					}
-					return baseWhere;
-				})(),
+
+			// Extract where clause logic
+			const whereClause = (() => {
+				const baseWhere = eq(tableRow.tableId, input.tableId);
+				if (filterExpression && searchExpression) {
+					return and(baseWhere, filterExpression, searchExpression);
+				}
+				if (filterExpression) {
+					return and(baseWhere, filterExpression);
+				}
+				if (searchExpression) {
+					return and(baseWhere, searchExpression);
+				}
+				return baseWhere;
+			})();
+
+			// Run rows query and count query in parallel
+			const [rows, totalCountResult] = await Promise.all([
+				ctx.db.query.tableRow.findMany({
+					where: whereClause,
 				orderBy: (row, { asc, desc }) =>
 					effectiveSorts.length > 0
 						? [
@@ -1665,9 +1671,11 @@ export const baseRouter = createTRPCRouter({
 								asc(row.id),
 							]
 						: [asc(row.createdAt), asc(row.id)],
-				limit: input.limit,
-				offset,
-			});
+					limit: input.limit,
+					offset,
+				}),
+				ctx.db.select({ count: sql<number>`count(*)::int` }).from(tableRow).where(whereClause),
+			]);
 
 			const nextCursor =
 				rows.length === input.limit ? offset + rows.length : null;
@@ -1678,6 +1686,7 @@ export const baseRouter = createTRPCRouter({
 					data: row.data ?? {},
 				})),
 				nextCursor,
+				totalCount: Number(totalCountResult[0]?.count ?? 0),
 			};
 		}),
 
@@ -1743,6 +1752,100 @@ export const baseRouter = createTRPCRouter({
 				})),
 				rowCount: Number(rowCount[0]?.count ?? 0),
 				hiddenColumnIds,
+			};
+		}),
+
+	listViews: protectedProcedure
+		.input(z.object({ tableId: z.string().uuid() }))
+		.query(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const views = await ctx.db.query.tableView.findMany({
+				where: eq(tableView.tableId, input.tableId),
+				orderBy: (view, { asc }) => [asc(view.createdAt)],
+			});
+
+			return views.map((view) => ({
+				id: view.id,
+				name: view.name,
+			}));
+		}),
+
+	createView: protectedProcedure
+		.input(
+			z.object({
+				tableId: z.string().uuid(),
+				name: z.string().min(1).max(120),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const [newView] = await ctx.db
+				.insert(tableView)
+				.values({
+					id: createId(),
+					tableId: input.tableId,
+					name: input.name,
+					sortConfig: [],
+					hiddenColumnIds: [],
+					searchQuery: null,
+					filterConfig: null,
+				})
+				.returning({ id: tableView.id, name: tableView.name });
+
+			if (!newView) {
+				throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+			}
+
+			return newView;
+		}),
+
+	getView: protectedProcedure
+		.input(z.object({ viewId: z.string().uuid() }))
+		.query(async ({ ctx, input }) => {
+			const viewRecord = await ctx.db.query.tableView.findFirst({
+				where: eq(tableView.id, input.viewId),
+				with: {
+					table: {
+						with: {
+							base: true,
+						},
+					},
+				},
+			});
+
+			if (!viewRecord || viewRecord.table.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			return {
+				id: viewRecord.id,
+				name: viewRecord.name,
+				sortConfig: Array.isArray(viewRecord.sortConfig) ? viewRecord.sortConfig : [],
+				hiddenColumnIds: Array.isArray(viewRecord.hiddenColumnIds)
+					? viewRecord.hiddenColumnIds
+					: [],
+				searchQuery: viewRecord.searchQuery ?? "",
+				filterConfig: viewRecord.filterConfig ?? null,
 			};
 		}),
 });

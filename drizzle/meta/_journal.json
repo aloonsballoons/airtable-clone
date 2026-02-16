@@ -29,6 +29,13 @@
       "when": 1771155841580,
       "tag": "0003_charming_martin_li",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771210139098,
+      "tag": "0005_table_view",
+      "breakpoints": true
     }
   ]
 }

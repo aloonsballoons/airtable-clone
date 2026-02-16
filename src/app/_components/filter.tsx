@@ -270,6 +270,10 @@ export type FilterDropdownProps = {
   // Highlight state
   highlightedFilterFieldId: string | null;
   highlightedFilterOperatorId: string | null;
+  highlightedFilterConnectorKey: string | null;
+  setHighlightedFilterConnectorKey: Dispatch<SetStateAction<string | null>>;
+  setHighlightedFilterFieldId: Dispatch<SetStateAction<string | null>>;
+  setHighlightedFilterOperatorId: Dispatch<SetStateAction<string | null>>;
 
   // Active‑add highlight
   activeFilterAdd: "condition" | "group" | null;
@@ -440,6 +444,10 @@ export function FilterDropdown({
   phantomFilterY,
   highlightedFilterFieldId,
   highlightedFilterOperatorId,
+  highlightedFilterConnectorKey,
+  setHighlightedFilterConnectorKey,
+  setHighlightedFilterFieldId,
+  setHighlightedFilterOperatorId,
   activeFilterAdd,
   handleFilterFieldSelect,
   handleFilterOperatorSelect,
@@ -632,6 +640,7 @@ export function FilterDropdown({
                 const connectorLabel = group.connector;
                 const isConnectorOpen = openFilterConnectorId === group.connectorKey;
                 const isGroupPlusOpen = openGroupPlusId === group.group.id;
+                const isConnectorHighlighted = highlightedFilterConnectorKey === group.connectorKey;
                 // Boost z-index if this group is inside another group that has its plus dropdown open
                 const isInsideGroupWithOpenDropdown =
                   openGroupPlusId && group.parentGroupId === openGroupPlusId;
@@ -657,7 +666,7 @@ export function FilterDropdown({
                         {showConnectorControl ? (
                           <button
                             type="button"
-                            className="absolute flex items-center rounded-[2px] border border-[#E4E4E4] text-[13px] font-normal text-[#1D1F24] cursor-pointer"
+                            className="absolute flex items-center rounded-[2px] border border-[#E4E4E4] text-[13px] font-normal cursor-pointer"
                             style={{
                               width: filterConnectorWidth,
                               height: filterConnectorHeight,
@@ -666,6 +675,7 @@ export function FilterDropdown({
                               paddingLeft: 8,
                               background: "#ffffff",
                               transition: "background 0.15s ease",
+                              color: isConnectorHighlighted ? "#156FE2" : "#1D1F24",
                             }}
                             onMouseEnter={(e) => {
                               e.currentTarget.style.background = "#F2F2F2";
@@ -681,16 +691,54 @@ export function FilterDropdown({
                             data-filter-connector-trigger={group.connectorKey}
                           >
                             <span>{connectorLabel}</span>
-                            <img
-                              alt=""
-                              className="absolute"
-                              style={{
-                                width: 10,
-                                height: 6,
-                                right: 7,
-                              }}
-                              src={arrowIcon.src}
-                            />
+                            {isConnectorHighlighted ? (
+                              <svg
+                                width={10}
+                                height={6}
+                                viewBox="0 0 50.25 30.000001"
+                                className="absolute"
+                                style={{
+                                  right: 7,
+                                  top: "50%",
+                                  transform: "translateY(-50%)",
+                                }}
+                                aria-hidden="true"
+                              >
+                                <defs>
+                                  <filter id={`connector-arrow-${group.connectorKey}-invert`}>
+                                    <feColorMatrix
+                                      type="matrix"
+                                      values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
+                                    />
+                                  </filter>
+                                  <mask id={`connector-arrow-${group.connectorKey}-mask`}>
+                                    <image
+                                      href={arrowIcon.src}
+                                      width="50.25"
+                                      height="30.000001"
+                                      filter={`url(#connector-arrow-${group.connectorKey}-invert)`}
+                                    />
+                                  </mask>
+                                </defs>
+                                <rect
+                                  width="50.25"
+                                  height="30.000001"
+                                  fill="#156FE2"
+                                  mask={`url(#connector-arrow-${group.connectorKey}-mask)`}
+                                />
+                              </svg>
+                            ) : (
+                              <img
+                                alt=""
+                                className="absolute"
+                                style={{
+                                  width: 10,
+                                  height: 6,
+                                  right: 7,
+                                }}
+                                src={arrowIcon.src}
+                              />
+                            )}
                           </button>
                         ) : (
                           <span
@@ -711,7 +759,7 @@ export function FilterDropdown({
                               top: filterConnectorHeight,
                               borderRadius: 2,
                               background: "#ffffff",
-                              zIndex: 5000,
+                              zIndex: 30000,
                             }}
                           >
                             {FILTER_CONNECTORS.map((connector, index) => (
@@ -854,7 +902,7 @@ export function FilterDropdown({
                       <img
                         alt=""
                         className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-                        style={{ width: 8, height: 11 }}
+                        style={{ width: 10.23, height: 13.3 }}
                         src={reorderIcon.src}
                       />
                     </button>
@@ -981,6 +1029,7 @@ export function FilterDropdown({
               const showConnectorControl = row.showConnectorControl;
               const connectorKey = row.connectorKey;
               const isConnectorOpen = openFilterConnectorId === connectorKey;
+              const isConnectorHighlighted = highlightedFilterConnectorKey === connectorKey;
               const fieldValue = row.condition.value;
               const scopeGroupId = row.scope === "group" ? row.parentGroupId : undefined;
               const scopeParentGroupId = row.scope === "group" ? row.grandparentGroupId : undefined;
@@ -1033,7 +1082,7 @@ export function FilterDropdown({
                     {showConnectorControl ? (
                       <button
                         type="button"
-                        className="absolute flex items-center rounded-[2px] border border-[#E4E4E4] text-[13px] font-normal text-[#1D1F24] cursor-pointer"
+                        className="absolute flex items-center rounded-[2px] border border-[#E4E4E4] text-[13px] font-normal cursor-pointer"
                         style={{
                           width: filterConnectorWidth,
                           height: filterConnectorHeight,
@@ -1042,6 +1091,7 @@ export function FilterDropdown({
                           paddingLeft: 8,
                           background: row.scope === "group" ? "#ffffff" : undefined,
                           transition: "background 0.15s ease",
+                          color: isConnectorHighlighted ? "#156FE2" : "#1D1F24",
                         }}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.background = "#F2F2F2";
@@ -1057,16 +1107,54 @@ export function FilterDropdown({
                         data-filter-connector-trigger={connectorKey}
                       >
                         <span>{connectorLabel}</span>
-                        <img
-                          alt=""
-                          className="absolute"
-                          style={{
-                            width: 10,
-                            height: 6,
-                            right: 7,
-                          }}
-                          src={arrowIcon.src}
-                        />
+                        {isConnectorHighlighted ? (
+                          <svg
+                            width={10}
+                            height={6}
+                            viewBox="0 0 50.25 30.000001"
+                            className="absolute"
+                            style={{
+                              right: 7,
+                              top: "50%",
+                              transform: "translateY(-50%)",
+                            }}
+                            aria-hidden="true"
+                          >
+                            <defs>
+                              <filter id={`connector-arrow-${connectorKey}-invert`}>
+                                <feColorMatrix
+                                  type="matrix"
+                                  values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
+                                />
+                              </filter>
+                              <mask id={`connector-arrow-${connectorKey}-mask`}>
+                                <image
+                                  href={arrowIcon.src}
+                                  width="50.25"
+                                  height="30.000001"
+                                  filter={`url(#connector-arrow-${connectorKey}-invert)`}
+                                />
+                              </mask>
+                            </defs>
+                            <rect
+                              width="50.25"
+                              height="30.000001"
+                              fill="#156FE2"
+                              mask={`url(#connector-arrow-${connectorKey}-mask)`}
+                            />
+                          </svg>
+                        ) : (
+                          <img
+                            alt=""
+                            className="absolute"
+                            style={{
+                              width: 10,
+                              height: 6,
+                              right: 7,
+                            }}
+                            src={arrowIcon.src}
+                          />
+                        )}
                       </button>
                     ) : (
                       <span
@@ -1087,7 +1175,7 @@ export function FilterDropdown({
                           top: filterConnectorHeight,
                           borderRadius: 2,
                           background: "#ffffff",
-                          zIndex: 5000,
+                          zIndex: 30000,
                         }}
                       >
                         {FILTER_CONNECTORS.map((connector, index) => (
@@ -1102,16 +1190,24 @@ export function FilterDropdown({
                             onClick={() => {
                               if (row.showRootConnector) {
                                 setFilterConnector(connector);
-                              } else if (row.groupId) {
-                                setFilterItems((prev) =>
-                                  prev.map((item) =>
-                                    item.type === "group" &&
-                                    item.id === row.groupId
-                                      ? { ...item, connector }
-                                      : item
-                                  )
-                                );
+                                setHighlightedFilterConnectorKey("root");
+                              } else {
+                                // Extract group ID from connectorKey (format: "group:${groupId}")
+                                const targetGroupId = connectorKey.replace("group:", "");
+
+                                // Determine if this is a nested group (depth 2)
+                                const isNestedGroup = row.grandparentGroupId !== undefined;
+
+                                if (isNestedGroup) {
+                                  // Update nested group connector
+                                  setGroupConnector(targetGroupId, connector, row.grandparentGroupId);
+                                } else {
+                                  // Update root-level group connector
+                                  setGroupConnector(targetGroupId, connector, undefined);
+                                }
                               }
+                              setHighlightedFilterFieldId(null);
+                              setHighlightedFilterOperatorId(null);
                               setOpenFilterConnectorId(null);
                             }}
                           >

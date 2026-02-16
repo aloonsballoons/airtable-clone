@@ -136,6 +136,42 @@ export const tableRow = createTable(
 	],
 );
 
+export const tableView = createTable(
+	"table_view",
+	(d) => ({
+		id: d.uuid("id").defaultRandom().primaryKey(),
+		tableId: d
+			.uuid("table_id")
+			.notNull()
+			.references(() => baseTable.id, { onDelete: "cascade" }),
+		name: d.text("name").notNull(),
+		sortConfig: jsonb("sort_config")
+			.$type<Array<{ columnId: string; direction: "asc" | "desc" }>>()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
+		hiddenColumnIds: jsonb("hidden_column_ids")
+			.$type<string[]>()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
+		searchQuery: d.text("search_query"),
+		filterConfig: jsonb("filter_config")
+			.$type<{
+				connector: "and" | "or";
+				items: Array<unknown>;
+			} | null>()
+			.default(sql`NULL`),
+		createdAt: d
+			.timestamp("created_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+		updatedAt: d
+			.timestamp("updated_at", { withTimezone: true })
+			.$defaultFn(() => new Date())
+			.notNull(),
+	}),
+	(t) => [index("table_view_table_idx").on(t.tableId)],
+);
+
 export const user = pgTable("user", {
 	id: text("id").primaryKey(),
 	name: text("name").notNull(),
@@ -219,6 +255,7 @@ export const baseTableRelations = relations(baseTable, ({ many, one }) => ({
 	base: one(base, { fields: [baseTable.baseId], references: [base.id] }),
 	columns: many(tableColumn),
 	rows: many(tableRow),
+	views: many(tableView),
 }));
 
 export const tableColumnRelations = relations(tableColumn, ({ one }) => ({
@@ -227,4 +264,8 @@ export const tableColumnRelations = relations(tableColumn, ({ one }) => ({
 
 export const tableRowRelations = relations(tableRow, ({ one }) => ({
 	table: one(baseTable, { fields: [tableRow.tableId], references: [baseTable.id] }),
+}));
+
+export const tableViewRelations = relations(tableView, ({ one }) => ({
+	table: one(baseTable, { fields: [tableView.tableId], references: [baseTable.id] }),
 }));

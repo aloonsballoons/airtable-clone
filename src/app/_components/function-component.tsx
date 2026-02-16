@@ -269,6 +269,10 @@ export function FunctionBar({
   phantomFilterY,
   highlightedFilterFieldId,
   highlightedFilterOperatorId,
+  highlightedFilterConnectorKey,
+  setHighlightedFilterConnectorKey,
+  setHighlightedFilterFieldId,
+  setHighlightedFilterOperatorId,
   activeFilterAdd,
   handleFilterFieldSelect,
   handleFilterOperatorSelect,
@@ -810,6 +814,10 @@ export function FunctionBar({
                   phantomFilterY={phantomFilterY}
                   highlightedFilterFieldId={highlightedFilterFieldId}
                   highlightedFilterOperatorId={highlightedFilterOperatorId}
+                  highlightedFilterConnectorKey={highlightedFilterConnectorKey}
+                  setHighlightedFilterConnectorKey={setHighlightedFilterConnectorKey}
+                  setHighlightedFilterFieldId={setHighlightedFilterFieldId}
+                  setHighlightedFilterOperatorId={setHighlightedFilterOperatorId}
                   activeFilterAdd={activeFilterAdd}
                   handleFilterFieldSelect={handleFilterFieldSelect}
                   handleFilterOperatorSelect={handleFilterOperatorSelect}
