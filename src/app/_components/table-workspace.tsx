@@ -257,6 +257,38 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       setActiveViewId(newView.id);
     },
   });
+
+  // Query for the active custom view's state
+  const isCustomView = activeViewId !== null && activeViewId !== "default";
+  const activeViewQuery = api.base.getView.useQuery(
+    { viewId: activeViewId ?? "" },
+    { enabled: isCustomView }
+  );
+
+  // Mutation to update view state
+  const updateViewMutation = api.base.updateView.useMutation({
+    onMutate: async ({ viewId, sortConfig, hiddenColumnIds, searchQuery, filterConfig }) => {
+      await utils.base.getView.cancel({ viewId });
+      const previous = utils.base.getView.getData({ viewId });
+      utils.base.getView.setData({ viewId }, (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          ...(sortConfig !== undefined && { sortConfig }),
+          ...(hiddenColumnIds !== undefined && { hiddenColumnIds }),
+          ...(searchQuery !== undefined && { searchQuery }),
+          ...(filterConfig !== undefined && { filterConfig }),
+        };
+      });
+      return { previous, viewId };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous && context?.viewId) {
+        utils.base.getView.setData({ viewId: context.viewId }, context.previous);
+      }
+    },
+  });
+
   useEffect(() => {
     setPreferredTableId(null);
     setPreferredTableBaseId(null);
@@ -282,7 +314,22 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       hasLoadedTableMetaRef.current = true;
     }
   }, [tableMetaQuery.data]);
-  const hiddenColumnIds = tableMetaQuery.data?.hiddenColumnIds ?? [];
+
+  // Use view's state if viewing a custom view, otherwise use table's state
+  const effectiveHiddenColumnIds = isCustomView
+    ? (activeViewQuery.data?.hiddenColumnIds ?? [])
+    : (tableMetaQuery.data?.hiddenColumnIds ?? []);
+  const effectiveSearchQuery = isCustomView
+    ? (activeViewQuery.data?.searchQuery ?? "")
+    : (tableMetaQuery.data?.searchQuery ?? "");
+  const effectiveSortConfig = isCustomView
+    ? (activeViewQuery.data?.sortConfig ?? [])
+    : (tableMetaQuery.data?.sort ?? []);
+  const effectiveFilterConfig = isCustomView
+    ? (activeViewQuery.data?.filterConfig ?? null)
+    : null; // Table doesn't store filter config currently
+
+  const hiddenColumnIds = effectiveHiddenColumnIds;
   const hiddenColumnIdSet = useMemo(
     () => new Set(hiddenColumnIds),
     [hiddenColumnIds]
@@ -319,6 +366,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Initialize search hook
   const searchHook = useTableSearch({
     tableId: activeTableId,
+    initialSearchQuery: effectiveSearchQuery,
   });
   const { searchValue, searchQuery, hasSearchQuery } = searchHook;
 
@@ -327,6 +375,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     tableId: activeTableId,
     columns: activeColumns,
     hiddenColumnIdSet,
+    viewId: isCustomView ? activeViewId : null,
+    effectiveFilterConfig,
+    onFilterChange: (filterConfig) => {
+      if (isCustomView && activeViewId) {
+        updateViewMutation.mutate({ viewId: activeViewId, filterConfig });
+      }
+      // Note: Table-level filter persistence not yet implemented
+    },
   });
   const {
     filterItems,
@@ -345,8 +401,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     tableId: activeTableId,
     columns: orderedColumns,
     visibleColumnIdSet,
-    tableMetaQuery,
+    tableMetaQuery: {
+      data: tableMetaQuery.data
+        ? { ...tableMetaQuery.data, sort: effectiveSortConfig }
+        : undefined,
+    },
     hasLoadedTableMetaRef,
+    onSortChange: (sortConfig) => {
+      if (isCustomView && activeViewId) {
+        updateViewMutation.mutate({
+          viewId: activeViewId,
+          sortConfig: sortConfig ?? [],
+        });
+      }
+      // Note: Table-level sort is handled by the sort hook's internal mutation
+    },
   });
 
   // Initialize hide fields hook
@@ -354,7 +423,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     orderedAllColumns,
     hiddenColumnIdSet,
     activeTableId,
-    setHiddenColumns: (params) => setHiddenColumns.mutate(params),
+    setHiddenColumns: (params) => {
+      if (isCustomView && activeViewId) {
+        updateViewMutation.mutate({
+          viewId: activeViewId,
+          hiddenColumnIds: params.hiddenColumnIds,
+        });
+      } else {
+        setHiddenColumns.mutate(params);
+      }
+    },
   });
 
   const sortParam = tableSortHook.sortParam;
@@ -417,7 +495,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const handleSelectView = useCallback((viewId: string) => {
     setActiveViewId(viewId);
+    // When switching views, the queries will automatically refetch with the new viewId
   }, []);
+
+  // Reset to default view when switching tables
+  useEffect(() => {
+    setActiveViewId("default");
+  }, [activeTableId]);
 
   // Always include the default "Grid view" as the first view, followed by any saved views
   const savedViews = viewsQuery.data ?? [];
@@ -425,6 +509,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     { id: "default", name: "Grid view" },
     ...savedViews,
   ];
+
+  // Get active view name
+  const activeView = views.find((v) => v.id === activeViewId);
+  const activeViewName = activeView?.name ?? "Grid view";
 
   const addTable = api.base.addTable.useMutation({
     onMutate: async ({ name }) => {
@@ -593,17 +681,24 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   useEffect(() => {
     if (!activeTableId) return;
-    const currentSearch = tableMetaQuery.data?.searchQuery ?? "";
+    const currentSearch = effectiveSearchQuery;
     if (searchQuery === currentSearch) return;
     const timeout = window.setTimeout(() => {
-      setTableSearch.mutate({ tableId: activeTableId, search: searchQuery });
+      if (isCustomView && activeViewId) {
+        updateViewMutation.mutate({ viewId: activeViewId, searchQuery });
+      } else {
+        setTableSearch.mutate({ tableId: activeTableId, search: searchQuery });
+      }
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [
     activeTableId,
+    activeViewId,
+    isCustomView,
     searchQuery,
+    effectiveSearchQuery,
     setTableSearch,
-    tableMetaQuery.data?.searchQuery,
+    updateViewMutation,
   ]);
 
   const setHiddenColumns = api.base.setHiddenColumns.useMutation({
@@ -2586,6 +2681,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
             <div ref={functionContainerRef}>
               <FunctionBar
+                viewName={activeViewName}
                 bulkRowsDisabled={bulkRowsDisabled}
                 handleAddBulkRows={handleAddBulkRows}
               hideFieldsButtonRef={hideFieldsHook.hideFieldsButtonRef}

@@ -68,6 +68,15 @@ export type UseTableFilterParams = {
   tableId: string | null;
   columns: Column[];
   hiddenColumnIdSet: Set<string>;
+  viewId?: string | null;
+  effectiveFilterConfig?: {
+    connector: FilterConnector;
+    items: FilterItem[];
+  } | null;
+  onFilterChange?: (filterConfig: {
+    connector: FilterConnector;
+    items: FilterItem[];
+  } | null) => void;
 };
 
 export type UseTableFilterReturn = {
@@ -198,6 +207,9 @@ export function useTableFilter({
   tableId,
   columns,
   hiddenColumnIdSet,
+  viewId,
+  effectiveFilterConfig,
+  onFilterChange,
 }: UseTableFilterParams): UseTableFilterReturn {
   // Refs
   const filterButtonRef = useRef<HTMLButtonElement>(null);
@@ -205,8 +217,23 @@ export function useTableFilter({
 
   // State
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
-  const [filterItems, setFilterItems] = useState<FilterItem[]>([]);
-  const [filterConnector, setFilterConnector] = useState<FilterConnector>("and");
+  const [filterItems, setFilterItems] = useState<FilterItem[]>(
+    effectiveFilterConfig?.items ?? []
+  );
+  const [filterConnector, setFilterConnector] = useState<FilterConnector>(
+    effectiveFilterConfig?.connector ?? "and"
+  );
+
+  // Effect: Initialize filter state from effective config when it changes (e.g., view switch)
+  useEffect(() => {
+    if (effectiveFilterConfig) {
+      setFilterItems(effectiveFilterConfig.items);
+      setFilterConnector(effectiveFilterConfig.connector);
+    } else {
+      setFilterItems([]);
+      setFilterConnector("and");
+    }
+  }, [viewId, effectiveFilterConfig]);
 
   // Debounce filter items and connector for server queries (150ms delay for snappy feel)
   const debouncedFilterItems = useDebounced(filterItems, 150);
@@ -373,6 +400,20 @@ export function useTableFilter({
     const newGroup = createFilterGroup();
     setFilterItems((prev) => [...prev, newGroup]);
   }, []);
+
+  // Effect: Call onFilterChange when debounced filter state changes
+  useEffect(() => {
+    if (onFilterChange) {
+      const config =
+        debouncedFilterItems.length > 0
+          ? {
+              connector: debouncedFilterConnector,
+              items: debouncedFilterItems,
+            }
+          : null;
+      onFilterChange(config);
+    }
+  }, [debouncedFilterItems, debouncedFilterConnector, onFilterChange]);
 
   // Effect: Reset filters when table changes
   useEffect(() => {

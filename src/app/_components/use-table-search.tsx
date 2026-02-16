@@ -24,6 +24,7 @@ function useDebounced<T>(value: T, delay: number): T {
 
 export type UseTableSearchParams = {
   tableId: string | null;
+  initialSearchQuery?: string;
 };
 
 export type UseTableSearchReturn = {
@@ -52,6 +53,7 @@ export type UseTableSearchReturn = {
 
 export function useTableSearch({
   tableId,
+  initialSearchQuery = "",
 }: UseTableSearchParams): UseTableSearchReturn {
   // Refs
   const searchButtonRef = useRef<HTMLButtonElement>(null);
@@ -60,7 +62,7 @@ export function useTableSearch({
 
   // State
   const [isSearchMenuOpen, setIsSearchMenuOpen] = useState(false);
-  const [searchValue, setSearchValue] = useState("");
+  const [searchValue, setSearchValue] = useState(initialSearchQuery);
 
   // Debounce search value for server queries (150ms delay for snappy feel)
   const debouncedSearchValue = useDebounced(searchValue, 150);
@@ -73,6 +75,11 @@ export function useTableSearch({
   const clearSearch = useCallback(() => {
     setSearchValue("");
   }, []);
+
+  // Effect: Initialize search value when it changes from outside (e.g., view switch)
+  useEffect(() => {
+    setSearchValue(initialSearchQuery);
+  }, [initialSearchQuery]);
 
   // Effect: Reset search when table changes
   useEffect(() => {

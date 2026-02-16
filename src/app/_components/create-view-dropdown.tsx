@@ -338,18 +338,22 @@ export function CreateViewDropdown({
         onClick={onClose}
         style={{
           position: "absolute",
-          left: 213,
-          top: 193,
+          left: 85,
+          top: 186,
+          height: 31,
           fontSize: 13,
           fontWeight: 400,
           color: "#1D1F24",
           background: "transparent",
           border: "none",
           cursor: "pointer",
-          padding: "7px 12px",
+          padding: "0 12px",
           borderRadius: 6,
           transition: "background-color 0.2s",
           zIndex: 10,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.backgroundColor = "#F2F2F2";

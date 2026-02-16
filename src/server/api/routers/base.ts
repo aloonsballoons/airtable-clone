@@ -1848,4 +1848,61 @@ export const baseRouter = createTRPCRouter({
 				filterConfig: viewRecord.filterConfig ?? null,
 			};
 		}),
+
+	updateView: protectedProcedure
+		.input(
+			z.object({
+				viewId: z.string().uuid(),
+				sortConfig: z.array(sortItemSchema).optional(),
+				hiddenColumnIds: z.array(z.string().uuid()).optional(),
+				searchQuery: z.string().optional(),
+				filterConfig: filterSchema.nullable().optional(),
+			})
+		)
+		.mutation(async ({ ctx, input }) => {
+			const viewRecord = await ctx.db.query.tableView.findFirst({
+				where: eq(tableView.id, input.viewId),
+				with: {
+					table: {
+						with: {
+							base: true,
+						},
+					},
+				},
+			});
+
+			if (!viewRecord || viewRecord.table.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const updateData: {
+				sortConfig?: Array<{ columnId: string; direction: "asc" | "desc" }>;
+				hiddenColumnIds?: string[];
+				searchQuery?: string | null;
+				filterConfig?: {
+					connector: "and" | "or";
+					items: Array<unknown>;
+				} | null;
+			} = {};
+
+			if (input.sortConfig !== undefined) {
+				updateData.sortConfig = input.sortConfig;
+			}
+			if (input.hiddenColumnIds !== undefined) {
+				updateData.hiddenColumnIds = input.hiddenColumnIds;
+			}
+			if (input.searchQuery !== undefined) {
+				updateData.searchQuery = input.searchQuery || null;
+			}
+			if (input.filterConfig !== undefined) {
+				updateData.filterConfig = input.filterConfig;
+			}
+
+			await ctx.db
+				.update(tableView)
+				.set(updateData)
+				.where(eq(tableView.id, input.viewId));
+
+			return { success: true };
+		}),
 });

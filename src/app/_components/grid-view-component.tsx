@@ -32,7 +32,7 @@ export type GridViewContainerProps = {
 
 const DEFAULT_VIEWS: ViewItem[] = [{ id: "default", name: "Grid view" }];
 
-const VIEW_ROW_STRIDE = 30;
+const VIEW_ROW_STRIDE = 33;
 
 // Targets:
 // - Text "Grid view" at (44, 95)

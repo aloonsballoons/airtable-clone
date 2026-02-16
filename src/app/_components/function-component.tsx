@@ -152,6 +152,9 @@ const getColumnIconSrc = (name: string, type?: string | null) => {
 // ---------------------------------------------------------------------------
 
 export type FunctionBarProps = FilterDropdownProps & {
+  // View name
+  viewName?: string;
+
   // Bulk rows
   bulkRowsDisabled: boolean;
   handleAddBulkRows: () => void;
@@ -222,6 +225,9 @@ export type FunctionBarProps = FilterDropdownProps & {
 // ---------------------------------------------------------------------------
 
 export function FunctionBar({
+  // View name
+  viewName = "Grid view",
+
   // Bulk rows
   bulkRowsDisabled,
   handleAddBulkRows,
@@ -456,7 +462,7 @@ export function FunctionBar({
       setArrowLeft(27 + textWidth + 10);
       setAddButtonLeft(viewSelectorRight + VIEW_SELECTOR_PADDING);
     }
-  }, []);
+  }, [viewName]);
 
   return (
     <div className="relative h-[46px] bg-white">
@@ -477,7 +483,7 @@ export function FunctionBar({
             className="absolute left-[27px] top-[14px] block max-w-[120px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
             style={{ fontFamily: "Inter, sans-serif" }}
           >
-            Grid view
+            {viewName}
           </span>
           <img
             alt=""
