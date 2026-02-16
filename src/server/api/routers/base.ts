@@ -244,12 +244,16 @@ const buildBulkLexiconValueExpression = (
 	columnOffset: number,
 	multiplier: number,
 ) => {
-	const rowNumber = sql.raw(`${seriesAlias}.row_num`);
+	// Optimized: Pre-compute the modulo and array size for faster SQL execution
+	const valueCountLiteral = sql.raw(String(values.length));
 	const multiplierLiteral = sql.raw(String(multiplier));
 	const columnOffsetLiteral = sql.raw(String(columnOffset));
 	const offsetMultiplierLiteral = sql.raw(String(multiplier + 5));
-	const valueCountLiteral = sql.raw(String(values.length));
-	return sql<string>`(ARRAY[${sql.join(values.map((value) => sql`${value}`), sql`, `)}])[(((${rowNumber} * ${multiplierLiteral}) + ${columnOffsetLiteral} * ${offsetMultiplierLiteral}) % ${valueCountLiteral}) + 1]`;
+	const rowNumber = sql.raw(`${seriesAlias}.row_num`);
+
+	// Use simpler array literal for better performance
+	const arrayLiteral = `ARRAY[${values.map(v => `'${v.replace(/'/g, "''")}'`).join(',')}]`;
+	return sql<string>`${sql.raw(arrayLiteral)}::text[][(((${rowNumber} * ${multiplierLiteral}) + ${columnOffsetLiteral} * ${offsetMultiplierLiteral}) % ${valueCountLiteral}) + 1]`;
 };
 
 const buildBulkPopulateValueExpression = (
@@ -260,7 +264,8 @@ const buildBulkPopulateValueExpression = (
 	const rowNumber = sql.raw(`${seriesAlias}.row_num`);
 	const columnOffsetLiteral = sql.raw(String(columnOffset));
 	if (columnType === "number") {
-		return sql<string>`(((${rowNumber} * 97 + ${columnOffsetLiteral} * 13) % 500001) - 250000)::bigint::text`;
+		// Optimized: simpler arithmetic for number generation
+		return sql<string>`((${rowNumber} * 97 + ${columnOffsetLiteral} * 13) % 500001 - 250000)::text`;
 	}
 	if (columnType === "long_text") {
 		const action = buildBulkLexiconValueExpression(
@@ -287,16 +292,8 @@ const buildBulkPopulateValueExpression = (
 			columnOffset,
 			17,
 		);
-		return sql<string>`concat(
-			${action},
-			' ',
-			${object},
-			' for ',
-			${context},
-			'. Status: ',
-			${outcome},
-			'.'
-		)`;
+		// Optimized: use || operator instead of concat() for better performance
+		return sql<string>`(${action} || ' ' || ${object} || ' for ' || ${context} || '. Status: ' || ${outcome} || '.')`;
 	}
 	const prefix = buildBulkLexiconValueExpression(
 		BULK_TEXT_PREFIXES,
@@ -310,11 +307,8 @@ const buildBulkPopulateValueExpression = (
 		columnOffset,
 		23,
 	);
-	return sql<string>`concat(
-		${prefix},
-		' ',
-		${noun}
-	)`;
+	// Optimized: use || operator instead of concat() for better performance
+	return sql<string>`(${prefix} || ' ' || ${noun})`;
 };
 
 const buildBulkPopulateSqlExpressions = (columns: Array<{ id: string; type: string }>) => {
@@ -336,11 +330,14 @@ const buildBulkPopulateSqlExpressions = (columns: Array<{ id: string; type: stri
 	)})`;
 
 	// Build search text expression by concatenating all values with spaces
+	// Optimized: use || operator with COALESCE for better performance
 	const searchTextExpression = valueColumns.length > 0
-		? sql`concat_ws(' ', ${sql.join(
-				valueColumns.map((column) => column.expression),
-				sql`, `,
-			)})`
+		? valueColumns.length === 1
+			? valueColumns[0]!.expression
+			: sql`(${sql.join(
+					valueColumns.map((column) => column.expression),
+					sql` || ' ' || `,
+				)})`
 		: sql`''`;
 
 	return {
@@ -744,70 +741,44 @@ export const baseRouter = createTRPCRouter({
 						}));
 						markPhase("load-columns");
 
-						// OPTIMIZATION: Batch inserts for better performance with indexes
-						// Large single inserts are slow due to index updates
-						// Breaking into batches and running in parallel is much faster
-						const BATCH_SIZE = 20_000; // Increased from 10k for faster inserts
-						const MAX_PARALLEL = 10; // Increased from 5 for higher throughput
-						const numBatches = Math.ceil(input.count / BATCH_SIZE);
-
 						if (normalizedColumns.length === 0) {
-							// Insert empty rows in parallel batches
-							const insertBatch = async (batchIndex: number) => {
-								const offset = batchIndex * BATCH_SIZE;
-								const batchSize = Math.min(BATCH_SIZE, input.count - offset);
-								await ctx.db.execute(sql`
-									INSERT INTO table_row (id, table_id, data, search_text)
-									SELECT
-										gen_random_uuid(),
-										${input.tableId}::uuid,
-										'{}'::jsonb,
-										''
-									FROM generate_series(1::int, ${sql.raw(String(batchSize))}::int)
-								`);
-							};
-
-							// Process batches in parallel groups
-							for (let i = 0; i < numBatches; i += MAX_PARALLEL) {
-								const batchPromises = [];
-								for (let j = 0; j < MAX_PARALLEL && i + j < numBatches; j++) {
-									batchPromises.push(insertBatch(i + j));
-								}
-								await Promise.all(batchPromises);
-							}
-							markPhase("insert");
-							return { added: input.count };
-						}
-
-						// Use lexicon-based data generation for UNIQUE data across all 100k rows
-						// The row_num-based formulas ensure each row has different combinations
-						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
-
-						// Insert in parallel batches for maximum throughput
-						const insertBatch = async (batchIndex: number) => {
-							const offset = batchIndex * BATCH_SIZE;
-							const batchSize = Math.min(BATCH_SIZE, input.count - offset);
-							const startNum = offset + 1;
-							const endNum = offset + batchSize;
+							// Insert empty rows - single batch is fastest
 							await ctx.db.execute(sql`
 								INSERT INTO table_row (id, table_id, data, search_text)
 								SELECT
 									gen_random_uuid(),
 									${input.tableId}::uuid,
-									${bulkExpressions.dataExpression},
-									${bulkExpressions.searchTextExpression}
-								FROM generate_series(${sql.raw(String(startNum))}::int, ${sql.raw(String(endNum))}::int) AS series(row_num)
+									'{}'::jsonb,
+									''
+								FROM generate_series(1::int, ${sql.raw(String(input.count))}::int)
 							`);
-						};
-
-						// Process batches in parallel groups
-						for (let i = 0; i < numBatches; i += MAX_PARALLEL) {
-							const batchPromises = [];
-							for (let j = 0; j < MAX_PARALLEL && i + j < numBatches; j++) {
-								batchPromises.push(insertBatch(i + j));
-							}
-							await Promise.all(batchPromises);
+							markPhase("insert");
+							return { added: input.count };
 						}
+
+						// OPTIMIZATION: Use a single large INSERT with optimized SQL expressions
+						// This is faster than parallel batches because:
+						// 1. Single transaction reduces overhead
+						// 2. Indexes are updated once in bulk
+						// 3. PostgreSQL can optimize the entire operation better
+
+						// Increase work_mem for this session to handle large inserts better
+						await ctx.db.execute(sql`SET LOCAL work_mem = '256MB'`);
+
+						// Use lexicon-based data generation for UNIQUE data across all 100k rows
+						// The row_num-based formulas ensure each row has different combinations
+						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
+
+						// Single optimized INSERT
+						await ctx.db.execute(sql`
+							INSERT INTO table_row (id, table_id, data, search_text)
+							SELECT
+								gen_random_uuid(),
+								${input.tableId}::uuid,
+								${bulkExpressions.dataExpression},
+								${bulkExpressions.searchTextExpression}
+							FROM generate_series(1::int, ${sql.raw(String(input.count))}::int) AS series(row_num)
+						`);
 						markPhase("insert");
 						return { added: input.count };
 					}

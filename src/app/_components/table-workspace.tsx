@@ -248,7 +248,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const baseDetailsQuery = api.base.get.useQuery({ baseId });
 
   const viewsQuery = api.base.listViews.useQuery(
-    { tableId: activeTableId ?? "" },
+    { tableId: activeTableId! },
     { enabled: Boolean(activeTableId) }
   );
   const createViewMutation = api.base.createView.useMutation({
@@ -261,7 +261,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Query for the active custom view's state
   const isCustomView = activeViewId !== null && activeViewId !== "default";
   const activeViewQuery = api.base.getView.useQuery(
-    { viewId: activeViewId ?? "" },
+    { viewId: activeViewId! },
     { enabled: isCustomView }
   );
 
@@ -306,7 +306,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     utils.base.list.prefetch();
   }, [utils.base.list]);
   const tableMetaQuery = api.base.getTableMeta.useQuery(
-    { tableId: activeTableId ?? "" },
+    { tableId: activeTableId! },
     { enabled: Boolean(activeTableId) }
   );
   useEffect(() => {
@@ -325,9 +325,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const effectiveSortConfig = isCustomView
     ? (activeViewQuery.data?.sortConfig ?? [])
     : (tableMetaQuery.data?.sort ?? []);
-  const effectiveFilterConfig = isCustomView
+  const effectiveFilterConfig = (isCustomView
     ? (activeViewQuery.data?.filterConfig ?? null)
-    : null; // Table doesn't store filter config currently
+    : null) as { connector: FilterConnector; items: FilterItem[]; } | null; // Table doesn't store filter config currently
 
   const hiddenColumnIds = effectiveHiddenColumnIds;
   const hiddenColumnIdSet = useMemo(
@@ -464,7 +464,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const getRowsQueryKey = (tableId: string) =>
     getRowsQueryKeyForSort(tableId, sortParam);
   const rowsQuery = api.base.getRows.useInfiniteQuery(
-    getRowsQueryKey(activeTableId ?? ""),
+    getRowsQueryKey(activeTableId!),
     {
       enabled: Boolean(activeTableId),
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,

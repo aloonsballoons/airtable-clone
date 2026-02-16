@@ -157,7 +157,15 @@ export const tableView = createTable(
 		filterConfig: jsonb("filter_config")
 			.$type<{
 				connector: "and" | "or";
-				items: Array<unknown>;
+				items: Array<{
+					id: string;
+					type: "condition" | "group";
+					columnId?: string | null;
+					operator?: string;
+					value?: string;
+					connector?: "and" | "or";
+					conditions?: Array<unknown>;
+				}>;
 			} | null>()
 			.default(sql`NULL`),
 		createdAt: d
