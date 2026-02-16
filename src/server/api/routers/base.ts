@@ -36,6 +36,7 @@ const filterOperatorSchema = z.enum([
 	"lte",
 	"gte",
 ]);
+// Filter schemas for querying (used in getRows - doesn't need id)
 const filterConditionSchema = z.object({
 	type: z.literal("condition"),
 	columnId: z.string().uuid(),
@@ -59,6 +60,35 @@ const filterGroupSchema: z.ZodType<FilterGroup> = z.object({
 const filterSchema = z.object({
 	connector: filterConnectorSchema,
 	items: z.array(z.union([filterConditionSchema, filterGroupSchema])),
+});
+
+// Filter schemas for storage (used in updateView - includes id for React keys)
+const filterConditionStorageSchema = z.object({
+	id: z.string().uuid(),
+	type: z.literal("condition"),
+	columnId: z.string().uuid().nullable(),
+	operator: filterOperatorSchema,
+	value: z.string(),
+});
+type FilterConditionStorage = z.infer<typeof filterConditionStorageSchema>;
+type FilterGroupStorage = {
+	id: string;
+	type: "group";
+	connector: "and" | "or";
+	conditions: Array<FilterConditionStorage | FilterGroupStorage>;
+};
+
+const filterGroupStorageSchema: z.ZodType<FilterGroupStorage> = z.object({
+	id: z.string().uuid(),
+	type: z.literal("group"),
+	connector: filterConnectorSchema,
+	conditions: z.array(
+		z.union([filterConditionStorageSchema, z.lazy(() => filterGroupStorageSchema)])
+	),
+});
+const filterStorageSchema = z.object({
+	connector: filterConnectorSchema,
+	items: z.array(z.union([filterConditionStorageSchema, filterGroupStorageSchema])),
 });
 const filterTextOperators = new Set([
 	"contains",
@@ -1846,7 +1876,7 @@ export const baseRouter = createTRPCRouter({
 				sortConfig: z.array(sortItemSchema).optional(),
 				hiddenColumnIds: z.array(z.string().uuid()).optional(),
 				searchQuery: z.string().optional(),
-				filterConfig: filterSchema.nullable().optional(),
+				filterConfig: filterStorageSchema.nullable().optional(),
 			})
 		)
 		.mutation(async ({ ctx, input }) => {
