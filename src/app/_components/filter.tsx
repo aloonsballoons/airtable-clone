@@ -528,37 +528,72 @@ export function FilterDropdown({
   const operatorArrowMaskId = useId();
   const prevTopsRef = useRef(new Map<string, number>());
   const [flipDeltas, setFlipDeltas] = useState<Record<string, number>>({});
+  const groupPlusDropdownRef = useRef<HTMLDivElement>(null);
+  const groupPlusButtonRef = useRef<HTMLButtonElement>(null);
 
   useLayoutEffect(() => {
     const nextTops = new Map<string, number>();
-  
+
     // Collect current tops for all entries
     for (const entry of filterLayout.entries) {
       const key = entry.type === "row" ? entry.condition.id : entry.group.id;
       nextTops.set(key, entry.top);
     }
-  
+
     const prevTops = prevTopsRef.current;
     const deltas: Record<string, number> = {};
-  
+
     for (const [key, nextTop] of nextTops) {
       const prevTop = prevTops.get(key);
-      if (prevTop === undefined) continue; // new item, don’t animate from nowhere
+      if (prevTop === undefined) continue; // new item, don't animate from nowhere
       const delta = prevTop - nextTop;
       if (delta !== 0) deltas[key] = delta;
     }
-  
+
     // Store deltas so render applies transform immediately
     setFlipDeltas(deltas);
-  
+
     // Next frame: animate transform back to 0
     requestAnimationFrame(() => {
       setFlipDeltas({});
     });
-  
+
     // Update prev tops for next change
     prevTopsRef.current = nextTops;
   }, [filterLayout.entries]);
+
+  // Click-outside detection for group plus dropdown
+  useLayoutEffect(() => {
+    if (!openGroupPlusId) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+
+      // Check if click is inside the dropdown
+      if (groupPlusDropdownRef.current?.contains(target)) {
+        return;
+      }
+
+      // Check if click is on any plus button (to avoid interfering with toggle behavior)
+      const plusButton = (event.target as HTMLElement).closest('.airtable-filter-group-action');
+      if (plusButton) {
+        return;
+      }
+
+      // Click is outside - close the dropdown
+      setOpenGroupPlusId(null);
+    };
+
+    // Add listener with a small delay to avoid closing immediately after opening
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 0);
+
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openGroupPlusId, setOpenGroupPlusId]);
 
   return (
     <div
@@ -660,7 +695,7 @@ export function FilterDropdown({
                           top: group.top,
                           width: filterConnectorWidth,
                           height: filterConnectorHeight,
-                          zIndex: 10 + group.depth * 10,
+                          zIndex: isConnectorOpen ? 60000 : 10 + group.depth * 10,
                         }}
                       >
                         {showConnectorControl ? (
@@ -759,7 +794,7 @@ export function FilterDropdown({
                               top: filterConnectorHeight,
                               borderRadius: 2,
                               background: "#ffffff",
-                              zIndex: 30000,
+                              zIndex: 50000,
                             }}
                           >
                             {FILTER_CONNECTORS.map((connector, index) => (
@@ -911,6 +946,7 @@ export function FilterDropdown({
                   {/* Plus dropdown - rendered as sibling to group box for independent z-index */}
                   {openGroupPlusId === group.group.id && (
                     <div
+                      ref={groupPlusDropdownRef}
                       className="airtable-dropdown-surface absolute"
                       style={{
                         left: group.left + group.width - 105,
@@ -918,7 +954,7 @@ export function FilterDropdown({
                         width: 174,
                         height: 92,
                         borderRadius: 3,
-                        zIndex: 25000,
+                        zIndex: 50000,
                       }}
                     >
                       <button
@@ -1043,11 +1079,11 @@ export function FilterDropdown({
               const fieldMenuTop = fieldTop + filterFieldHeight + 2;
               const operatorMenuTop = fieldMenuTop;
               const baseRowZIndex = isOperatorMenuOpen
-                ? 40
+                ? 60000
                 : isDraggingRow
                 ? 30
                 : isFieldMenuOpen || isConnectorOpen
-                ? 25
+                ? 60000
                 : 10;
               // Boost z-index if this row is inside a group that has its plus dropdown open
               const isInsideGroupWithOpenDropdown =
@@ -1175,7 +1211,7 @@ export function FilterDropdown({
                           top: filterConnectorHeight,
                           borderRadius: 2,
                           background: "#ffffff",
-                          zIndex: 30000,
+                          zIndex: 50000,
                         }}
                       >
                         {FILTER_CONNECTORS.map((connector, index) => (
@@ -1336,7 +1372,7 @@ export function FilterDropdown({
                         width: filterFieldMenuWidth,
                         height: filterFieldMenuHeight,
                         borderRadius: 3,
-                        zIndex: 1000,
+                        zIndex: 50000,
                       }}
                     >
                       <div
@@ -1524,7 +1560,7 @@ export function FilterDropdown({
                           width: filterOperatorMenuWidth,
                           height: operatorMenuHeight,
                           borderRadius: 3,
-                          zIndex: 3000,
+                          zIndex: 50000,
                         }}
                       >
                       <div
