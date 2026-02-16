@@ -27,7 +27,7 @@ export type GridViewContainerProps = {
   onCreateView?: (name: string) => void;
   onFindView?: () => void;
   onSettings?: () => void;
-  functionContainerRef?: React.RefObject<HTMLDivElement>;
+  functionContainerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
 const DEFAULT_VIEWS: ViewItem[] = [{ id: "default", name: "Grid view" }];
