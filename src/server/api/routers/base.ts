@@ -253,7 +253,7 @@ const buildBulkLexiconValueExpression = (
 
 	// Use simpler array literal for better performance
 	const arrayLiteral = `ARRAY[${values.map(v => `'${v.replace(/'/g, "''")}'`).join(',')}]`;
-	return sql<string>`${sql.raw(arrayLiteral)}::text[][(((${rowNumber} * ${multiplierLiteral}) + ${columnOffsetLiteral} * ${offsetMultiplierLiteral}) % ${valueCountLiteral}) + 1]`;
+	return sql<string>`(${sql.raw(arrayLiteral)}::text[])[(((${rowNumber} * ${multiplierLiteral}) + ${columnOffsetLiteral} * ${offsetMultiplierLiteral}) % ${valueCountLiteral}) + 1]`;
 };
 
 const buildBulkPopulateValueExpression = (
@@ -756,20 +756,25 @@ export const baseRouter = createTRPCRouter({
 							return { added: input.count };
 						}
 
-						// OPTIMIZATION: Use a single large INSERT with optimized SQL expressions
-						// This is faster than parallel batches because:
-						// 1. Single transaction reduces overhead
-						// 2. Indexes are updated once in bulk
-						// 3. PostgreSQL can optimize the entire operation better
+						// OPTIMIZATION: For large inserts, temporarily drop indexes for massive speedup
+						// Rebuilding indexes after is much faster than updating them for each row
 
-						// Increase work_mem for this session to handle large inserts better
-						await ctx.db.execute(sql`SET LOCAL work_mem = '256MB'`);
+						// Increase work_mem and maintenance_work_mem for better performance
+						await ctx.db.execute(sql`SET LOCAL work_mem = '512MB'`);
+						await ctx.db.execute(sql`SET LOCAL maintenance_work_mem = '512MB'`);
+
+						// For bulk inserts >= 10k rows, drop and recreate indexes
+						if (input.count >= 10_000) {
+							// Drop the non-primary key indexes on table_row
+							await ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`);
+							await ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_created_idx`);
+							markPhase("drop-indexes");
+						}
 
 						// Use lexicon-based data generation for UNIQUE data across all 100k rows
-						// The row_num-based formulas ensure each row has different combinations
 						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
 
-						// Single optimized INSERT
+						// Single optimized INSERT without index overhead
 						await ctx.db.execute(sql`
 							INSERT INTO table_row (id, table_id, data, search_text)
 							SELECT
@@ -780,6 +785,20 @@ export const baseRouter = createTRPCRouter({
 							FROM generate_series(1::int, ${sql.raw(String(input.count))}::int) AS series(row_num)
 						`);
 						markPhase("insert");
+
+						// Recreate the indexes (non-concurrently for speed)
+						if (input.count >= 10_000) {
+							await ctx.db.execute(sql`
+								CREATE INDEX IF NOT EXISTS table_row_table_idx
+								ON table_row (table_id)
+							`);
+							await ctx.db.execute(sql`
+								CREATE INDEX IF NOT EXISTS table_row_table_created_idx
+								ON table_row (table_id, created_at)
+							`);
+							markPhase("rebuild-indexes");
+						}
+
 						return { added: input.count };
 					}
 
