@@ -970,6 +970,7 @@ export function TableView({
                   position: "sticky",
                   left: 0,
                   zIndex: 35,
+                  isolation: "isolate",
                 }}
                 aria-hidden="true"
               >
@@ -995,6 +996,7 @@ export function TableView({
                   position: "sticky",
                   left: rowNumberColumnWidth,
                   zIndex: 30,
+                  isolation: "isolate",
                 }}
                 onContextMenu={(event) =>
                   handleOpenContextMenu(
@@ -1295,6 +1297,7 @@ export function TableView({
                         position: "sticky",
                         left: 0,
                         zIndex: rowHasSelection ? 20 : 15,
+                        isolation: "isolate",
                         ["--airtable-cell-base" as string]: rowNumberBaseBg,
                         ["--airtable-cell-hover" as string]: rowNumberHoverBg,
                       }}
@@ -1318,6 +1321,7 @@ export function TableView({
                         position: "sticky",
                         left: rowNumberColumnWidth,
                         zIndex: rowHasSelection ? 30 : 25,
+                        isolation: "isolate",
                         backgroundColor: nameBaseBackground,
                       }}
                     >
@@ -1438,6 +1442,7 @@ export function TableView({
                       position: "sticky",
                       left: 0,
                       zIndex: rowHasSelection ? 20 : 15,
+                      isolation: "isolate",
                       ["--airtable-cell-base" as string]: rowNumberBaseBg,
                       ["--airtable-cell-hover" as string]: rowNumberHoverBg,
                     }}
@@ -1524,6 +1529,7 @@ export function TableView({
                           position: "sticky",
                           left: rowNumberColumnWidth,
                           zIndex: nameExpanded ? 30 : 25,
+                          isolation: "isolate",
                           ["--airtable-cell-base" as string]:
                             nameBaseBackground,
                           ["--airtable-cell-hover" as string]:

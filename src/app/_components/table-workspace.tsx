@@ -122,6 +122,22 @@ const imgEllipse2 =
 const imgEllipse3 =
   "https://www.figma.com/api/mcp/asset/42309589-dc81-48ef-80de-6483844e93cc";
 
+const formatInitials = (name: string) => {
+  const trimmed = name.trim();
+  const chars = Array.from(trimmed);
+  const first = chars[0] ?? "";
+  const second = chars[1] ?? "";
+  const formatChar = (char: string, index: number) => {
+    if (!char) return "";
+    if (/[a-zA-Z]/.test(char)) {
+      return index === 0 ? char.toUpperCase() : char.toLowerCase();
+    }
+    return char;
+  };
+  const initials = `${formatChar(first, 0)}${formatChar(second, 1)}`;
+  return initials || "??";
+};
+
 type TableRow = Record<string, string> & { id: string };
 
 type TableWorkspaceProps = {
@@ -356,6 +372,30 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     utils.base.list.prefetch();
   }, [utils.base.list]);
+
+  // Update favicon when base name changes
+  useEffect(() => {
+    const baseName = baseDetailsQuery.data?.name;
+    if (!baseName) return;
+
+    const initials = formatInitials(baseName);
+    const faviconUrl = `/api/favicon?initials=${encodeURIComponent(initials)}&v=${Date.now()}`;
+
+    // Update all favicon links
+    const links = document.querySelectorAll<HTMLLinkElement>("link[rel*='icon']");
+    links.forEach((link) => {
+      link.href = faviconUrl;
+    });
+
+    // Cleanup: restore default favicon when unmounting
+    return () => {
+      const links = document.querySelectorAll<HTMLLinkElement>("link[rel*='icon']");
+      links.forEach((link) => {
+        link.href = "/logo.svg";
+      });
+    };
+  }, [baseDetailsQuery.data?.name]);
+
   const tableMetaQuery = api.base.getTableMeta.useQuery(
     { tableId: activeTableId! },
     { enabled: isValidTableId(activeTableId) }
@@ -3075,7 +3115,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     aria-hidden="true"
                     style={{
                       position: "absolute",
-                      left: 562,
+                      left: 551,
                       top: 343,
                       width: 28,
                       height: 28,
@@ -3104,7 +3144,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     className={inter.className}
                     style={{
                       position: "absolute",
-                      left: 507,
+                      left: 496,
                       top: 403,
                       fontSize: 16,
                       fontWeight: 400,
