@@ -695,7 +695,11 @@ export function FilterDropdown({
                           top: group.top,
                           width: filterConnectorWidth,
                           height: filterConnectorHeight,
-                          zIndex: isConnectorOpen ? 60000 : 10 + group.depth * 10,
+                          zIndex: isConnectorOpen
+                            ? 60000
+                            : isInsideGroupWithOpenDropdown
+                              ? 60000
+                              : 10 + group.depth * 10,
                         }}
                       >
                         {showConnectorControl ? (
@@ -843,7 +847,9 @@ export function FilterDropdown({
                         overflow: isGroupDragging ? "hidden" : "visible",
                         zIndex: isGroupPlusOpen
                         ? GROUP_MENU_Z
-                        : GROUP_BASE_Z,
+                        : isInsideGroupWithOpenDropdown
+                          ? 60000 + GROUP_BASE_Z
+                          : GROUP_BASE_Z,
                       }}
                     >
                     {group.isEmpty && (
@@ -1099,7 +1105,7 @@ export function FilterDropdown({
                 openGroupPlusId &&
                 (row.parentGroupId === openGroupPlusId || row.grandparentGroupId === openGroupPlusId);
               const rowZIndex = isInsideGroupWithOpenDropdown
-                ? baseRowZIndex + row.depth * 10 + 20000
+                ? Math.max(baseRowZIndex, 60000) + row.depth * 10
                 : baseRowZIndex + row.depth * 10;
               const hideConnectorControl =
                 showConnectorControl && isDraggingRow;
@@ -1812,7 +1818,7 @@ export function FilterDropdown({
           <span>Add condition group</span>
           <span
             className="airtable-help-icon"
-            style={{ width: 14, height: 14, marginLeft: 10 }}
+            style={{ width: 14, height: 14, marginLeft: 10, color: '#8E8F92' }}
           />
         </button>
       </div>

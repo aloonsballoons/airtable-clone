@@ -33,6 +33,7 @@ type TableMetadata = {
 export type UseTableSortParams = {
   tableId: string | null;
   viewId?: string | null;
+  isCustomView?: boolean;
   columns: Column[];
   visibleColumnIdSet: Set<string>;
   tableMetaQuery: {
@@ -313,6 +314,7 @@ export const computeSortLayout = (
 export function useTableSort({
   tableId,
   viewId,
+  isCustomView = false,
   columns,
   visibleColumnIdSet,
   tableMetaQuery,
@@ -453,13 +455,17 @@ export function useTableSort({
       if (!tableId) return;
       const normalizedNext = next ?? [];
       setSortOverride(next ?? []);
-      setTableSort.mutate({
-        tableId,
-        sort: normalizedNext,
-      });
+      // Only persist to the base table when NOT in a custom view.
+      // Custom views persist via onSortChange -> updateViewMutation instead.
+      if (!isCustomView) {
+        setTableSort.mutate({
+          tableId,
+          sort: normalizedNext,
+        });
+      }
       onSortChange?.(next);
     },
-    [tableId, setTableSort, onSortChange]
+    [tableId, isCustomView, setTableSort, onSortChange]
   );
 
   // Get sort direction labels based on column type

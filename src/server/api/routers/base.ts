@@ -1917,7 +1917,7 @@ export const baseRouter = createTRPCRouter({
 
 			await ctx.db
 				.update(tableView)
-				.set(updateData)
+				.set({ ...updateData, updatedAt: new Date() })
 				.where(eq(tableView.id, input.viewId));
 
 			return { success: true };

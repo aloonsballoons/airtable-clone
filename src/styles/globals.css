@@ -1155,52 +1155,7 @@ body {
 
 .airtable-table-tab-active {
   isolation: isolate;
-  --airtable-table-tab-track-bg: #fff0ff;
-  --airtable-table-tab-border-color: #d7cbd6;
-  --airtable-table-tab-edge-shadow: 0 0 4px rgba(97, 102, 112, 0.2);
-  --airtable-table-tab-notch-size: 6px;
-  box-shadow: var(--airtable-table-tab-edge-shadow);
   background-clip: padding-box;
-}
-
-.airtable-table-tab-active__bridge {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 3px;
-  background: #ffffff;
-  pointer-events: none;
-}
-
-.airtable-table-tab-active::before,
-.airtable-table-tab-active::after {
-  content: "";
-  position: absolute;
-  bottom: -1px;
-  width: var(--airtable-table-tab-notch-size);
-  height: var(--airtable-table-tab-notch-size);
-  background: var(--airtable-table-tab-track-bg);
-  pointer-events: none;
-  box-shadow: var(--airtable-table-tab-edge-shadow);
-}
-
-.airtable-table-tab-active::before {
-  left: calc(-1 * var(--airtable-table-tab-notch-size));
-  border-right: 0.5px solid var(--airtable-table-tab-border-color);
-  border-bottom: 0.5px solid #ffffff;
-  border-bottom-right-radius: var(--airtable-table-tab-notch-size);
-}
-
-.airtable-table-tab-active::after {
-  right: calc(-1 * var(--airtable-table-tab-notch-size));
-  border-left: 0.5px solid var(--airtable-table-tab-border-color);
-  border-bottom: 0.5px solid #ffffff;
-  border-bottom-left-radius: var(--airtable-table-tab-notch-size);
-}
-
-.airtable-table-tab-active--first::before {
-  display: none;
 }
 
 .airtable-nav-chevron {

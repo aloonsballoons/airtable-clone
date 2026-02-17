@@ -224,15 +224,35 @@ export function useTableFilter({
     effectiveFilterConfig?.connector ?? "and"
   );
 
-  // Effect: Initialize filter state from effective config when it changes (e.g., view/table switch)
+  // Tracks whether we've loaded the view's filter config for the current view.
+  // Prevents re-initialization when effectiveFilterConfig changes from our own mutations.
+  const viewDataLoadedRef = useRef<string | null>(null);
+  // Tracks the last config we sent via onFilterChange, to skip redundant calls
+  // (e.g., after initializing from server data, the debounce fires but we shouldn't
+  // re-persist the same config we just loaded).
+  const lastSentConfigRef = useRef<string>("null");
+
+  // Effect: Reset filter state on table/view switch
   useEffect(() => {
-    if (effectiveFilterConfig) {
-      setFilterItems(effectiveFilterConfig.items);
-      setFilterConnector(effectiveFilterConfig.connector);
-    } else {
-      setFilterItems([]);
-      setFilterConnector("and");
-    }
+    viewDataLoadedRef.current = null;
+    setFilterItems([]);
+    setFilterConnector("and");
+    setIsFilterMenuOpen(false);
+    // Mark "null" as already sent so the debounced empty state doesn't
+    // wipe the view's saved filter config.
+    lastSentConfigRef.current = "null";
+  }, [tableId, viewId]);
+
+  // Effect: One-time initialization when view data loads (delayed for async views)
+  useEffect(() => {
+    const viewKey = `${tableId ?? ""}:${viewId ?? ""}`;
+    if (viewDataLoadedRef.current === viewKey) return; // already initialized
+    if (!effectiveFilterConfig) return; // still loading or no config
+    viewDataLoadedRef.current = viewKey;
+    setFilterItems(effectiveFilterConfig.items);
+    setFilterConnector(effectiveFilterConfig.connector);
+    // Mark as "already sent" so the debounce doesn't re-persist this config
+    lastSentConfigRef.current = JSON.stringify(effectiveFilterConfig);
   }, [tableId, viewId, effectiveFilterConfig]);
 
   // Debounce filter items and connector for server queries (150ms delay for snappy feel)
@@ -401,26 +421,25 @@ export function useTableFilter({
     setFilterItems((prev) => [...prev, newGroup]);
   }, []);
 
-  // Effect: Call onFilterChange when debounced filter state changes
+  // Effect: Call onFilterChange when debounced filter state changes.
+  // Uses lastSentConfigRef to skip redundant calls (e.g., right after initialization
+  // from server data, or after our own mutation's optimistic update).
   useEffect(() => {
-    if (onFilterChange) {
-      const config =
-        debouncedFilterItems.length > 0
-          ? {
-              connector: debouncedFilterConnector,
-              items: debouncedFilterItems,
-            }
-          : null;
-      onFilterChange(config);
-    }
+    if (!onFilterChange) return;
+    const config =
+      debouncedFilterItems.length > 0
+        ? {
+            connector: debouncedFilterConnector,
+            items: debouncedFilterItems,
+          }
+        : null;
+    const serialized = JSON.stringify(config);
+    if (serialized === lastSentConfigRef.current) return;
+    lastSentConfigRef.current = serialized;
+    onFilterChange(config);
   }, [debouncedFilterItems, debouncedFilterConnector, onFilterChange]);
 
-  // Effect: Reset filters when table changes
-  useEffect(() => {
-    setFilterItems([]);
-    setFilterConnector("and");
-    setIsFilterMenuOpen(false);
-  }, [tableId]);
+  // Note: Filter reset on table change is handled by the initialization effect above
 
   // Effect: Close filter menu on outside click
   useEffect(() => {

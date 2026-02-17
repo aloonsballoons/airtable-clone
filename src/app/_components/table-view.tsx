@@ -213,6 +213,7 @@ export type TableViewProps = {
   setContextMenu: Dispatch<SetStateAction<ContextMenuState>>;
   activeRowCount: number; // Filtered row count for display
   totalRowCount: number; // Total unfiltered row count for max row validation
+  hasActiveFilters: boolean;
   onClearSearch?: () => void;
 };
 
@@ -258,6 +259,7 @@ export function TableView({
   setContextMenu,
   activeRowCount,
   totalRowCount,
+  hasActiveFilters,
   onClearSearch,
 }: TableViewProps) {
   // -------------------------------------------------------------------------
@@ -433,9 +435,10 @@ export function TableView({
       console.warn('Error in scroll reset logic:', error);
     }
   }, [sortedTableData]);
+  const allRowsFiltered = showRowsEmpty && hasActiveFilters && !hasSearchQuery;
   const rowCanvasHeight = Math.max(
     rowVirtualizer.getTotalSize(),
-    showRowsInitialLoading || showRowsError || showRowsEmpty
+    showRowsInitialLoading || showRowsError || (showRowsEmpty && !allRowsFiltered)
       ? ROW_HEIGHT * 5
       : 0,
   );
@@ -1202,6 +1205,7 @@ export function TableView({
             style={{
               minWidth: totalColumnsWidth,
               height: rowCanvasHeight,
+              transition: "height 0.2s ease-out",
             }}
           >
             {rowVirtualItems.map((virtualRow) => {
@@ -1235,7 +1239,7 @@ export function TableView({
             const isLastRow = virtualRow.index === rowCount - 1;
             const rowHasSelection = selectedCell?.rowId === row.id;
             const rowNumberBaseBg = rowHasSelection
-              ? "var(--airtable-hover-bg)"
+              ? "var(--airtable-cell-hover-bg)"
               : "#ffffff";
             const rowNumberHoverBg = "var(--airtable-cell-hover-bg)";
 
@@ -1258,7 +1262,7 @@ export function TableView({
                   : nameIsSelected
                   ? "#ffffff"
                   : rowHasSelection
-                  ? "var(--airtable-hover-bg)"
+                  ? "var(--airtable-cell-hover-bg)"
                   : "#ffffff";
               const nameValue =
                 nameColumn && nameColumn.type === "data"
@@ -1313,7 +1317,7 @@ export function TableView({
                         height: 33,
                         position: "sticky",
                         left: rowNumberColumnWidth,
-                        zIndex: rowHasSelection ? 15 : 10,
+                        zIndex: rowHasSelection ? 30 : 25,
                         backgroundColor: nameBaseBackground,
                       }}
                     >
@@ -1363,7 +1367,7 @@ export function TableView({
                       : isSelected
                       ? "#ffffff"
                       : rowHasSelection
-                      ? "var(--airtable-hover-bg)"
+                      ? "var(--airtable-cell-hover-bg)"
                       : "#ffffff";
                     return (
                       <div
@@ -1489,7 +1493,7 @@ export function TableView({
                       : nameIsSelected
                       ? "#ffffff"
                       : rowHasSelection
-                      ? "var(--airtable-hover-bg)"
+                      ? "var(--airtable-cell-hover-bg)"
                       : "#ffffff";
                     const nameHoverBackground = nameHasSearchMatch
                       ? "#FFF3D3"
@@ -1780,7 +1784,7 @@ export function TableView({
                     : isSelected
                     ? "#ffffff"
                     : rowHasSelection
-                    ? "var(--airtable-hover-bg)"
+                    ? "var(--airtable-cell-hover-bg)"
                     : "#ffffff";
                   const cellHoverBackground = cellHasSearchMatch
                     ? "#FFF3D3"
@@ -2084,7 +2088,7 @@ export function TableView({
               </div>
             );
           })}
-            {(showRowsError || (showRowsEmpty && !hasSearchQuery)) && (
+            {(showRowsError || (showRowsEmpty && !hasSearchQuery && !allRowsFiltered)) && (
               <div className="absolute inset-0 z-40 flex items-center justify-center px-4">
                 <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-3 text-[12px] text-[#616670] shadow-sm">
                   {showRowsError && (
@@ -2094,6 +2098,38 @@ export function TableView({
                   )}
                   {showRowsEmpty && !hasSearchQuery && <span>No rows yet.</span>}
                 </div>
+              </div>
+            )}
+            {showRowsInitialLoading && (
+              <div
+                className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center"
+                style={{ paddingTop: 80 }}
+              >
+                <span
+                  className="header-saving-spinner"
+                  aria-hidden="true"
+                  style={{ width: 28, height: 28 }}
+                >
+                  <svg width="28" height="28" viewBox="0 0 10 10" aria-hidden="true">
+                    <circle
+                      cx="5" cy="5" r="4"
+                      fill="none" stroke="#989AA1"
+                      strokeWidth="1.5" strokeLinecap="round"
+                      strokeDasharray="0.6 0.4" pathLength="3"
+                    />
+                  </svg>
+                </span>
+                <span
+                  style={{
+                    marginTop: 32,
+                    fontSize: 16,
+                    fontWeight: 400,
+                    color: "#989AA1",
+                    lineHeight: "16px",
+                  }}
+                >
+                  Loading table...
+                </span>
               </div>
             )}
           </div>
@@ -2248,6 +2284,24 @@ export function TableView({
           }}
           aria-hidden="true"
         />
+      )}
+
+      {allRowsFiltered && (
+        <div
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          style={{ zIndex: 10 }}
+        >
+          <span
+            style={{
+              fontFamily: "Inter, sans-serif",
+              fontWeight: 400,
+              fontSize: "16px",
+              color: "#989AA1",
+            }}
+          >
+            All rows are filtered
+          </span>
+        </div>
       )}
 
       {!activeColumns.length && (

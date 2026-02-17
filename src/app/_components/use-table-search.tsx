@@ -78,16 +78,29 @@ export function useTableSearch({
     setSearchValue("");
   }, []);
 
-  // Effect: Initialize search value when it changes from outside (e.g., view switch)
+  // Effect: Initialize/reset search when table, view, or initial query changes.
+  // Combines two previous effects to avoid a race condition where the reset
+  // to "" would overwrite the initialSearchQuery from the new view.
+  const prevTableIdRef = useRef(tableId);
+  const prevViewIdRef = useRef(viewId);
+  const prevInitialSearchRef = useRef(initialSearchQuery);
   useEffect(() => {
-    setSearchValue(initialSearchQuery);
-  }, [initialSearchQuery]);
+    const tableChanged = prevTableIdRef.current !== tableId;
+    const viewChanged = prevViewIdRef.current !== viewId;
+    const initialChanged = prevInitialSearchRef.current !== initialSearchQuery;
+    prevTableIdRef.current = tableId;
+    prevViewIdRef.current = viewId;
+    prevInitialSearchRef.current = initialSearchQuery;
 
-  // Effect: Reset search when table or view changes
-  useEffect(() => {
-    setSearchValue("");
-    setIsSearchMenuOpen(false);
-  }, [tableId, viewId]);
+    if (tableChanged || viewChanged) {
+      // On table/view switch, use the initial query from the new view (may be "")
+      setSearchValue(initialSearchQuery);
+      setIsSearchMenuOpen(false);
+    } else if (initialChanged) {
+      // Initial query changed without table/view change (e.g., external update)
+      setSearchValue(initialSearchQuery);
+    }
+  }, [tableId, viewId, initialSearchQuery]);
 
   // Effect: Close search menu on outside click
   useEffect(() => {

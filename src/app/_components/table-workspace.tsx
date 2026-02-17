@@ -260,17 +260,55 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     { enabled: isValidTableId(activeTableId) }
   );
   const createViewMutation = api.base.createView.useMutation({
-    onSuccess: (newView) => {
-      void viewsQuery.refetch();
-      setActiveViewId(newView.id);
+    onMutate: async ({ tableId, name }) => {
+      // Cancel any outgoing refetches so they don't overwrite our optimistic update
+      await utils.base.listViews.cancel({ tableId });
+      const previousViews = utils.base.listViews.getData({ tableId });
+
+      // Generate optimistic ID and add to cache immediately
+      const optimisticId = `temp-view-${Date.now()}`;
+      utils.base.listViews.setData({ tableId }, (old) => [
+        ...(old ?? []),
+        { id: optimisticId, name, tableId, sortConfig: null, hiddenColumnIds: [], searchQuery: null, filterConfig: null },
+      ]);
+
+      // Switch to the new view immediately with loading state
+      setIsViewSwitching(true);
+      setActiveViewId(optimisticId);
+
+      return { previousViews, optimisticId, tableId };
+    },
+    onSuccess: (newView, _variables, context) => {
+      if (context) {
+        // Replace optimistic entry with real one
+        utils.base.listViews.setData({ tableId: context.tableId }, (old) =>
+          (old ?? []).map((v) =>
+            v.id === context.optimisticId ? { ...v, ...newView } : v
+          )
+        );
+        // Switch activeViewId from optimistic to real
+        setActiveViewId(newView.id);
+      }
+    },
+    onError: (_error, variables, context) => {
+      // Roll back on error
+      if (context?.previousViews) {
+        utils.base.listViews.setData({ tableId: variables.tableId }, context.previousViews);
+      }
+      setActiveViewId("default");
+      setIsViewSwitching(false);
+    },
+    onSettled: async (_data, _error, variables) => {
+      await utils.base.listViews.invalidate({ tableId: variables.tableId });
     },
   });
 
   // Query for the active custom view's state
   const isCustomView = activeViewId !== null && activeViewId !== "default";
+  const isRealCustomView = isCustomView && isValidUUID(activeViewId);
   const activeViewQuery = api.base.getView.useQuery(
     { viewId: activeViewId! },
-    { enabled: isCustomView }
+    { enabled: isRealCustomView }
   );
 
   // Mutation to update view state
@@ -294,6 +332,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       if (context?.previous && context?.viewId) {
         utils.base.getView.setData({ viewId: context.viewId }, context.previous);
       }
+    },
+    onSettled: async (_data, _error, variables) => {
+      await utils.base.getView.invalidate({ viewId: variables.viewId });
     },
   });
 
@@ -326,18 +367,24 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [tableMetaQuery.data]);
 
   // Use view's state if viewing a custom view, otherwise use table's state
-  const effectiveHiddenColumnIds = isCustomView
+  const effectiveHiddenColumnIds = isRealCustomView
     ? (activeViewQuery.data?.hiddenColumnIds ?? [])
     : (tableMetaQuery.data?.hiddenColumnIds ?? []);
-  const effectiveSearchQuery = isCustomView
+  const effectiveSearchQuery = isRealCustomView
     ? (activeViewQuery.data?.searchQuery ?? "")
     : (tableMetaQuery.data?.searchQuery ?? "");
-  const effectiveSortConfig = isCustomView
-    ? (activeViewQuery.data?.sortConfig ?? [])
-    : (tableMetaQuery.data?.sort ?? []);
-  const effectiveFilterConfig = (isCustomView
-    ? (activeViewQuery.data?.filterConfig ?? null)
-    : null) as { connector: FilterConnector; items: FilterItem[]; } | null; // Table doesn't store filter config currently
+  const effectiveSortConfig = useMemo(
+    () => isRealCustomView
+      ? (activeViewQuery.data?.sortConfig ?? [])
+      : (tableMetaQuery.data?.sort ?? []),
+    [isRealCustomView, activeViewQuery.data?.sortConfig, tableMetaQuery.data?.sort]
+  );
+  const effectiveFilterConfig = useMemo(
+    () => (isRealCustomView
+      ? (activeViewQuery.data?.filterConfig ?? null)
+      : null) as { connector: FilterConnector; items: FilterItem[]; } | null,
+    [isRealCustomView, activeViewQuery.data?.filterConfig]
+  ); // Table doesn't store filter config currently
 
   const hiddenColumnIds = effectiveHiddenColumnIds;
   const hiddenColumnIdSet = useMemo(
@@ -381,19 +428,25 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   });
   const { searchValue, searchQuery, hasSearchQuery } = searchHook;
 
+  // Memoize onFilterChange to prevent infinite re-render loops
+  const handleFilterChange = useCallback(
+    (filterConfig: { connector: FilterConnector; items: FilterItem[] } | null) => {
+      if (isRealCustomView && activeViewId) {
+        updateViewMutation.mutate({ viewId: activeViewId, filterConfig });
+      }
+      // Note: Table-level filter persistence not yet implemented
+    },
+    [isRealCustomView, activeViewId, updateViewMutation]
+  );
+
   // Initialize filter hook
   const filterHook = useTableFilter({
     tableId: activeTableId,
     columns: activeColumns,
     hiddenColumnIdSet,
-    viewId: isCustomView ? activeViewId : null,
+    viewId: isRealCustomView ? activeViewId : null,
     effectiveFilterConfig,
-    onFilterChange: (filterConfig) => {
-      if (isCustomView && activeViewId) {
-        updateViewMutation.mutate({ viewId: activeViewId, filterConfig });
-      }
-      // Note: Table-level filter persistence not yet implemented
-    },
+    onFilterChange: handleFilterChange,
   });
   const {
     filterItems,
@@ -407,10 +460,24 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     hasActiveFilters,
   } = filterHook;
 
+  // Memoize onSortChange to avoid unnecessary re-renders
+  const handleSortChange = useCallback(
+    (sortConfig: SortConfig[] | null) => {
+      if (isRealCustomView && activeViewId) {
+        updateViewMutation.mutate({
+          viewId: activeViewId,
+          sortConfig: sortConfig ?? [],
+        });
+      }
+    },
+    [isRealCustomView, activeViewId, updateViewMutation]
+  );
+
   // Initialize table sort hook
   const tableSortHook = useTableSort({
     tableId: activeTableId,
     viewId: activeViewId,
+    isCustomView: isRealCustomView,
     columns: orderedColumns,
     visibleColumnIdSet,
     tableMetaQuery: {
@@ -419,15 +486,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         : undefined,
     },
     hasLoadedTableMetaRef,
-    onSortChange: (sortConfig) => {
-      if (isCustomView && activeViewId) {
-        updateViewMutation.mutate({
-          viewId: activeViewId,
-          sortConfig: sortConfig ?? [],
-        });
-      }
-      // Note: Table-level sort is handled by the sort hook's internal mutation
-    },
+    onSortChange: handleSortChange,
   });
 
   // Initialize hide fields hook
@@ -436,7 +495,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     hiddenColumnIdSet,
     activeTableId,
     setHiddenColumns: (params) => {
-      if (isCustomView && activeViewId) {
+      if (isRealCustomView && activeViewId) {
         updateViewMutation.mutate({
           viewId: activeViewId,
           hiddenColumnIds: params.hiddenColumnIds,
@@ -529,8 +588,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     if (!isViewSwitching) return;
 
-    // Check if view data is ready (for custom views, wait for query to finish)
-    const viewDataReady = !isCustomView ||
+    // Check if view data is ready (for real custom views, wait for query to finish)
+    const viewDataReady = !isRealCustomView ||
       (activeViewQuery.data !== undefined && !activeViewQuery.isFetching) ||
       activeViewQuery.isError;
 
@@ -544,7 +603,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     }
   }, [
     isViewSwitching,
-    isCustomView,
+    isRealCustomView,
     activeViewQuery.data,
     activeViewQuery.isFetching,
     activeViewQuery.isError,
@@ -744,12 +803,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
   });
 
+  // Use a ref for effectiveSearchQuery so the persistence effect only fires
+  // when searchQuery (debounced user input) changes, NOT when effectiveSearchQuery
+  // changes from a view load (which would cause a race that wipes saved search).
+  const effectiveSearchRef = useRef(effectiveSearchQuery);
+  effectiveSearchRef.current = effectiveSearchQuery;
+
   useEffect(() => {
     if (!activeTableId) return;
-    const currentSearch = effectiveSearchQuery;
-    if (searchQuery === currentSearch) return;
+    if (searchQuery === effectiveSearchRef.current) return;
     const timeout = window.setTimeout(() => {
-      if (isCustomView && activeViewId) {
+      if (isRealCustomView && activeViewId) {
         updateViewMutation.mutate({ viewId: activeViewId, searchQuery });
       } else {
         setTableSearch.mutate({ tableId: activeTableId, search: searchQuery });
@@ -759,9 +823,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [
     activeTableId,
     activeViewId,
-    isCustomView,
+    isRealCustomView,
     searchQuery,
-    effectiveSearchQuery,
     setTableSearch,
     updateViewMutation,
   ]);
@@ -2531,7 +2594,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
           <HeaderComponent baseName={baseName} isLoading={headerLoading} />
 
           <section className="border-t border-[#DEDEDE] bg-white">
-            <div className="h-[31px] border-b border-[#E5DAE5] bg-[#FFF0FF]">
+            <div className="relative h-[31px] bg-[#FFF0FF]">
+              <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-[1] h-px bg-[#E5DAE5]" aria-hidden="true" />
               <div className="flex h-full min-w-0 items-stretch">
                 <div className="min-w-0 flex-1 overflow-x-auto">
                   <div
@@ -2585,26 +2649,18 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             className={clsx(
                               "relative flex h-[31px] items-start whitespace-nowrap rounded-t-[3px] rounded-b-none px-[12px] pt-[8px] text-[13px] leading-[13px]",
                               isActive
-                                ? "airtable-table-tab-active z-[2] -mb-px border-b-0 bg-white text-[#1D1F24]"
-                                : "text-[#595359] hover:bg-[#EBDEEB] hover:text-[#1D1F24]",
-                              isActive && index === 0 && "airtable-table-tab-active--first"
+                                ? "airtable-table-tab-active z-[2] bg-white text-[#1D1F24]"
+                                : "text-[#595359] hover:bg-[#EBDEEB] hover:text-[#1D1F24]"
                             )}
                             style={
                               isActive
                                 ? {
                                     border: "0.5px solid #D7CBD6",
                                     borderBottom: "none",
-                                    borderLeft: index === 0 ? "none" : undefined,
                                   }
                                 : undefined
                             }
                           >
-                            {isActive && (
-                              <span
-                                className="airtable-table-tab-active__bridge"
-                                aria-hidden="true"
-                              />
-                            )}
                             {!isActive && isHovered && (
                               <span
                                 className={clsx(
@@ -2637,7 +2693,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     <span
                       className={clsx(
                         "h-[12px] w-px self-center bg-[#E5DAE5]",
-                        hoveredTableTabId === activeTables[activeTables.length - 1]?.id &&
+                        (hoveredTableTabId === activeTables[activeTables.length - 1]?.id ||
+                          activeTableId === activeTables[activeTables.length - 1]?.id) &&
                           "opacity-0"
                       )}
                       aria-hidden="true"
@@ -2964,7 +3021,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     aria-hidden="true"
                     style={{
                       position: "absolute",
-                      left: 551,
+                      left: 562,
                       top: 343,
                       width: 28,
                       height: 28,
@@ -2993,7 +3050,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     className={inter.className}
                     style={{
                       position: "absolute",
-                      left: 496,
+                      left: 507,
                       top: 403,
                       fontSize: 16,
                       fontWeight: 400,
@@ -3018,7 +3075,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     aria-hidden="true"
                     style={{
                       position: "absolute",
-                      left: 551,
+                      left: 562,
                       top: 343,
                       width: 28,
                       height: 28,
@@ -3047,7 +3104,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     className={inter.className}
                     style={{
                       position: "absolute",
-                      left: 496,
+                      left: 507,
                       top: 403,
                       fontSize: 16,
                       fontWeight: 400,
@@ -3106,6 +3163,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     setContextMenu={setContextMenu}
                     activeRowCount={activeRowCount}
                     totalRowCount={totalRowCount}
+                    hasActiveFilters={hasActiveFilters}
                     onClearSearch={searchHook.clearSearch}
                   />
                 </div>
