@@ -624,7 +624,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     isValidTableId(activeTableId) ? getRowsQueryKey(activeTableId) : skipToken,
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-      placeholderData: (previousData) => previousData,
+      // During view switches, disable placeholderData so the query starts fresh
+      // without leaking filtered/sorted data from the previous view.
+      placeholderData: isViewSwitching ? undefined : (previousData) => previousData,
       staleTime: 10_000,
     }
   );
@@ -686,6 +688,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [utils.base.getView, hideFieldsHook, filterHook, tableSortHook, searchHook]);
 
   // Clear view switching state once data is loaded
+  // Track the query key fingerprint (filterInput + searchQuery) so the effect
+  // re-fires when hooks process the new view config and update the rowsQuery key.
+  const rowsQueryKeyFingerprint = useMemo(
+    () => JSON.stringify({ f: filterInput ?? null, s: searchQuery }),
+    [filterInput, searchQuery]
+  );
   useEffect(() => {
     if (!isViewSwitching) {
       viewDataReadyPassRef.current = 0;
@@ -712,13 +720,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     // still reflects the OLD view's params, so isFetching may be false and
     // placeholderData makes pages[0] truthy — causing a premature clear.
     // Skip the first pass to let hooks absorb the new effective config.
+    // Including rowsQueryKeyFingerprint in deps ensures this effect re-fires
+    // when hooks update filterInput/searchQuery (advancing passRef past 1).
     viewDataReadyPassRef.current += 1;
     if (viewDataReadyPassRef.current < 2) return;
 
-    // Check if rows data is ready - just need the first page to be available
-    // and rows must not be actively fetching (ensures we have fresh data for new view)
+    // Check if rows data is ready - must have real data (not placeholder from
+    // previous query key) and not be actively fetching.
     const rowsDataReady =
-      (rowsQuery.data?.pages?.[0] !== undefined && !rowsQuery.isFetching) ||
+      (rowsQuery.data?.pages?.[0] !== undefined &&
+        !rowsQuery.isFetching &&
+        !rowsQuery.isPlaceholderData) ||
       rowsQuery.isError;
 
     if (rowsDataReady) {
@@ -734,17 +746,29 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     rowsQuery.data?.pages,
     rowsQuery.isFetching,
     rowsQuery.isError,
+    rowsQuery.isPlaceholderData,
+    rowsQueryKeyFingerprint,
   ]);
 
-  // Fallback timeout to clear loading state after 3s max
+  // Fallback: clear loading state if stuck, but only when data is actually ready.
+  // Uses a ref so the interval callback always reads current state.
+  const viewSwitchDataReadyRef = useRef(false);
+  viewSwitchDataReadyRef.current =
+    !rowsQuery.isFetching && !rowsQuery.isPlaceholderData &&
+    rowsQuery.data?.pages?.[0] !== undefined;
   useEffect(() => {
     if (!isViewSwitching) return;
 
-    const timeout = setTimeout(() => {
-      setIsViewSwitching(false);
-    }, 3000);
+    // Poll every 200ms; only clear when data is genuinely ready.
+    // Hard cap at 5s to never leave the user stuck.
+    const start = Date.now();
+    const interval = setInterval(() => {
+      if (viewSwitchDataReadyRef.current || Date.now() - start > 5000) {
+        setIsViewSwitching(false);
+      }
+    }, 200);
 
-    return () => clearTimeout(timeout);
+    return () => clearInterval(interval);
   }, [isViewSwitching]);
 
   // Reset to default view when switching tables
