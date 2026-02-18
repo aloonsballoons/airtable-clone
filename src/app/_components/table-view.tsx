@@ -285,6 +285,7 @@ export function TableView({
   const focusTokenRef = useRef(0);
   const prefetchingRowsRef = useRef(false);
   const isAddColumnMenuOpenRef = useRef(isAddColumnMenuOpen);
+  const lastScrollPrefetchRef = useRef({ start: -1, end: -1 });
 
   // -------------------------------------------------------------------------
   // Computed values
@@ -1255,6 +1256,23 @@ export function TableView({
             if (gridOverlayRef.current) {
               const yOffset = -(el.scrollTop % ROW_HEIGHT);
               gridOverlayRef.current.style.backgroundPositionY = `${yOffset}px`;
+            }
+
+            // Fire sparse page prefetch directly from the scroll event for
+            // minimum latency.  This runs synchronously during scroll, before
+            // the React render cycle, giving fetches an extra frame head start.
+            const scrollTop = el.scrollTop;
+            const clientHeight = el.clientHeight;
+            const firstVisibleRow = Math.floor(scrollTop / ROW_HEIGHT);
+            const lastVisibleRow = Math.ceil((scrollTop + clientHeight) / ROW_HEIGHT);
+            const bufferSize = ROW_VIRTUAL_OVERSCAN * 4;
+            const prefetchStart = Math.max(0, firstVisibleRow - bufferSize);
+            const prefetchEnd = Math.min(activeRowCount - 1, lastVisibleRow + bufferSize);
+            const last = lastScrollPrefetchRef.current;
+            // Only dispatch when the range shifts significantly (≥100 rows)
+            if (Math.abs(prefetchStart - last.start) >= 100 || Math.abs(prefetchEnd - last.end) >= 100) {
+              lastScrollPrefetchRef.current = { start: prefetchStart, end: prefetchEnd };
+              onVisibleRangeChange(prefetchStart, prefetchEnd);
             }
           }}
         >

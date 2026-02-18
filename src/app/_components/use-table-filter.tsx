@@ -3,7 +3,8 @@ import type { RefObject, Dispatch, SetStateAction } from "react";
 import type { RouterInputs } from "~/trpc/react";
 
 // Custom debounce hook for filter input
-function useDebounced<T>(value: T, delay: number): T {
+// Returns [debouncedValue, setImmediate] – call setImmediate(val) to bypass debounce.
+function useDebounced<T>(value: T, delay: number): [T, Dispatch<SetStateAction<T>>] {
   const [debouncedValue, setDebouncedValue] = useState<T>(value);
 
   useEffect(() => {
@@ -16,7 +17,7 @@ function useDebounced<T>(value: T, delay: number): T {
     };
   }, [value, delay]);
 
-  return debouncedValue;
+  return [debouncedValue, setDebouncedValue];
 }
 
 // ---------------------------------------------------------------------------
@@ -237,16 +238,24 @@ export function useTableFilter({
   // re-persist the same config we just loaded).
   const lastSentConfigRef = useRef<string>("null");
 
+  // Debounce filter items and connector for server queries (50ms for fast response)
+  const [debouncedFilterItems, setDebouncedFilterItemsImmediate] = useDebounced(filterItems, 50);
+  const [debouncedFilterConnector, setDebouncedFilterConnectorImmediate] = useDebounced(filterConnector, 50);
+
   // Effect: Reset filter state on table/view switch
   useEffect(() => {
     viewDataLoadedRef.current = null;
     setFilterItems([]);
     setFilterConnector("and");
     setIsFilterMenuOpen(false);
+    // Bypass debounce: update debounced values immediately so the query key
+    // switches without waiting 50ms. This eliminates the flash of stale data.
+    setDebouncedFilterItemsImmediate([]);
+    setDebouncedFilterConnectorImmediate("and");
     // Mark "null" as already sent so the debounced empty state doesn't
     // wipe the view's saved filter config.
     lastSentConfigRef.current = "null";
-  }, [tableId, viewId]);
+  }, [tableId, viewId, setDebouncedFilterItemsImmediate, setDebouncedFilterConnectorImmediate]);
 
   // Effect: One-time initialization when view data loads (delayed for async views)
   useEffect(() => {
@@ -259,10 +268,6 @@ export function useTableFilter({
     // Mark as "already sent" so the debounce doesn't re-persist this config
     lastSentConfigRef.current = JSON.stringify(effectiveFilterConfig);
   }, [tableId, viewId, effectiveFilterConfig]);
-
-  // Debounce filter items and connector for server queries (50ms for fast response)
-  const debouncedFilterItems = useDebounced(filterItems, 50);
-  const debouncedFilterConnector = useDebounced(filterConnector, 50);
 
   // Build columnById map
   const columnById = useMemo(

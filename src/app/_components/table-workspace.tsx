@@ -2379,6 +2379,74 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     [activeTableId, rows.length, sortParam, filterInput, hasSearchQuery, searchQuery, utils],
   );
 
+  // ---------------------------------------------------------------------------
+  // Background progressive pre-fetch — gradually cache ALL sparse pages so
+  // scrolling to any position finds data ready immediately.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!activeTableId || activeRowCount <= 0) return;
+
+    const state = { cancelled: false };
+
+    const fetchAll = async () => {
+      // Let the initial data and UI settle before starting background work
+      await new Promise((r) => setTimeout(r, 1000));
+      if (state.cancelled) return;
+
+      const totalPages = Math.ceil(activeRowCount / SPARSE_PAGE_ROWS);
+      // Fetch in small parallel batches to balance speed vs server load
+      const BATCH_SIZE = 3;
+
+      for (let batchStart = 0; batchStart < totalPages && !state.cancelled; batchStart += BATCH_SIZE) {
+        const batch: Promise<void>[] = [];
+        for (let j = 0; j < BATCH_SIZE && batchStart + j < totalPages; j++) {
+          const page = batchStart + j;
+          // Skip pages already in cache or currently being fetched
+          if (sparsePagesRef.current.has(page) || sparseFetchingRef.current.has(page)) {
+            continue;
+          }
+          sparseFetchingRef.current.add(page);
+          batch.push(
+            (async () => {
+              try {
+                const result = await utils.base.getRows.fetch({
+                  tableId: activeTableId,
+                  limit: SPARSE_PAGE_ROWS,
+                  cursor: page * SPARSE_PAGE_ROWS,
+                  ...(sortParam.length > 0 ? { sort: sortParam } : {}),
+                  ...(filterInput ? { filter: filterInput } : {}),
+                  ...(hasSearchQuery ? { search: searchQuery } : {}),
+                });
+                if (!state.cancelled) {
+                  sparsePagesRef.current.set(page, result.rows);
+                  setSparseVersion((v) => v + 1);
+                }
+              } catch {
+                // Skip — will retry on demand via handleVisibleRangeChange
+              } finally {
+                sparseFetchingRef.current.delete(page);
+              }
+            })(),
+          );
+        }
+        if (batch.length > 0) {
+          await Promise.all(batch);
+        }
+        // Brief pause between batches to keep the server responsive for
+        // interactive (on-demand) fetches.
+        if (!state.cancelled) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+    };
+
+    void fetchAll();
+
+    return () => {
+      state.cancelled = true;
+    };
+  }, [activeTableId, activeRowCount, sortParam, filterInput, hasSearchQuery, searchQuery, utils]);
+
   const normalizedSearch = searchQuery.toLowerCase();
   const isSearchLoading = hasSearchQuery && rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
   const searchMatchesByRow = useMemo(() => {
@@ -3148,8 +3216,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               hideFieldsMenuRef={hideFieldsHook.hideFieldsMenuRef}
               isHideFieldsMenuOpen={hideFieldsHook.isHideFieldsMenuOpen}
               setIsHideFieldsMenuOpen={hideFieldsHook.setIsHideFieldsMenuOpen}
-              hiddenFieldCount={pendingViewName ? 0 : hideFieldsHook.hiddenFieldCount}
-              hiddenColumnIdSet={pendingViewName ? EMPTY_STRING_SET : hiddenColumnIdSet}
+              hiddenFieldCount={(pendingViewName || isViewSwitching) ? 0 : hideFieldsHook.hiddenFieldCount}
+              hiddenColumnIdSet={(pendingViewName || isViewSwitching) ? EMPTY_STRING_SET : hiddenColumnIdSet}
               hideFieldsLayout={hideFieldsHook.hideFieldsLayout}
               toggleHiddenColumn={hideFieldsHook.toggleHiddenColumn}
               hideAllColumns={hideFieldsHook.hideAllColumns}
@@ -3157,8 +3225,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               filterButtonRef={filterHook.filterButtonRef}
               isFilterMenuOpen={filterHook.isFilterMenuOpen}
               setIsFilterMenuOpen={filterHook.setIsFilterMenuOpen}
-              hasActiveFilters={pendingViewName ? false : filterHook.hasActiveFilters}
-              filteredColumnNames={pendingViewName ? EMPTY_STRING_ARRAY : filterHook.filteredColumnNames}
+              hasActiveFilters={(pendingViewName || isViewSwitching) ? false : filterHook.hasActiveFilters}
+              filteredColumnNames={(pendingViewName || isViewSwitching) ? EMPTY_STRING_ARRAY : filterHook.filteredColumnNames}
               filterMenuRef={filterHook.filterMenuRef}
               filterFieldMenuListRef={filterFieldMenuListRef}
               filterOperatorMenuListRef={filterOperatorMenuListRef}
@@ -3273,9 +3341,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               setOpenSortFieldId={tableSortHook.setOpenSortFieldId}
               isAddSortMenuOpen={tableSortHook.isAddSortMenuOpen}
               setIsAddSortMenuOpen={tableSortHook.setIsAddSortMenuOpen}
-              hasSort={pendingViewName ? false : hasSort}
-              sortRows={pendingViewName ? EMPTY_SORT_ROWS : sortRows}
-              sortedColumnIds={pendingViewName ? EMPTY_STRING_SET : sortedColumnIds}
+              hasSort={(pendingViewName || isViewSwitching) ? false : hasSort}
+              sortRows={(pendingViewName || isViewSwitching) ? EMPTY_SORT_ROWS : sortRows}
+              sortedColumnIds={(pendingViewName || isViewSwitching) ? EMPTY_STRING_SET : sortedColumnIds}
               draggingSortId={tableSortHook.draggingSortId}
               draggingSortTop={tableSortHook.draggingSortTop}
               applySorts={handleApplySorts}
