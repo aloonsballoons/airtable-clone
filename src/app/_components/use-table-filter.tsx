@@ -214,6 +214,11 @@ export function useTableFilter({
   // Refs
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
+  // Stable ref for onFilterChange so the persistence effect only fires when
+  // debounced filter data changes, not when the callback reference changes
+  // (e.g. on view switch when activeViewId updates the closure).
+  const onFilterChangeRef = useRef(onFilterChange);
+  onFilterChangeRef.current = onFilterChange;
 
   // State
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
@@ -255,9 +260,9 @@ export function useTableFilter({
     lastSentConfigRef.current = JSON.stringify(effectiveFilterConfig);
   }, [tableId, viewId, effectiveFilterConfig]);
 
-  // Debounce filter items and connector for server queries (150ms delay for snappy feel)
-  const debouncedFilterItems = useDebounced(filterItems, 150);
-  const debouncedFilterConnector = useDebounced(filterConnector, 150);
+  // Debounce filter items and connector for server queries (50ms for fast response)
+  const debouncedFilterItems = useDebounced(filterItems, 50);
+  const debouncedFilterConnector = useDebounced(filterConnector, 50);
 
   // Build columnById map
   const columnById = useMemo(
@@ -384,18 +389,28 @@ export function useTableFilter({
     return ids;
   }, [activeFilterConditions]);
 
-  // Compute filtered column names
+  // Compute filtered column names — derived from raw filterItems (not debounced/normalized)
+  // so the label reflects every column that has been selected in the filter UI, even if the
+  // condition value is not yet filled in.
   const filteredColumnNames = useMemo(() => {
     const names: string[] = [];
     const seen = new Set<string>();
-    activeFilterConditions.forEach((condition) => {
-      const column = columnById.get(condition.columnId);
-      if (!column || seen.has(column.id)) return;
-      seen.add(column.id);
-      names.push(column.name);
-    });
+    const collect = (items: FilterItem[]) => {
+      items.forEach((item) => {
+        if (item.type === "condition") {
+          if (!item.columnId) return;
+          const column = columnById.get(item.columnId);
+          if (!column || seen.has(column.id)) return;
+          seen.add(column.id);
+          names.push(column.name);
+        } else {
+          collect(item.conditions);
+        }
+      });
+    };
+    collect(filterItems);
     return names;
-  }, [activeFilterConditions, columnById]);
+  }, [filterItems, columnById]);
 
   const hasActiveFilters = activeFilterConditions.length > 0;
   const hasFilterItems = filterItems.length > 0;
@@ -424,8 +439,11 @@ export function useTableFilter({
   // Effect: Call onFilterChange when debounced filter state changes.
   // Uses lastSentConfigRef to skip redundant calls (e.g., right after initialization
   // from server data, or after our own mutation's optimistic update).
+  // Uses onFilterChangeRef (not onFilterChange directly) so this effect only fires
+  // when the actual filter data changes, not when the callback reference changes
+  // on view switch — which would otherwise persist stale filter data to the new view.
   useEffect(() => {
-    if (!onFilterChange) return;
+    if (!onFilterChangeRef.current) return;
     const config =
       debouncedFilterItems.length > 0
         ? {
@@ -436,8 +454,9 @@ export function useTableFilter({
     const serialized = JSON.stringify(config);
     if (serialized === lastSentConfigRef.current) return;
     lastSentConfigRef.current = serialized;
-    onFilterChange(config);
-  }, [debouncedFilterItems, debouncedFilterConnector, onFilterChange]);
+    onFilterChangeRef.current(config);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedFilterItems, debouncedFilterConnector]);
 
   // Note: Filter reset on table change is handled by the initialization effect above
 

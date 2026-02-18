@@ -2,7 +2,8 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import type { RefObject, Dispatch, SetStateAction } from "react";
 
 // Custom debounce hook for search input
-function useDebounced<T>(value: T, delay: number): T {
+// Returns [debouncedValue, setImmediate] – call setImmediate(val) to bypass debounce.
+function useDebounced<T>(value: T, delay: number): [T, Dispatch<SetStateAction<T>>] {
   const [debouncedValue, setDebouncedValue] = useState<T>(value);
 
   useEffect(() => {
@@ -15,7 +16,7 @@ function useDebounced<T>(value: T, delay: number): T {
     };
   }, [value, delay]);
 
-  return debouncedValue;
+  return [debouncedValue, setDebouncedValue];
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ export function useTableSearch({
   const [searchValue, setSearchValue] = useState(initialSearchQuery);
 
   // Debounce search value for server queries (150ms delay for snappy feel)
-  const debouncedSearchValue = useDebounced(searchValue, 150);
+  const [debouncedSearchValue, setDebouncedImmediate] = useDebounced(searchValue, 150);
 
   // Computed values - using debounced value to avoid query on every keystroke
   const searchQuery = useMemo(() => debouncedSearchValue.trim(), [debouncedSearchValue]);
@@ -96,11 +97,15 @@ export function useTableSearch({
       // On table/view switch, use the initial query from the new view (may be "")
       setSearchValue(initialSearchQuery);
       setIsSearchMenuOpen(false);
+      // Bypass debounce: update the debounced value immediately so the query key
+      // switches without waiting 150ms. This eliminates the flash of stale data.
+      setDebouncedImmediate(initialSearchQuery);
     } else if (initialChanged) {
       // Initial query changed without table/view change (e.g., external update)
       setSearchValue(initialSearchQuery);
+      setDebouncedImmediate(initialSearchQuery);
     }
-  }, [tableId, viewId, initialSearchQuery]);
+  }, [tableId, viewId, initialSearchQuery, setDebouncedImmediate]);
 
   // Effect: Close search menu on outside click
   useEffect(() => {

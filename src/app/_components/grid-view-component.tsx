@@ -7,6 +7,9 @@ import { useId, useRef, useState } from "react";
 import greySearchIcon from "~/assets/grey-search.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
 import greyGridViewIcon from "~/assets/grey-grid-view.svg";
+import greyStarIcon from "~/assets/grey-star.svg";
+import horizontalDotsIcon from "~/assets/horizontal-dots.svg";
+import greyDotsIcon from "~/assets/grey-dots.svg";
 import plusIcon from "~/assets/plus.svg";
 import settingsIcon from "~/assets/settings.svg";
 import { CreateViewDropdown } from "./create-view-dropdown";
@@ -184,11 +187,10 @@ export function GridViewContainer({
           const iconTop = FIRST_VIEW_ICON_TOP + index * VIEW_ROW_STRIDE;
           const hoverTop = FIRST_VIEW_HOVER_TOP + index * VIEW_ROW_STRIDE;
 
-          const isActive = activeViewId != null && activeViewId === view.id;
+          const isActive = activeViewId != null && (activeViewId === view.id || view.id === "pending-view");
           const iconTopInHover = iconTop - hoverTop;
 
           const isHovered = hoveredViewId === view.id;
-          const showGreyIcon = isActive || isHovered;
 
           return (
             <button
@@ -218,6 +220,7 @@ export function GridViewContainer({
                   backgroundColor: isActive || isHovered ? "#F2F2F2" : "transparent",
                 }}
               />
+              {/* Grid view icon – hidden on hover */}
               <span
                 className="absolute overflow-hidden rounded-[3px]"
                 style={{
@@ -226,17 +229,84 @@ export function GridViewContainer({
                   width: 16,
                   height: 15,
                   pointerEvents: "none",
+                  opacity: isHovered ? 0 : 1,
+                  transition: "opacity 0.15s ease",
                 }}
               >
                 <Image
-                  src={showGreyIcon ? greyGridViewIcon : gridViewIcon}
+                  src={isActive ? greyGridViewIcon : gridViewIcon}
                   alt=""
                   width={16}
                   height={15}
                   className="flex-shrink-0"
-                  style={{
-                    display: "block",
-                  }}
+                  style={{ display: "block" }}
+                />
+              </span>
+
+              {/* Hover icons – visible on hover */}
+              {/* grey-dots.svg (drag handle) */}
+              <span
+                className="absolute"
+                style={{
+                  left: 234,
+                  top: 9,
+                  width: 10,
+                  height: 15,
+                  pointerEvents: "none",
+                  opacity: isHovered ? 1 : 0,
+                  transition: "opacity 0.15s ease",
+                }}
+              >
+                <Image
+                  src={greyDotsIcon}
+                  alt=""
+                  width={10}
+                  height={15}
+                  style={{ display: "block" }}
+                />
+              </span>
+
+              {/* grey-star.svg */}
+              <span
+                className="absolute"
+                style={{
+                  left: 11,
+                  top: 7,
+                  width: 20.79,
+                  height: 19.55,
+                  pointerEvents: "none",
+                  opacity: isHovered ? 1 : 0,
+                  transition: "opacity 0.15s ease",
+                }}
+              >
+                <Image
+                  src={greyStarIcon}
+                  alt=""
+                  width={20.79}
+                  height={19.55}
+                  style={{ display: "block" }}
+                />
+              </span>
+
+              {/* horizontal-dots.svg (menu) */}
+              <span
+                className="absolute"
+                style={{
+                  left: 211,
+                  top: 11,
+                  width: 14.99,
+                  height: 10.71,
+                  pointerEvents: "none",
+                  opacity: isHovered ? 1 : 0,
+                  transition: "opacity 0.15s ease",
+                }}
+              >
+                <Image
+                  src={horizontalDotsIcon}
+                  alt=""
+                  width={14.99}
+                  height={10.71}
+                  style={{ display: "block" }}
                 />
               </span>
 

@@ -219,6 +219,7 @@ body {
   border-radius: 2px;
   cursor: pointer;
   padding: 0 8px;
+  transition: color 0.2s ease;
 }
 
 .airtable-search-trigger {
@@ -263,7 +264,7 @@ body {
   border-radius: 4px;
   background: var(--airtable-hover-bg);
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.2s ease, background 0.2s ease;
 }
 
 .airtable-table-feature-selection:not(.airtable-table-feature-selection--active):not(
@@ -282,7 +283,10 @@ body {
 
 .airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active):not(
     .airtable-table-feature-selection--filter-active
-  ):not(.airtable-table-feature-selection--hide-active) img {
+  ):not(.airtable-table-feature-selection--hide-active) img,
+.airtable-table-feature-selection:hover:not(.airtable-table-feature-selection--active):not(
+    .airtable-table-feature-selection--filter-active
+  ):not(.airtable-table-feature-selection--hide-active) svg {
   mix-blend-mode: multiply;
 }
 
@@ -314,7 +318,7 @@ body {
   -webkit-mask-position: center;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.2s ease;
 }
 
 .airtable-sort-white-overlay--hover {
@@ -337,11 +341,13 @@ body {
 .airtable-table-feature-selection--active::before {
   opacity: 1;
   background: var(--airtable-sort-active-bg);
+  transition: opacity 0.2s ease, background 0.2s ease;
 }
 
 .airtable-table-feature-selection--filter-active::before {
   opacity: 1;
   background: var(--airtable-filter-active-bg);
+  transition: opacity 0.2s ease, background 0.2s ease;
 }
 
 .airtable-table-feature-selection--hide-active {
@@ -351,6 +357,7 @@ body {
 .airtable-table-feature-selection--hide-active::before {
   opacity: 1;
   background: #c3ebff;
+  transition: opacity 0.2s ease, background 0.2s ease;
 }
 
 
@@ -422,15 +429,6 @@ body {
 
 .airtable-hide-fields-reorder {
   display: inline-block;
-  background-color: #8d8e92;
-  mask-image: url("../assets/reorder.svg");
-  mask-size: 100% 100%;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-image: url("../assets/reorder.svg");
-  -webkit-mask-size: 100% 100%;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
 }
 
 .airtable-filter-menu-item {
@@ -593,6 +591,7 @@ body {
 
 .airtable-sort-dropdown {
   border-radius: 3px;
+  transition: width 0.15s ease;
 }
 
 .airtable-sort-option {
@@ -642,6 +641,10 @@ body {
 }
 
 .airtable-column-icon--sorted {
+  mix-blend-mode: multiply;
+}
+
+.airtable-column-icon--search-match {
   mix-blend-mode: multiply;
 }
 
@@ -698,11 +701,6 @@ body {
   display: block;
 }
 
-.airtable-cell--selected,
-.airtable-cell--editing {
-  position: relative;
-}
-
 .airtable-row {
   --airtable-cell-base: transparent;
   --airtable-cell-hover: var(--airtable-cell-hover-bg);
@@ -715,14 +713,15 @@ body {
   contain: layout style paint;
 }
 
-.airtable-cell--selected,
-.airtable-cell--editing {
-  contain: none;
-  overflow: visible;
-}
-
 .airtable-row:hover .airtable-cell {
   background-color: var(--airtable-cell-hover, var(--airtable-cell-base, transparent));
+}
+
+.airtable-cell--selected,
+.airtable-cell--editing {
+  position: relative;
+  contain: none;
+  overflow: visible;
 }
 
 .airtable-search-highlight {
@@ -1030,7 +1029,7 @@ body {
   justify-content: center;
   transform-origin: 50% 50%;
   color: #8e8f92;
-  animation: airtable-search-spin 2s linear infinite;
+  animation: airtable-search-spin 1.3s linear infinite;
 }
 
 .airtable-filter-spinner {
@@ -1039,7 +1038,7 @@ body {
   justify-content: center;
   transform-origin: 50% 50%;
   color: #8e8f92;
-  animation: airtable-search-spin 2s linear infinite;
+  animation: airtable-search-spin 1.3s linear infinite;
 }
 
 .airtable-search-no-results {
@@ -1054,11 +1053,11 @@ body {
   0% {
     transform: rotate(0deg);
   }
-  50% {
+  65.38% {
     transform: rotate(180deg);
   }
   100% {
-    transform: rotate(1260deg);
+    transform: rotate(504deg);
   }
 }
 
@@ -1282,4 +1281,54 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
 /* Hide scrollbar for header scroll container */
 .airtable-header-scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* Row canvas — transparent so the free-table-space colour (#F7F8FC)
+   on the scroll container shows through under the add-column area.
+   Individual rows carry their own white background. */
+.airtable-row-canvas {
+  background-color: transparent;
+}
+
+/* Skeleton row — used during scrollbar dragging and for unloaded rows.
+   Contains per-column skeleton cells so column dividers persist. */
+.airtable-skeleton-row {
+  background-color: #ffffff;
+  z-index: 1;
+}
+
+/* Individual skeleton cell inside a skeleton row.
+   Shows a loading bar to indicate content is being rendered. */
+.airtable-skeleton-cell {
+  position: relative;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.airtable-skeleton-cell::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 60%;
+  max-width: 120px;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #E8E8E8 0%, #F0F0F0 50%, #E8E8E8 100%);
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes skeletonShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Ensure sticky columns always appear on top */
+.airtable-sticky-column {
+  z-index: 100 !important;
+  transform: translateZ(0);
+  will-change: transform;
+  isolation: isolate;
 }

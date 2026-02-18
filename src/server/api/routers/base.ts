@@ -423,6 +423,11 @@ export const baseRouter = createTRPCRouter({
 				with: {
 					tables: {
 						orderBy: (table, { asc }) => [asc(table.createdAt)],
+						with: {
+							views: {
+								orderBy: (view, { asc }) => [asc(view.createdAt)],
+							},
+						},
 					},
 				},
 			});
@@ -437,6 +442,10 @@ export const baseRouter = createTRPCRouter({
 				tables: found.tables.map((table) => ({
 					id: table.id,
 					name: table.name,
+					views: table.views.map((view) => ({
+						id: view.id,
+						name: view.name,
+					})),
 				})),
 			};
 		}),

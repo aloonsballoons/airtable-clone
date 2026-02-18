@@ -39,17 +39,21 @@ import attachmentsIcon from "~/assets/attachments.svg";
 import blueSearchIcon from "~/assets/blue-search.svg";
 import colourIcon from "~/assets/colour.svg";
 import filterIcon from "~/assets/filter.svg";
+import filterActiveIcon from "~/assets/filter-active.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
 import groupIcon from "~/assets/group.svg";
 import hideFieldsIcon from "~/assets/hide-fields.svg";
+import hideFieldsActiveIcon from "~/assets/hide-fields-active.svg";
 import lightArrowIcon from "~/assets/light-arrow.svg";
 import nameIcon from "~/assets/name.svg";
 import notesIcon from "~/assets/notes.svg";
 import numberIcon from "~/assets/number.svg";
 import reorderIcon from "~/assets/reorder.svg";
+import threeDotIcon from "~/assets/three-dot.svg";
 import rowHeightIcon from "~/assets/row-height.svg";
 import shareSyncIcon from "~/assets/share-and-sync.svg";
 import sortIcon from "~/assets/sort.svg";
+import sortActiveIcon from "~/assets/sort-active.svg";
 import statusIcon from "~/assets/status.svg";
 import threeLineIcon from "~/assets/three-line.svg";
 import toggleIcon from "~/assets/toggle.svg";
@@ -396,8 +400,6 @@ export function FunctionBar({
 }: FunctionBarProps) {
   const searchMaskId = useId();
   const closeMaskId = useId();
-  const filterIconMaskId = useId();
-  const hideFieldsIconMaskId = useId();
 
   // Dynamic hide fields button width
   const hideFieldsTextRef = useRef<HTMLSpanElement>(null);
@@ -426,11 +428,12 @@ export function FunctionBar({
     : "Filter";
 
   // Spacing constants for Filter button - these must be preserved in both active and inactive states
-  const FILTER_ICON_LEFT = 4; // Icon left padding from button edge (preserved)
-  const FILTER_TEXT_LEFT = 13; // Text left position (inactive state) - gap from icon left is 9px
-  const FILTER_TEXT_LEFT_ACTIVE = FILTER_TEXT_LEFT + 5; // Text left position (active state) - shifted 5px right
-  const FILTER_TEXT_ICON_GAP = FILTER_TEXT_LEFT - FILTER_ICON_LEFT; // 9px gap between icon left and text left (inactive)
-  const FILTER_RIGHT_PADDING = 17; // Right padding from text end to button edge (preserved)
+  const FILTER_ICON_LEFT = 4; // Icon left padding from button edge
+  const FILTER_TEXT_LEFT = 13; // Text left (inactive)
+  const FILTER_TEXT_LEFT_ACTIVE = 25; // Text left (active) — icon ends at ~19, gap matches hide fields (text at 25)
+  const FILTER_TEXT_ICON_GAP = FILTER_TEXT_LEFT - FILTER_ICON_LEFT; // 9px gap (inactive)
+  const FILTER_RIGHT_PADDING = 17; // Right padding (inactive)
+  const FILTER_RIGHT_PADDING_ACTIVE = 18; // Right padding (active) — matches hide fields
 
   useEffect(() => {
     if (filterTextRef.current) {
@@ -447,10 +450,11 @@ export function FunctionBar({
         setInactiveFilterTextWidth(66 - FILTER_TEXT_LEFT - FILTER_RIGHT_PADDING);
       }
       
-      // Preserve all spacing: text left position + text width + right padding
-      // Active state uses FILTER_TEXT_LEFT_ACTIVE (18px) instead of FILTER_TEXT_LEFT (13px)
-      const textLeft = hasActiveFilters ? FILTER_TEXT_LEFT_ACTIVE : FILTER_TEXT_LEFT;
-      setFilterButtonWidth(hasActiveFilters ? textLeft + textWidth + FILTER_RIGHT_PADDING : 66);
+      setFilterButtonWidth(
+        hasActiveFilters
+          ? FILTER_TEXT_LEFT_ACTIVE + textWidth + FILTER_RIGHT_PADDING_ACTIVE
+          : 66
+      );
     }
   }, [filterText, hasActiveFilters, inactiveFilterTextWidth]);
 
@@ -461,7 +465,7 @@ export function FunctionBar({
     : 0;
   
   // Filter button right edge anchor point (fixed position)
-  const FILTER_BUTTON_RIGHT_EDGE = 244;
+  const FILTER_BUTTON_RIGHT_EDGE = 246;
 
   // Dynamic sort button width
   const sortTextRef = useRef<HTMLSpanElement>(null);
@@ -473,8 +477,9 @@ export function FunctionBar({
   useEffect(() => {
     if (sortTextRef.current) {
       const textWidth = sortTextRef.current.scrollWidth;
-      // text starts at left-[10px], right padding ~17px
-      setSortButtonWidth(hasSort ? 10 + textWidth + 17 : 66);
+      // active: text at left=25, right padding 18 (matches hide fields active)
+      // inactive: fixed 66px
+      setSortButtonWidth(hasSort ? 25 + textWidth + 18 : 66);
     }
   }, [sortText, hasSort, sortRows.length]);
 
@@ -502,25 +507,25 @@ export function FunctionBar({
       <div className="relative h-full min-w-[940px] airtable-secondary-font-regular">
         <img
           alt=""
-          className="absolute left-[20px] top-[13px] h-[15px] w-[16px]"
+          className="absolute left-[20px] top-[17px] h-[15px] w-[16px]"
           src={threeLineIcon.src}
         />
         <button type="button" className="absolute left-[54px] top-0 h-full min-w-[108px]">
           <img
             alt=""
-            className="absolute left-[3px] top-[12px] h-[16px] w-[14px]"
+            className="absolute left-[3px] top-[16px] h-[15px] w-[16px]"
             src={gridViewIcon.src}
           />
           <span
             ref={gridViewNameRef}
-            className="absolute left-[27px] top-[14px] block max-w-[120px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
+            className="absolute left-[27px] top-[18px] block max-w-[120px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
             style={{ fontFamily: "Inter, sans-serif" }}
           >
             {viewName}
           </span>
           <img
             alt=""
-            className="absolute top-[18px] h-[6px] w-[10px]"
+            className="absolute top-[22px] h-[6px] w-[10px]"
             style={{ left: arrowLeft }}
             src={arrowIcon.src}
           />
@@ -543,7 +548,7 @@ export function FunctionBar({
           <div className="relative h-full w-[643px]">
             {/* ---- Hide fields ---- */}
             {(
-              <div className="absolute top-0" style={{ left: 68 - hideFieldsExpansion - filterExpansion - sortExpansion }}>
+              <div className="absolute top-0" style={{ left: 70 - hideFieldsExpansion - filterExpansion - sortExpansion, transition: "left 0.2s ease" }}>
                 <button
                 ref={hideFieldsButtonRef}
                 type="button"
@@ -554,51 +559,26 @@ export function FunctionBar({
                 )}
                 style={{
                   width: hideFieldsButtonWidth,
+                  transition: "width 0.2s ease",
                   ["--hover-left" as string]: "-4px",
-                  ["--hover-right" as string]: "-4px",
+                  ["--hover-right" as string]: hiddenFieldCount > 0 ? "10px" : "-8px",
                 } as React.CSSProperties}
                 onClick={() => setIsHideFieldsMenuOpen((prev) => !prev)}
                 aria-haspopup="menu"
                 aria-expanded={isHideFieldsMenuOpen}
               >
-                {hiddenFieldCount > 0 ? (
-                  <svg
-                    width={19}
-                    height={16}
-                    viewBox="0 0 19 16"
-                    className="absolute left-[4px] top-[5px]"
-                    aria-hidden="true"
-                  >
-                    <defs>
-                      <filter id={`${hideFieldsIconMaskId}-invert`}>
-                        <feColorMatrix
-                          type="matrix"
-                          values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
-                        />
-                      </filter>
-                      <mask id={`${hideFieldsIconMaskId}-mask`}>
-                        <image
-                          href={hideFieldsIcon.src}
-                          width="19"
-                          height="16"
-                          filter={`url(#${hideFieldsIconMaskId}-invert)`}
-                        />
-                      </mask>
-                    </defs>
-                    <rect
-                      width="19"
-                      height="16"
-                      fill="#1D1F24"
-                      mask={`url(#${hideFieldsIconMaskId}-mask)`}
-                    />
-                  </svg>
-                ) : (
-                  <img
-                    alt=""
-                    className="absolute left-[4px] top-[5px] h-[16px] w-[19px]"
-                    src={hideFieldsIcon.src}
-                  />
-                )}
+                <img
+                  alt=""
+                  className="absolute"
+                  style={{ left: 4, top: 4, width: 18, height: 16, opacity: hiddenFieldCount > 0 ? 1 : 0, transition: "opacity 0.2s ease" }}
+                  src={hideFieldsActiveIcon.src}
+                />
+                <img
+                  alt=""
+                  className="absolute left-[4px] top-[5px] h-[16px] w-[19px]"
+                  style={{ opacity: hiddenFieldCount > 0 ? 0 : 1, transition: "opacity 0.2s ease" }}
+                  src={hideFieldsIcon.src}
+                />
                 <span
                   ref={hideFieldsTextRef}
                   className={clsx(
@@ -684,14 +664,19 @@ export function FunctionBar({
                               height={HIDE_FIELDS_TOGGLE_HEIGHT}
                               rx="4"
                               fill={isHidden ? "#D9D9D9" : "#09890E"}
+                              style={{ transition: "fill 0.15s ease" }}
                             />
                             <rect
-                              x={isHidden ? 2 : 7}
+                              x={0}
                               y={2}
                               width={4}
                               height={4}
                               rx={2}
                               fill="#FFFFFF"
+                              style={{
+                                transform: `translateX(${isHidden ? 2 : 7}px)`,
+                                transition: "transform 0.15s ease",
+                              }}
                             />
                           </svg>
                           <img
@@ -714,7 +699,8 @@ export function FunctionBar({
                           >
                             {row.column.name}
                           </span>
-                          <span
+                          <img
+                            alt=""
                             className="airtable-hide-fields-reorder absolute"
                             style={{
                               left: HIDE_FIELDS_REORDER_LEFT - HIDE_FIELDS_HOVER_LEFT,
@@ -722,6 +708,7 @@ export function FunctionBar({
                               width: HIDE_FIELDS_REORDER_WIDTH,
                               height: HIDE_FIELDS_REORDER_HEIGHT,
                             }}
+                            src={threeDotIcon.src}
                             aria-hidden="true"
                           />
                         </button>
@@ -757,7 +744,7 @@ export function FunctionBar({
 
             {/* ---- Filter ---- */}
             {(
-              <div className="absolute top-0" style={{ left: filterButtonLeft }}>
+              <div className="absolute top-0" style={{ left: filterButtonLeft, transition: "left 0.2s ease" }}>
                 <button
                 ref={filterButtonRef}
                 type="button"
@@ -768,8 +755,9 @@ export function FunctionBar({
                 )}
                 style={{
                   width: filterButtonWidth,
+                  transition: "width 0.2s ease",
                   ["--hover-left" as string]: "-4px",
-                  ["--hover-right" as string]: "-4px",
+                  ["--hover-right" as string]: hasActiveFilters ? "10px" : "-4px",
                 } as React.CSSProperties}
                 onClick={() =>
                   setIsFilterMenuOpen((prev) => {
@@ -785,53 +773,26 @@ export function FunctionBar({
                 aria-haspopup="menu"
                 aria-expanded={isFilterMenuOpen}
               >
-                {hasActiveFilters ? (
-                  <svg
-                    width={18}
-                    height={12}
-                    viewBox="0 0 18 12"
-                    className="absolute top-[6px]"
-                    style={{ left: `${FILTER_ICON_LEFT}px` }}
-                    aria-hidden="true"
-                  >
-                    <defs>
-                      <filter id={`${filterIconMaskId}-invert`}>
-                        <feColorMatrix
-                          type="matrix"
-                          values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
-                        />
-                      </filter>
-                      <mask id={`${filterIconMaskId}-mask`}>
-                        <image
-                          href={filterIcon.src}
-                          width="18"
-                          height="12"
-                          filter={`url(#${filterIconMaskId}-invert)`}
-                        />
-                      </mask>
-                    </defs>
-                    <rect
-                      width="18"
-                      height="12"
-                      fill="#1D1F24"
-                      mask={`url(#${filterIconMaskId}-mask)`}
-                    />
-                  </svg>
-                ) : (
-                  <img
-                    alt=""
-                    className="absolute top-[6px] h-[12px] w-[18px]"
-                    style={{ left: `${FILTER_ICON_LEFT}px` }}
-                    src={filterIcon.src}
-                  />
-                )}
+                <img
+                  alt=""
+                  className="absolute"
+                  style={{ left: FILTER_ICON_LEFT, top: 7, width: 13.5, height: 9, opacity: hasActiveFilters ? 1 : 0, transition: "opacity 0.2s ease" }}
+                  src={filterActiveIcon.src}
+                />
+                <img
+                  alt=""
+                  className="absolute top-[6px] h-[12px] w-[18px]"
+                  style={{ left: `${FILTER_ICON_LEFT}px`, opacity: hasActiveFilters ? 0 : 1, transition: "opacity 0.2s ease" }}
+                  src={filterIcon.src}
+                />
                 <span
                   ref={filterTextRef}
                   className="absolute top-[5px] block h-[16px] text-[13px] leading-[16px]"
-                  style={{
-                    left: `${hasActiveFilters ? FILTER_TEXT_LEFT_ACTIVE : FILTER_TEXT_LEFT}px`,
-                    ...(hasActiveFilters ? { whiteSpace: "nowrap" } : { width: "60px" }),
-                  }}
+                  style={
+                    hasActiveFilters
+                      ? { left: FILTER_TEXT_LEFT_ACTIVE, whiteSpace: "nowrap" }
+                      : { left: FILTER_TEXT_LEFT, width: "60px" }
+                  }
                 >
                   {filterText}
                 </span>
@@ -950,7 +911,7 @@ export function FunctionBar({
               <button
                 type="button"
                 className="absolute top-[10px] h-[26px] w-[60px] text-left"
-                style={{ left: 261 - sortExpansion }}
+                style={{ left: 256 - sortExpansion, transition: "left 0.2s ease" }}
               >
                 <img alt="" className="absolute left-0 top-[6px] h-[14px] w-[16px]" src={groupIcon.src} />
                 <span className="absolute left-[20px] top-[5px] block h-[16px] w-[40px] text-[13px] leading-[16px]">
@@ -961,7 +922,7 @@ export function FunctionBar({
 
             {/* ---- Sort ---- */}
             {(
-              <div className="absolute top-0" style={{ left: 338 - sortExpansion }}>
+              <div className="absolute top-0" style={{ left: 338 - sortExpansion, transition: "left 0.2s ease" }}>
                 <button
                 ref={sortButtonRef}
                 type="button"
@@ -972,8 +933,9 @@ export function FunctionBar({
                 )}
                 style={{
                   width: sortButtonWidth,
+                  transition: "width 0.2s ease",
                   ["--hover-left" as string]: "-4px",
-                  ["--hover-right" as string]: "-4px",
+                  ["--hover-right" as string]: hasSort ? "10px" : "7px",
                 } as React.CSSProperties}
                 onClick={() =>
                   setIsSortMenuOpen((prev) => {
@@ -989,33 +951,27 @@ export function FunctionBar({
                 aria-haspopup="menu"
                 aria-expanded={isSortMenuOpen}
               >
-                <span className="absolute left-[4px] top-[6px] inline-flex h-[14px] w-[13px]">
+                <img
+                  alt=""
+                  className="absolute"
+                  style={{ left: 6, top: 6, width: 12, height: 13, opacity: hasSort ? 1 : 0, transition: "opacity 0.2s ease" }}
+                  src={sortActiveIcon.src}
+                />
+                <span className="absolute left-[4px] top-[6px] inline-flex h-[14px] w-[13px]" style={{ opacity: hasSort ? 0 : 1, transition: "opacity 0.2s ease" }}>
                   <img
                     alt=""
-                    className={clsx(
-                      "h-[14px] w-[13px]",
-                      hasSort && "airtable-sort-icon--active"
-                    )}
+                    className="h-[14px] w-[13px]"
                     src={sortIcon.src}
                   />
                   <span
                     className="airtable-sort-white-overlay airtable-sort-white-overlay--hover"
                     aria-hidden="true"
                   />
-                  {hasSort && (
-                    <>
-                      <span
-                        className="airtable-sort-white-overlay airtable-sort-white-overlay--active"
-                        aria-hidden="true"
-                      />
-                      <span className="airtable-sort-arrow-overlay" aria-hidden="true" />
-                    </>
-                  )}
                 </span>
                 <span
                   ref={sortTextRef}
-                  className="absolute left-[10px] top-[5px] block h-[16px] text-[13px] leading-[16px]"
-                  style={hasSort ? { whiteSpace: "nowrap" } : { width: "52px" }}
+                  className="absolute top-[5px] block h-[16px] text-[13px] leading-[16px]"
+                  style={hasSort ? { left: 25, whiteSpace: "nowrap" } : { left: 10, width: "52px" }}
                 >
                   {sortText}
                 </span>
@@ -1063,7 +1019,7 @@ export function FunctionBar({
                             sortItem.columnId
                           );
                           const removeTop = (sortLayout.sortFieldHeight - sortLayout.sortRemoveSize) / 2;
-                          const reorderTop = (sortLayout.sortFieldHeight - 13) / 2;
+                          const reorderTop = 7.5;
                           const isFieldMenuOpen =
                             openSortFieldId === sortItem.columnId;
                           const isDirectionMenuOpen =
@@ -1265,21 +1221,23 @@ export function FunctionBar({
                               >
                                 <img alt="" className="h-[12px] w-[12px]" src={xIcon.src} />
                               </button>
-                              <button
-                                type="button"
-                                className="airtable-sort-reorder absolute"
-                                style={{ left: sortLayout.sortReorderLeft, top: reorderTop }}
-                                onMouseDown={(event) =>
-                                  handleSortDragStart(event, sortItem.columnId)
-                                }
-                                aria-label="Reorder sort"
-                              >
-                                <img
-                                  alt=""
-                                  style={{ width: sortLayout.sortReorderWidth, height: 13 }}
-                                  src={reorderIcon.src}
-                                />
-                              </button>
+                              {sortRows.length > 1 && (
+                                <button
+                                  type="button"
+                                  className="airtable-sort-reorder absolute"
+                                  style={{ left: sortLayout.sortReorderLeft, top: reorderTop }}
+                                  onMouseDown={(event) =>
+                                    handleSortDragStart(event, sortItem.columnId)
+                                  }
+                                  aria-label="Reorder sort"
+                                >
+                                  <img
+                                    alt=""
+                                    style={{ width: sortLayout.sortReorderWidth, height: 13 }}
+                                    src={threeDotIcon.src}
+                                  />
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -1617,9 +1575,9 @@ export function FunctionBar({
                     r="6.5"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="1"
+                    strokeWidth="2"
                     strokeLinecap="round"
-                    strokeDasharray="0.5 0.5"
+                    strokeDasharray="0.6 0.4"
                     pathLength="3"
                   />
                 </svg>

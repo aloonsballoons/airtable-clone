@@ -60,8 +60,8 @@ const DEFAULT_COLUMN_WIDTH = 181;
 const ADD_COLUMN_WIDTH = 93;
 const LONG_TEXT_HEIGHT = 142;
 const ROW_VIRTUAL_OVERSCAN = 80;
-const ROW_SCROLLING_RESET_DELAY_MS = 500;
-const PAGE_ROWS = 1000;
+const ROW_SCROLLING_RESET_DELAY_MS = 80;
+const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
@@ -351,7 +351,12 @@ export function TableView({
   );
 
   const rowCount = sortedTableData.length;
-  const showRowLoader = rowsHasNextPage && !hasSearchQuery;
+  // Use the server-reported total filtered count so the scroll area reflects
+  // the full dataset, not just the currently loaded rows. This prevents the
+  // scrollbar from acting as if the loaded page is the entire table.
+  const virtualizerCount = rowsHasNextPage
+    ? Math.max(rowCount + 1, activeRowCount)
+    : rowCount;
   const addRowDisabled = !activeTableId || totalRowCount >= MAX_ROWS;
   const canDeleteColumn = activeColumns.length > 1;
   const canDeleteRow = activeRowCount > 1;
@@ -379,11 +384,11 @@ export function TableView({
   // Virtualizers
   // -------------------------------------------------------------------------
   const rowVirtualizer = useVirtualizer({
-    count: showRowLoader ? rowCount + 1 : rowCount,
+    count: virtualizerCount,
     getScrollElement: () => parentRef.current,
     estimateSize: estimateRowSize,
     overscan: ROW_VIRTUAL_OVERSCAN,
-    getItemKey: (index) => sortedTableData[index]?.id ?? `loader-${index}`,
+    getItemKey: (index) => sortedTableData[index]?.id ?? `placeholder-${index}`,
     isScrollingResetDelay: ROW_SCROLLING_RESET_DELAY_MS,
     useAnimationFrameWithResizeObserver: true,
   });
@@ -392,7 +397,6 @@ export function TableView({
 
   // Use virtual items directly - no caching to avoid stale data during sorts/filters
   const rowVirtualItems = virtualItems;
-  const isScrolling = rowVirtualizer.isScrolling;
 
   // Track when sortedTableData changes significantly and reset scroll if needed
   const lastDataSignatureRef = useRef<string | null>(null);
@@ -435,13 +439,15 @@ export function TableView({
       console.warn('Error in scroll reset logic:', error);
     }
   }, [sortedTableData]);
-  const allRowsFiltered = showRowsEmpty && hasActiveFilters && !hasSearchQuery;
-  const rowCanvasHeight = Math.max(
-    rowVirtualizer.getTotalSize(),
-    showRowsInitialLoading || showRowsError || (showRowsEmpty && !allRowsFiltered)
-      ? ROW_HEIGHT * 5
-      : 0,
-  );
+  const allRowsFiltered = showRowsEmpty && hasActiveFilters;
+  const rowCanvasHeight = allRowsFiltered
+    ? 0
+    : Math.max(
+        rowVirtualizer.getTotalSize(),
+        showRowsInitialLoading || showRowsError || showRowsEmpty
+          ? ROW_HEIGHT * 5
+          : 0,
+      );
   const rowVirtualRange = useMemo(() => {
     if (!rowVirtualItems.length) return { start: 0, end: 0 };
     return {
@@ -508,6 +514,52 @@ export function TableView({
     0,
     totalScrollableWidth - lastScrollableEnd,
   );
+
+  // Column divider positions (right edge of each data column, excluding
+  // row-number, Name, and add-column — those have their own treatment).
+  // Used to draw persistent vertical grid lines on the row canvas background.
+  const columnDividerPositions = useMemo(() => {
+    const positions: number[] = [];
+    let x = 0;
+    for (const col of columnsWithAdd) {
+      x += col.width;
+      // Skip row-number (no divider) and add column (no divider)
+      if (col.type === "row-number" || col.type === "add") continue;
+      // Skip Name column (has its own full-height divider)
+      if (col.type === "data" && col.name === "Name") continue;
+      positions.push(x);
+    }
+    return positions;
+  }, [columnsWithAdd]);
+
+  // CSS background that paints both horizontal row lines AND vertical column
+  // dividers on the row canvas. This ensures grid lines persist during fast
+  // scrolling even when virtual row divs haven't painted yet.
+  const rowCanvasBackground = useMemo(() => {
+    const dataWidth = totalColumnsWidth - addColumnWidth;
+    // Horizontal row lines (repeating)
+    const hGradient = `repeating-linear-gradient(to bottom, #ffffff 0px, #ffffff ${ROW_HEIGHT - 1}px, #DDE1E3 ${ROW_HEIGHT - 1}px, #DDE1E3 ${ROW_HEIGHT}px)`;
+    // Vertical column dividers — each is a 1px-wide gradient at a fixed x position
+    const vGradients = columnDividerPositions.map(
+      (x) =>
+        `linear-gradient(to right, transparent ${x - 1}px, #DDE1E3 ${x - 1}px, #DDE1E3 ${x}px, transparent ${x}px)`,
+    );
+    return {
+      backgroundImage: [hGradient, ...vGradients].join(", "),
+      backgroundSize: [
+        `${dataWidth}px ${ROW_HEIGHT}px`,
+        ...vGradients.map(() => `${dataWidth}px 100%`),
+      ].join(", "),
+      backgroundRepeat: [
+        "repeat-y",
+        ...vGradients.map(() => "repeat-y"),
+      ].join(", "),
+      backgroundPosition: [
+        "0 0",
+        ...vGradients.map(() => "0 0"),
+      ].join(", "),
+    };
+  }, [totalColumnsWidth, addColumnWidth, columnDividerPositions]);
 
   // -------------------------------------------------------------------------
   // Border helpers
@@ -866,6 +918,7 @@ export function TableView({
     columnVirtualizer.measure();
   }, [columnVirtualizer, columnWidths, columnsWithAdd.length]);
 
+
   useEffect(() => {
     const focusTarget = editingCell ?? selectedCell;
     if (!focusTarget) {
@@ -912,18 +965,25 @@ export function TableView({
     if (rowsIsFetchingNextPage) return;
     if (prefetchingRowsRef.current) return;
 
-    const viewportRows = Math.max(
-      1,
-      Math.ceil((parentRef.current?.clientHeight ?? 0) / ROW_HEIGHT),
-    );
-    const minRowsAhead = Math.max(ROW_PREFETCH_AHEAD, viewportRows * 12);
     const rowsRemaining = rowCount - lastVirtualRowIndex - 1;
 
-    if (rowsRemaining > minRowsAhead) return;
+    if (rowsRemaining > ROW_PREFETCH_AHEAD) return;
 
     prefetchingRowsRef.current = true;
 
-    void rowsFetchNextPage().finally(() => {
+    // Burst-fetch: when the user has scrolled beyond loaded data, fetch
+    // multiple pages back-to-back so data catches up faster.
+    const pagesDeficit = rowsRemaining <= 0
+      ? Math.min(10, Math.ceil((lastVirtualRowIndex - rowCount + 1) / PAGE_ROWS) + 2)
+      : 1;
+
+    const fetchBurst = async () => {
+      for (let i = 0; i < pagesDeficit; i++) {
+        await rowsFetchNextPage();
+      }
+    };
+
+    void fetchBurst().finally(() => {
       prefetchingRowsRef.current = false;
     });
   }, [
@@ -956,7 +1016,7 @@ export function TableView({
           >
             {rowNumberColumn && (
               <div
-                className="relative flex h-[33px] items-center px-2 text-[12px] font-normal text-[#606570]"
+                className="airtable-sticky-column relative flex h-[33px] items-center px-2 text-[12px] font-normal text-[#606570]"
                 style={{
                   borderTop: "none",
                   borderBottom: "0.5px solid #CBCBCB",
@@ -969,8 +1029,8 @@ export function TableView({
                   backgroundColor: "#ffffff",
                   position: "sticky",
                   left: 0,
-                  zIndex: 35,
-                  isolation: "isolate",
+                  zIndex: 100,
+                  transform: "translateZ(0)",
                 }}
                 aria-hidden="true"
               >
@@ -979,7 +1039,7 @@ export function TableView({
             )}
             {nameColumn && (
               <div
-                className="airtable-header-cell relative flex h-[33px] items-center gap-2 px-2"
+                className="airtable-sticky-column airtable-header-cell relative flex h-[33px] items-center gap-2 px-2"
                 style={{
                   ...headerCellBorder(nameColumn, true),
                   width: nameColumnWidth,
@@ -995,8 +1055,8 @@ export function TableView({
                     : "#ffffff",
                   position: "sticky",
                   left: rowNumberColumnWidth,
-                  zIndex: 30,
-                  isolation: "isolate",
+                  zIndex: 90,
+                  transform: "translateZ(0)",
                 }}
                 onContextMenu={(event) =>
                   handleOpenContextMenu(
@@ -1200,222 +1260,102 @@ export function TableView({
             if (headerScrollRef.current) {
               headerScrollRef.current.scrollLeft = e.currentTarget.scrollLeft;
             }
+            // Expose scroll position as CSS variable for clip-path on selected cells
+            e.currentTarget.style.setProperty("--scroll-left", `${e.currentTarget.scrollLeft}px`);
           }}
         >
           <div
-            className="relative"
+            className="airtable-row-canvas relative"
             style={{
+              width: totalColumnsWidth,
               minWidth: totalColumnsWidth,
               height: rowCanvasHeight,
-              transition: "height 0.2s ease-out",
+              // Grid pattern: horizontal row lines + vertical column dividers.
+              // Ensures that during fast scrolling, any area not covered by a
+              // virtual row div still shows the full grid structure.
+              ...rowCanvasBackground,
             }}
           >
             {rowVirtualItems.map((virtualRow) => {
-              // Skip rendering if index is out of bounds (can happen during data transitions)
-              if (virtualRow.index >= rowCount) {
-                return null;
-              }
-
-            const row = sortedTableData[virtualRow.index];
-              if (!row) {
+              // Rows beyond loaded data — skeleton row with column structure
+              if (virtualRow.index >= rowCount || !sortedTableData[virtualRow.index]) {
                 return (
                   <div
-                    key={`loader-${virtualRow.index}`}
-                    className="absolute left-0 right-0 flex items-center px-3 text-[12px] text-[#616670]"
+                    key={virtualRow.key}
+                    className="airtable-skeleton-row absolute left-0 flex pointer-events-none"
                     style={{
                       transform: `translate3d(0, ${virtualRow.start}px, 0)`,
-                      height: `${virtualRow.size}px`,
-                      width: totalColumnsWidth,
+                      height: ROW_HEIGHT,
+                      width: totalColumnsWidth - addColumnWidth,
                     }}
                   >
-                    {rowsHasNextPage
-                      ? "Loading more rows..."
-                      : ""}
+                    {rowNumberColumn && (
+                      <div
+                        className="airtable-skeleton-cell"
+                        style={{
+                          width: rowNumberColumnWidth,
+                          minWidth: rowNumberColumnWidth,
+                          height: ROW_HEIGHT,
+                          backgroundColor: "#ffffff",
+                          borderBottom: "1px solid #DDE1E3",
+                        }}
+                      />
+                    )}
+                    {nameColumn && (
+                      <div
+                        className="airtable-skeleton-cell"
+                        style={{
+                          width: nameColumnWidth,
+                          minWidth: nameColumnWidth,
+                          height: ROW_HEIGHT,
+                          backgroundColor: "#ffffff",
+                          borderBottom: "1px solid #DDE1E3",
+                        }}
+                      />
+                    )}
+                    {columnsWithAdd.map((col) => {
+                      if (col.type !== "data" || col.name === "Name") return null;
+                      return (
+                        <div
+                          key={col.id}
+                          className="airtable-skeleton-cell"
+                          style={{
+                            width: col.width,
+                            minWidth: col.width,
+                            height: ROW_HEIGHT,
+                            backgroundColor: "#ffffff",
+                            borderRight: "1px solid #DDE1E3",
+                            borderBottom: "1px solid #DDE1E3",
+                          }}
+                        />
+                      );
+                    })}
                   </div>
                 );
               }
 
+            const row = sortedTableData[virtualRow.index]!;
+
             const rowSearchMatches = hasSearchQuery
               ? searchMatchesByRow.get(row.id)
               : null;
-            const isLastRow = virtualRow.index === rowCount - 1;
+            const isLastRow = virtualRow.index === rowCount - 1 && !rowsHasNextPage;
             const rowHasSelection = selectedCell?.rowId === row.id;
             const rowNumberBaseBg = rowHasSelection
               ? "var(--airtable-cell-hover-bg)"
               : "#ffffff";
             const rowNumberHoverBg = "var(--airtable-cell-hover-bg)";
 
-            if (isScrolling) {
-              const nameHasSearchMatch =
-                Boolean(nameColumn && hasSearchQuery && rowSearchMatches?.has(nameColumn.id));
-              const nameIsSelected =
-                Boolean(
-                  nameColumn &&
-                    selectedCell?.rowId === row.id &&
-                    selectedCell?.columnId === nameColumn.id
-                );
-              const nameBaseBackground =
-                nameColumn && nameHasSearchMatch
-                  ? "#FFF3D3"
-                  : nameColumn && filteredColumnIds.has(nameColumn.id)
-                  ? "#E2F1E3"
-                  : nameColumn && sortedColumnIds.has(nameColumn.id)
-                  ? "var(--airtable-sort-column-bg)"
-                  : nameIsSelected
-                  ? "#ffffff"
-                  : rowHasSelection
-                  ? "var(--airtable-cell-hover-bg)"
-                  : "#ffffff";
-              const nameValue =
-                nameColumn && nameColumn.type === "data"
-                  ? cellEdits[row.id]?.[nameColumn.id] ?? row[nameColumn.id] ?? ""
-                  : "";
-
-              return (
-                <div
-                  key={row.id}
-                  className="airtable-row absolute left-0 right-0 flex text-[13px] text-[#1d1f24] pointer-events-none"
-                  style={{
-                    transform: `translate3d(0, ${virtualRow.start}px, 0)`,
-                    height: `${virtualRow.size}px`,
-                    width: totalColumnsWidth,
-                    zIndex: rowHasSelection ? 5 : 1,
-                  }}
-                >
-                  {rowNumberColumn && (
-                    <div
-                      className="airtable-cell flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
-                      style={{
-                        borderBottom: isLastRow ? "none" : "1px solid #DDE1E3",
-                        borderLeft: "none",
-                        borderRight: "none",
-                        width: rowNumberColumnWidth,
-                        minWidth: rowNumberColumnWidth,
-                        maxWidth: rowNumberColumnWidth,
-                        flex: "0 0 auto",
-                        height: 33,
-                        position: "sticky",
-                        left: 0,
-                        zIndex: rowHasSelection ? 20 : 15,
-                        isolation: "isolate",
-                        ["--airtable-cell-base" as string]: rowNumberBaseBg,
-                        ["--airtable-cell-hover" as string]: rowNumberHoverBg,
-                      }}
-                      aria-hidden="true"
-                    >
-                      <span className="block w-[17px] text-center">
-                        {virtualRow.index + 1}
-                      </span>
-                    </div>
-                  )}
-                  {nameColumn && nameColumn.type === "data" && (
-                    <div
-                      className="airtable-cell flex items-center px-2 text-[13px] text-[#1d1f24]"
-                      style={{
-                        ...bodyCellBorder(nameColumn, true, isLastRow),
-                        width: nameColumnWidth,
-                        minWidth: nameColumnWidth,
-                        maxWidth: nameColumnWidth,
-                        flex: "0 0 auto",
-                        height: 33,
-                        position: "sticky",
-                        left: rowNumberColumnWidth,
-                        zIndex: rowHasSelection ? 30 : 25,
-                        isolation: "isolate",
-                        backgroundColor: nameBaseBackground,
-                      }}
-                    >
-                      <span className="block w-full truncate">
-                        {nameHasSearchMatch
-                          ? renderSearchHighlight(nameValue, searchQuery)
-                          : nameValue}
-                      </span>
-                    </div>
-                  )}
-                  {scrollablePaddingLeft > 0 && (
-                    <div style={{ width: scrollablePaddingLeft }} />
-                  )}
-                  {scrollableVirtualColumns.map((virtualColumn) => {
-                    const column = columnsWithAdd[virtualColumn.index];
-                    if (!column) return null;
-                    if (column.type === "add") {
-                      return (
-                        <div
-                          key={`${row.id}-${column.id}-scrolling`}
-                          style={{
-                            width: virtualColumn.size,
-                            flex: "0 0 auto",
-                          }}
-                          aria-hidden="true"
-                        />
-                      );
-                    }
-                    if (column.type !== "data") {
-                      return null;
-                    }
-                    const value = cellEdits[row.id]?.[column.id] ?? row[column.id] ?? "";
-                    const isNumber = column.fieldType === "number";
-                    const isSelected =
-                      selectedCell?.rowId === row.id &&
-                      selectedCell?.columnId === column.id;
-                    const isSortedColumn = sortedColumnIds.has(column.id);
-                    const isFilteredColumn = filteredColumnIds.has(column.id);
-                    const cellHasSearchMatch =
-                      hasSearchQuery && rowSearchMatches?.has(column.id);
-                    const cellBaseBackground = cellHasSearchMatch
-                      ? "#FFF3D3"
-                      : isFilteredColumn
-                      ? "#E2F1E3"
-                      : isSortedColumn
-                      ? "var(--airtable-sort-column-bg)"
-                      : isSelected
-                      ? "#ffffff"
-                      : rowHasSelection
-                      ? "var(--airtable-cell-hover-bg)"
-                      : "#ffffff";
-                    return (
-                      <div
-                        key={`${row.id}-${column.id}-scrolling`}
-                        className="airtable-cell flex items-center px-2 text-[13px] text-[#1d1f24]"
-                        style={{
-                          ...bodyCellBorder(column, false, isLastRow),
-                          width: virtualColumn.size,
-                          flex: "0 0 auto",
-                          height: 33,
-                          backgroundColor: cellBaseBackground,
-                        }}
-                      >
-                        <span
-                          className="block w-full truncate"
-                          style={{
-                            textAlign: isNumber ? "right" : "left",
-                          }}
-                        >
-                          {cellHasSearchMatch
-                            ? renderSearchHighlight(value, searchQuery)
-                            : value}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {scrollablePaddingRight > 0 && (
-                    <div style={{ width: scrollablePaddingRight }} />
-                  )}
-                </div>
-              );
-            }
 
             return (
               <div
                 key={row.id}
-                className={clsx(
-                  "airtable-row absolute left-0 right-0 flex text-[13px] text-[#1d1f24]",
-                  isScrolling && "pointer-events-none"
-                )}
+                className="airtable-row absolute left-0 flex text-[13px] text-[#1d1f24]"
                 style={{
                   transform: `translate3d(0, ${virtualRow.start}px, 0)`,
                   height: `${virtualRow.size}px`,
-                  width: totalColumnsWidth,
+                  width: totalColumnsWidth - addColumnWidth,
+                  backgroundColor: "#ffffff",
                   zIndex: rowHasSelection ? 5 : 1,
                 }}
                 onContextMenu={(event) =>
@@ -1429,7 +1369,7 @@ export function TableView({
               >
                 {rowNumberColumn && (
                   <div
-                    className="airtable-cell relative flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
+                    className="airtable-sticky-column airtable-cell relative flex items-center px-2 text-left text-[12px] font-normal text-[#606570]"
                     style={{
                       borderBottom: isLastRow ? "none" : "1px solid #DDE1E3",
                       borderLeft: "none",
@@ -1441,8 +1381,8 @@ export function TableView({
                       height: 33,
                       position: "sticky",
                       left: 0,
-                      zIndex: rowHasSelection ? 20 : 15,
-                      isolation: "isolate",
+                      zIndex: 100,
+                      transform: "translateZ(0)",
                       ["--airtable-cell-base" as string]: rowNumberBaseBg,
                       ["--airtable-cell-hover" as string]: rowNumberHoverBg,
                     }}
@@ -1512,7 +1452,7 @@ export function TableView({
                     return (
                       <div
                         className={clsx(
-                          "airtable-cell relative flex overflow-visible px-2",
+                          "airtable-sticky-column airtable-cell relative flex overflow-visible px-2",
                           nameIsSelected &&
                             (nameIsEditing
                               ? "airtable-cell--editing"
@@ -1528,8 +1468,8 @@ export function TableView({
                           alignItems: nameExpanded ? "flex-start" : "center",
                           position: "sticky",
                           left: rowNumberColumnWidth,
-                          zIndex: nameExpanded ? 30 : 25,
-                          isolation: "isolate",
+                          zIndex: nameExpanded ? 100 : 90,
+                          transform: "translateZ(0)",
                           ["--airtable-cell-base" as string]:
                             nameBaseBackground,
                           ["--airtable-cell-hover" as string]:
@@ -1803,18 +1743,7 @@ export function TableView({
                     : "var(--airtable-cell-hover-bg)";
                   const cellStyle = bodyCellBorder(column, false, isLastRow);
 
-                    if (column.type === "add") {
-                      return (
-                        <div
-                          key={`${row.id}-${column.id}`}
-                          style={{
-                            width: virtualColumn.size,
-                            flex: "0 0 auto",
-                          }}
-                          aria-hidden="true"
-                        />
-                      );
-                    }
+                    if (column.type === "add") return null;
                     if (column.type !== "data") {
                       return null;
                     }
@@ -1852,12 +1781,12 @@ export function TableView({
                         flex: "0 0 auto",
                         height: isExpanded ? LONG_TEXT_HEIGHT : 33,
                         alignItems: isExpanded ? "flex-start" : "center",
-                        zIndex: isExpanded ? 20 : undefined,
-                        ...(isSelected
-                          ? ({ ["--cell-outline-left" as string]: "0px" } as Record<
-                              string,
-                              string
-                            >)
+                        zIndex: isExpanded ? 20 : (isSelected || isEditing) ? 2 : undefined,
+                        ...(isSelected || isEditing
+                          ? ({
+                              ["--cell-outline-left" as string]: "0px",
+                              clipPath: `inset(-10px -10px -10px max(0px, calc(var(--scroll-left, 0px) + ${stickyColumnsWidth}px - ${virtualColumn.start}px)))`,
+                            } as Record<string, string>)
                           : null),
                         ["--airtable-cell-base" as string]: cellBaseBackground,
                         ["--airtable-cell-hover" as string]: cellHoverBackground,
@@ -2104,38 +2033,6 @@ export function TableView({
                   )}
                   {showRowsEmpty && !hasSearchQuery && <span>No rows yet.</span>}
                 </div>
-              </div>
-            )}
-            {showRowsInitialLoading && (
-              <div
-                className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center"
-                style={{ paddingTop: 80 }}
-              >
-                <span
-                  className="header-saving-spinner"
-                  aria-hidden="true"
-                  style={{ width: 28, height: 28 }}
-                >
-                  <svg width="28" height="28" viewBox="0 0 10 10" aria-hidden="true">
-                    <circle
-                      cx="5" cy="5" r="4"
-                      fill="none" stroke="#989AA1"
-                      strokeWidth="1.5" strokeLinecap="round"
-                      strokeDasharray="0.6 0.4" pathLength="3"
-                    />
-                  </svg>
-                </span>
-                <span
-                  style={{
-                    marginTop: 32,
-                    fontSize: 16,
-                    fontWeight: 400,
-                    color: "#989AA1",
-                    lineHeight: "16px",
-                  }}
-                >
-                  Loading table...
-                </span>
               </div>
             )}
           </div>

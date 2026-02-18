@@ -338,7 +338,7 @@ export function CreateViewDropdown({
         onClick={onClose}
         style={{
           position: "absolute",
-          left: 85,
+          left: 181,
           top: 186,
           height: 31,
           fontSize: 13,
