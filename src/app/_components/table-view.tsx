@@ -261,6 +261,7 @@ export function TableView({
   // Internal state
   // -------------------------------------------------------------------------
   const [addRowHover, setAddRowHover] = useState(false);
+  const [scrollbarDragging, setScrollbarDragging] = useState(false);
   const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
   const [addColumnMenuPosition, setAddColumnMenuPosition] = useState<{
     top: number;
@@ -272,7 +273,8 @@ export function TableView({
   // -------------------------------------------------------------------------
   const parentRef = useRef<HTMLDivElement>(null);
   const headerScrollRef = useRef<HTMLDivElement>(null);
-  const gridOverlayRef = useRef<HTMLDivElement>(null);
+  const skeletonOverlayRef = useRef<HTMLDivElement>(null);
+  const scrollbarDragRef = useRef(false);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<
@@ -365,15 +367,8 @@ export function TableView({
     return selectedType === "long_text" ? selectedCell.rowId : null;
   }, [orderedColumns, selectedCell]);
 
-  const estimateRowSize = useCallback(
-    (index: number) => {
-      const row = sortedTableData[index];
-      if (!row) return ROW_HEIGHT;
-      // Always return ROW_HEIGHT so expanded cells overlay instead of pushing rows down
-      return ROW_HEIGHT;
-    },
-    [sortedTableData],
-  );
+  // Constant height — expanded cells use overlays, not taller rows.
+  const estimateRowSize = useCallback(() => ROW_HEIGHT, []);
 
   // -------------------------------------------------------------------------
   // Virtualizers
@@ -526,17 +521,11 @@ export function TableView({
     return positions;
   }, [columnsWithAdd]);
 
-  // CSS background that paints both horizontal row lines AND vertical column
-  // dividers on the row canvas.  This ensures grid lines persist during fast
-  // scrolling even when virtual row divs haven't painted yet.
-  //
-  // We encode the entire grid pattern for one row-height into a single inline
-  // SVG that tiles vertically.  A single tiny tile (dataWidth × ROW_HEIGHT)
-  // is far cheaper for the browser to rasterise + cache than N+1 separate
-  // CSS gradient layers — especially on a canvas that can be millions of
-  // pixels tall with 100k+ rows.
-  // SVG tile for grid lines — applied to the row canvas with a white
-  // background-color fallback to prevent gaps during fast scrolling.
+  // SVG tile for grid lines — applied directly as a CSS background on
+  // the row canvas.  The tile (dataWidth × ROW_HEIGHT) repeats vertically.
+  // Because the background shares the same coordinate system as the
+  // absolutely-positioned virtual rows, the grid lines stay aligned
+  // during fast scrolling without any JavaScript adjustment.
   const gridPatternSvg = useMemo(() => {
     const dataWidth = totalColumnsWidth - addColumnWidth;
     if (dataWidth <= 0) return "";
@@ -558,6 +547,38 @@ export function TableView({
     const dataWidth = totalColumnsWidth - addColumnWidth;
     return `${dataWidth}px ${ROW_HEIGHT}px`;
   }, [totalColumnsWidth, addColumnWidth]);
+
+  // Skeleton SVG tile — same grid as gridPatternSvg but with gray shimmer
+  // bars in each cell.  Used by the drag-scroll skeleton overlay.
+  const skeletonPatternSvg = useMemo(() => {
+    const dataWidth = totalColumnsWidth - addColumnWidth;
+    if (dataWidth <= 0) return "";
+    const parts: string[] = [];
+    parts.push(
+      `<rect width="${dataWidth}" height="${ROW_HEIGHT}" fill="white"/>`
+    );
+    parts.push(
+      `<line x1="0" y1="${ROW_HEIGHT - 0.5}" x2="${dataWidth}" y2="${ROW_HEIGHT - 0.5}" stroke="%23DDE1E3" stroke-width="1"/>`
+    );
+    for (const x of columnDividerPositions) {
+      parts.push(
+        `<line x1="${x - 0.5}" y1="0" x2="${x - 0.5}" y2="${ROW_HEIGHT}" stroke="%23DDE1E3" stroke-width="1"/>`
+      );
+    }
+    const barY = Math.round((ROW_HEIGHT - 12) / 2);
+    let colX = 0;
+    for (const col of columnsWithAdd) {
+      if (col.type === "add") break;
+      const barW = Math.min(col.width * 0.6, 120);
+      if (barW > 4) {
+        parts.push(
+          `<rect x="${colX + 8}" y="${barY}" width="${barW}" height="12" rx="4" fill="%23E8E8E8"/>`
+        );
+      }
+      colX += col.width;
+    }
+    return `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='${dataWidth}' height='${ROW_HEIGHT}'>${parts.join("")}</svg>")`;
+  }, [totalColumnsWidth, addColumnWidth, columnDividerPositions, columnsWithAdd]);
 
   // -------------------------------------------------------------------------
   // Border helpers
@@ -996,6 +1017,41 @@ export function TableView({
   ]);
 
   // -------------------------------------------------------------------------
+  // Scrollbar drag detection — show skeleton overlay while dragging
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      // Only detect clicks directly on the scroll container (i.e. the
+      // scrollbar track/thumb), not on child elements.
+      if (e.target !== el) return;
+      const onVScrollbar = e.offsetX >= el.clientWidth;
+      const onHScrollbar = e.offsetY >= el.clientHeight;
+      if (onVScrollbar || onHScrollbar) {
+        scrollbarDragRef.current = true;
+        setScrollbarDragging(true);
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (scrollbarDragRef.current) {
+        scrollbarDragRef.current = false;
+        setScrollbarDragging(false);
+      }
+    };
+
+    el.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      el.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
   return (
@@ -1248,14 +1304,10 @@ export function TableView({
             }
             // Expose scroll position as CSS variable for clip-path on selected cells
             el.style.setProperty("--scroll-left", `${el.scrollLeft}px`);
-            // Keep the sticky grid overlay aligned to the row grid.
-            // The overlay is position:sticky, so its background tiles from
-            // its own top edge.  Shifting background-position-y by the
-            // negative scroll-top modulo ROW_HEIGHT keeps the grid lines
-            // aligned with the virtual row positions in the canvas.
-            if (gridOverlayRef.current) {
-              const yOffset = -(el.scrollTop % ROW_HEIGHT);
-              gridOverlayRef.current.style.backgroundPositionY = `${yOffset}px`;
+            // Keep skeleton overlay aligned to the row grid during scrollbar drag.
+            if (skeletonOverlayRef.current) {
+              skeletonOverlayRef.current.style.backgroundPositionY =
+                `${-(el.scrollTop % ROW_HEIGHT)}px`;
             }
 
             // Fire sparse page prefetch directly from the scroll event for
@@ -1282,28 +1334,43 @@ export function TableView({
               width: totalColumnsWidth,
               minWidth: totalColumnsWidth,
               height: rowCanvasHeight,
+              // Grid pattern applied directly to the canvas so it scrolls
+              // natively with the content — no JS alignment, no 1-frame lag.
+              // repeat-y tiles vertically across the data-column width only;
+              // the add-column area remains transparent (parent gray shows).
+              ...(gridPatternSvg
+                ? {
+                    backgroundImage: gridPatternSvg,
+                    backgroundSize: gridPatternSize,
+                    backgroundRepeat: "repeat-y" as const,
+                  }
+                : {}),
             }}
           >
-            {/* Sticky grid overlay — stays viewport-pinned so the browser
-                always paints it, even during fast scrollbar-thumb drags.
-                Virtual row divs (data + skeleton) render on top at z-index ≥ 1. */}
-            {gridPatternSvg && (
+            {/* Skeleton overlay — shown during scrollbar drag to give a
+                consistent loading appearance.  Sits above all virtual rows
+                (z-index 200) so the user sees skeleton cells with shimmer
+                instead of stale / partially-rendered data.  Removed the
+                instant the drag ends, revealing the real rows beneath. */}
+            {scrollbarDragging && skeletonPatternSvg && (
               <div
-                ref={gridOverlayRef}
+                ref={skeletonOverlayRef}
                 aria-hidden="true"
+                className="airtable-skeleton-overlay"
                 style={{
                   position: "sticky",
                   top: 0,
                   width: totalColumnsWidth - addColumnWidth,
-                  height: "100vh",
-                  marginBottom: "-100vh",
+                  height: `min(100vh, ${rowCanvasHeight}px)`,
+                  marginBottom: `max(-100vh, ${-rowCanvasHeight}px)`,
                   pointerEvents: "none",
-                  zIndex: 0,
-                  backgroundImage: gridPatternSvg,
+                  zIndex: 200,
+                  backgroundColor: "#ffffff",
+                  backgroundImage: skeletonPatternSvg,
                   backgroundSize: gridPatternSize,
                   backgroundRepeat: "repeat",
                   backgroundPositionX: "0",
-                  backgroundPositionY: "0",
+                  backgroundPositionY: `${-(parentRef.current?.scrollTop ?? 0) % ROW_HEIGHT}px`,
                 }}
               />
             )}
@@ -1314,7 +1381,7 @@ export function TableView({
               const row = rowFromData ?? rowFromSparse;
 
               // Rows without loaded data — skeleton with shimmer cells.
-              // The sticky grid overlay provides the baseline grid, and
+              // The canvas grid pattern provides the baseline grid, and
               // these skeleton divs add shimmer bars on top.
               if (!row) {
                 return (

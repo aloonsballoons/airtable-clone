@@ -628,7 +628,6 @@ body {
 
 .airtable-header-cell {
   background-color: var(--header-base-bg, #ffffff);
-  will-change: background-color;
   contain: layout style paint;
 }
 
@@ -705,11 +704,15 @@ body {
   --airtable-cell-base: #ffffff;
   --airtable-cell-hover: var(--airtable-cell-hover-bg);
   overflow: visible;
+  contain: layout style paint;
+  /* Let the browser skip rendering for overscan rows outside the viewport.
+     contain-intrinsic-block-size prevents layout shift when rows become visible. */
+  content-visibility: auto;
+  contain-intrinsic-block-size: 33px;
 }
 
 .airtable-cell {
   background-color: var(--airtable-cell-base, transparent);
-  will-change: background-color;
   contain: layout style paint;
 }
 
@@ -1283,12 +1286,13 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   display: none;
 }
 
-/* Row canvas — transparent so the sticky grid overlay inside it shows
-   through.  The overlay is viewport-sized (position:sticky) which
-   guarantees the browser always paints it during fast scrollbar-thumb
-   drags, unlike a background-image on this multi-million-px element. */
+/* Row canvas — grid pattern applied as background-image (repeat-y) so
+   it scrolls natively with content, eliminating gaps during fast scroll.
+   Transparent bg-color lets the scroll-container's #F7F8FC show through
+   for the add-column area beyond the data columns. */
 .airtable-row-canvas {
   background-color: transparent;
+  contain: layout style;
 }
 
 /* Skeleton row — used during scrollbar dragging and for unloaded rows.
@@ -1296,6 +1300,9 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
 .airtable-skeleton-row {
   background-color: #ffffff;
   z-index: 1;
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-block-size: 33px;
 }
 
 /* Individual skeleton cell inside a skeleton row.
@@ -1326,10 +1333,40 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   100% { background-position: -200% 0; }
 }
 
-/* Ensure sticky columns always appear on top */
+/* Full-viewport skeleton overlay shown during scrollbar drag.
+   The SVG background-image provides static gray bars; the ::after
+   pseudo-element sweeps a translucent highlight across them for
+   the classic shimmer-loading effect. */
+.airtable-skeleton-overlay {
+  isolation: isolate;
+}
+
+.airtable-skeleton-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 75%
+  );
+  background-size: 400px 100%;
+  background-repeat: no-repeat;
+  animation: skeletonOverlayShimmer 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes skeletonOverlayShimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: calc(100vw + 400px) 0; }
+}
+
+/* Ensure sticky columns always appear on top.
+   transform: translateZ(0) promotes to a compositor layer for correct
+   sticky rendering.  Avoid will-change/isolation — they created
+   redundant layers (thousands during scroll). */
 .airtable-sticky-column {
   z-index: 100 !important;
   transform: translateZ(0);
-  will-change: transform;
-  isolation: isolate;
 }

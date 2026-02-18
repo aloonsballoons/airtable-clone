@@ -1182,6 +1182,36 @@ export const baseRouter = createTRPCRouter({
 			return { searchQuery: nextSearch };
 		}),
 
+	setTableFilter: protectedProcedure
+		.input(
+			z.object({
+				tableId: z.string().uuid(),
+				filterConfig: filterStorageSchema.nullable(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			await ctx.db
+				.update(baseTable)
+				.set({
+					filterConfig: input.filterConfig,
+					updatedAt: new Date(),
+				})
+				.where(eq(baseTable.id, input.tableId));
+
+			return { filterConfig: input.filterConfig };
+		}),
+
 	setHiddenColumns: protectedProcedure
 		.input(
 			z.object({
@@ -1414,6 +1444,7 @@ export const baseRouter = createTRPCRouter({
 				sort: visibleSort && visibleSort.length > 0 ? visibleSort : null,
 				hiddenColumnIds,
 				searchQuery: tableRecord.searchQuery ?? "",
+				filterConfig: tableRecord.filterConfig ?? null,
 			};
 		}),
 

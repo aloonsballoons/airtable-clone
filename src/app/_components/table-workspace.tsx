@@ -286,6 +286,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       // Show loading state and display the new view name immediately
       setIsViewSwitching(true);
       setPendingViewName(name);
+      // Immediately select the pending view so the sidebar highlights it
+      setActiveViewId("pending-view");
     },
     onSuccess: async (newView) => {
       // Refresh the base query which now includes views
@@ -297,6 +299,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     onError: () => {
       setIsViewSwitching(false);
       setPendingViewName(null);
+      // Revert to the default view since the new view failed to create
+      setActiveViewId("default");
     },
   });
 
@@ -425,9 +429,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const effectiveFilterConfig = useMemo(
     () => (isRealCustomView
       ? (activeViewQuery.data?.filterConfig ?? null)
-      : null) as { connector: FilterConnector; items: FilterItem[]; } | null,
-    [isRealCustomView, activeViewQuery.data?.filterConfig]
-  ); // Table doesn't store filter config currently
+      : (tableMetaQuery.data?.filterConfig ?? null)) as { connector: FilterConnector; items: FilterItem[]; } | null,
+    [isRealCustomView, activeViewQuery.data?.filterConfig, tableMetaQuery.data?.filterConfig]
+  );
 
   const hiddenColumnIds = effectiveHiddenColumnIds;
   const hiddenColumnIdSet = useMemo(
@@ -471,15 +475,43 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   });
   const { searchValue, searchQuery, hasSearchQuery } = searchHook;
 
+  // Mutation to persist filter config on the base table (default view)
+  const setTableFilter = api.base.setTableFilter.useMutation({
+    onMutate: async ({ tableId, filterConfig }) => {
+      await utils.base.getTableMeta.cancel({ tableId });
+      const previous = utils.base.getTableMeta.getData({ tableId });
+      utils.base.getTableMeta.setData({ tableId }, (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          filterConfig,
+        };
+      });
+      return { previous, tableId };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        utils.base.getTableMeta.setData(
+          { tableId: context.tableId },
+          context.previous
+        );
+      }
+    },
+    onSettled: async (_data, _error, variables) => {
+      await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+    },
+  });
+
   // Memoize onFilterChange to prevent infinite re-render loops
   const handleFilterChange = useCallback(
     (filterConfig: { connector: FilterConnector; items: FilterItem[] } | null) => {
       if (isRealCustomView && activeViewId) {
         updateViewMutation.mutate({ viewId: activeViewId, filterConfig });
+      } else if (activeTableId) {
+        setTableFilter.mutate({ tableId: activeTableId, filterConfig });
       }
-      // Note: Table-level filter persistence not yet implemented
     },
-    [isRealCustomView, activeViewId, updateViewMutation]
+    [isRealCustomView, activeViewId, activeTableId, updateViewMutation, setTableFilter]
   );
 
   // Initialize filter hook
@@ -616,8 +648,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   const handleCreateView = useCallback((viewName: string) => {
     if (!activeTableId) return;
-    // Flush pending search save to the current view before creating a new one
+    // Flush pending search and filter saves to the current view before creating a new one
     flushPendingSearchRef.current();
+    flushPendingFilterRef.current();
     createViewMutation.mutate({
       tableId: activeTableId,
       name: viewName,
@@ -626,6 +659,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   // Ref for flushing pending search save on view switch (assigned after setTableSearch is defined)
   const flushPendingSearchRef = useRef<() => void>(() => {});
+  // Ref for flushing pending filter save on view switch
+  const flushPendingFilterRef = useRef<() => void>(() => {});
 
   const handleSelectView = useCallback((viewId: string) => {
     // Close all open function bar menus before switching views
@@ -633,8 +668,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     filterHook.setIsFilterMenuOpen(false);
     tableSortHook.setIsSortMenuOpen(false);
     searchHook.setIsSearchMenuOpen(false);
-    // Flush pending search save to the CURRENT view before switching
+    // Flush pending search and filter saves to the CURRENT view before switching
     flushPendingSearchRef.current();
+    flushPendingFilterRef.current();
     setIsViewSwitching(true);
     setActiveViewId(viewId);
     // Prefetch the view data if it's a real custom view
@@ -882,6 +918,27 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       updateViewMutation.mutate({ viewId: activeViewId, searchQuery: currentSearch });
     } else {
       setTableSearch.mutate({ tableId: activeTableId, search: currentSearch });
+    }
+  };
+
+  // Assign the flush function for pending filter changes.
+  // Compares current filter state against the last-known effective config to detect unsaved changes.
+  const effectiveFilterRef = useRef(effectiveFilterConfig);
+  effectiveFilterRef.current = effectiveFilterConfig;
+
+  flushPendingFilterRef.current = () => {
+    if (!activeTableId) return;
+    const currentConfig =
+      filterItems.length > 0
+        ? { connector: filterConnector, items: filterItems }
+        : null;
+    const currentSerialized = JSON.stringify(currentConfig);
+    const effectiveSerialized = JSON.stringify(effectiveFilterRef.current);
+    if (currentSerialized === effectiveSerialized) return;
+    if (isRealCustomView && activeViewId) {
+      updateViewMutation.mutate({ viewId: activeViewId, filterConfig: currentConfig });
+    } else {
+      setTableFilter.mutate({ tableId: activeTableId, filterConfig: currentConfig });
     }
   };
 

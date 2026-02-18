@@ -73,6 +73,20 @@ export const baseTable = createTable(
 			.notNull()
 			.default(sql`'[]'::jsonb`),
 		searchQuery: d.text("search_query"),
+		filterConfig: jsonb("filter_config")
+			.$type<{
+				connector: "and" | "or";
+				items: Array<{
+					id: string;
+					type: "condition" | "group";
+					columnId?: string | null;
+					operator?: string;
+					value?: string;
+					connector?: "and" | "or";
+					conditions?: Array<unknown>;
+				}>;
+			} | null>()
+			.default(sql`NULL`),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())
@@ -131,7 +145,6 @@ export const tableRow = createTable(
 			.notNull(),
 	}),
 	(t) => [
-		index("table_row_table_idx").on(t.tableId),
 		index("table_row_table_created_idx").on(t.tableId, t.createdAt, t.id),
 	],
 );
