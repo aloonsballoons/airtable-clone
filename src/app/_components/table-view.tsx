@@ -59,8 +59,8 @@ const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const ADD_COLUMN_WIDTH = 93;
 const LONG_TEXT_HEIGHT = 142;
-const ROW_VIRTUAL_OVERSCAN = 80;
-const ROW_SCROLLING_RESET_DELAY_MS = 80;
+const ROW_VIRTUAL_OVERSCAN = 120;
+const ROW_SCROLLING_RESET_DELAY_MS = 50;
 const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
 const MAX_COLUMNS = 500;
@@ -188,6 +188,8 @@ export type TableViewProps = {
   rowsHasNextPage: boolean;
   rowsIsFetchingNextPage: boolean;
   rowsFetchNextPage: () => Promise<unknown>;
+  sparseRows: Map<number, TableRow>;
+  onVisibleRangeChange: (startIndex: number, endIndex: number) => void;
   showRowsError: boolean;
   showRowsEmpty: boolean;
   showRowsInitialLoading: boolean;
@@ -248,6 +250,8 @@ export function TableView({
   rowsHasNextPage,
   rowsIsFetchingNextPage,
   rowsFetchNextPage,
+  sparseRows,
+  onVisibleRangeChange,
   showRowsError,
   showRowsEmpty,
   showRowsInitialLoading,
@@ -388,7 +392,7 @@ export function TableView({
     getScrollElement: () => parentRef.current,
     estimateSize: estimateRowSize,
     overscan: ROW_VIRTUAL_OVERSCAN,
-    getItemKey: (index) => sortedTableData[index]?.id ?? `placeholder-${index}`,
+    getItemKey: (index) => sortedTableData[index]?.id ?? sparseRows.get(index)?.id ?? `placeholder-${index}`,
     isScrollingResetDelay: ROW_SCROLLING_RESET_DELAY_MS,
     useAnimationFrameWithResizeObserver: true,
   });
@@ -959,6 +963,21 @@ export function TableView({
     columnVirtualRange.end,
   ]);
 
+  // Report visible range so parent can fetch sparse pages directly.
+  // Uses useLayoutEffect to fire synchronously after render — earlier than
+  // useEffect — so the fetch request is dispatched before the browser paints
+  // the skeleton frame.  Large buffer ensures data is pre-fetched well ahead.
+  useLayoutEffect(() => {
+    if (lastVirtualRowIndex < 0) return;
+    const firstIndex = rowVirtualRange.start;
+    // Large buffer: prefetch well beyond visible area so scrolling finds data ready
+    const bufferSize = ROW_VIRTUAL_OVERSCAN * 3;
+    const start = Math.max(0, firstIndex - bufferSize);
+    const end = Math.min(activeRowCount - 1, lastVirtualRowIndex + bufferSize);
+    onVisibleRangeChange(start, end);
+  }, [lastVirtualRowIndex, rowVirtualRange.start, activeRowCount, onVisibleRangeChange]);
+
+  // Sequential burst-fetch for infinite query (keeps sequential pages loading in background)
   useEffect(() => {
     if (lastVirtualRowIndex < 0) return;
     if (!rowsHasNextPage) return;
@@ -971,8 +990,6 @@ export function TableView({
 
     prefetchingRowsRef.current = true;
 
-    // Burst-fetch: when the user has scrolled beyond loaded data, fetch
-    // multiple pages back-to-back so data catches up faster.
     const pagesDeficit = rowsRemaining <= 0
       ? Math.min(10, Math.ceil((lastVirtualRowIndex - rowCount + 1) / PAGE_ROWS) + 2)
       : 1;
@@ -1277,8 +1294,13 @@ export function TableView({
             }}
           >
             {rowVirtualItems.map((virtualRow) => {
-              // Rows beyond loaded data — skeleton row with column structure
-              if (virtualRow.index >= rowCount || !sortedTableData[virtualRow.index]) {
+              // Check both contiguous data and sparse cache
+              const rowFromData = sortedTableData[virtualRow.index];
+              const rowFromSparse = !rowFromData ? sparseRows.get(virtualRow.index) : undefined;
+              const row = rowFromData ?? rowFromSparse;
+
+              // Rows without loaded data — skeleton row with column structure
+              if (!row) {
                 return (
                   <div
                     key={virtualRow.key}
@@ -1334,7 +1356,7 @@ export function TableView({
                 );
               }
 
-            const row = sortedTableData[virtualRow.index]!;
+
 
             const rowSearchMatches = hasSearchQuery
               ? searchMatchesByRow.get(row.id)

@@ -58,6 +58,7 @@ const inter = Inter({
 
 const MAX_TABLES = 1000;
 const PAGE_ROWS = 2000;
+const SPARSE_PAGE_ROWS = 500; // Smaller pages for sparse offset fetches = faster response
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
 const MAX_PREFETCH_PAGES_PER_BURST = 5;
 const ROW_HEIGHT = 33;
@@ -270,6 +271,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [activeViewId, setActiveViewId] = useState<string | null>("default");
   const [isViewSwitching, setIsViewSwitching] = useState(false);
   const [pendingViewName, setPendingViewName] = useState<string | null>(null);
+
+  // Sparse page cache for instant scroll-to-offset fetching
+  const sparsePagesRef = useRef<Map<number, { id: string; data: Record<string, string> }[]>>(new Map());
+  const sparseFetchingRef = useRef<Set<number>>(new Set());
+  const sparseParamsRef = useRef<string>("");
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId }, { staleTime: 30_000 });
 
@@ -811,6 +817,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const deleteColumn = api.base.deleteColumn.useMutation({
     onSuccess: async () => {
       if (activeTableId) {
+        sparsePagesRef.current = new Map();
+        sparseFetchingRef.current = new Set();
+        setSparseVersion((v) => v + 1);
         await utils.base.getTableMeta.invalidate({ tableId: activeTableId });
         await utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
@@ -946,6 +955,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       }
     },
     onSettled: async (_data, _error, variables) => {
+      sparsePagesRef.current = new Map();
+      sparseFetchingRef.current = new Set();
+      setSparseVersion((v) => v + 1);
       await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
       await utils.base.getRows.invalidate(getRowsQueryKey(variables.tableId));
     },
@@ -954,6 +966,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const deleteRow = api.base.deleteRow.useMutation({
     onSuccess: async () => {
       if (activeTableId) {
+        sparsePagesRef.current = new Map();
+        sparseFetchingRef.current = new Set();
+        setSparseVersion((v) => v + 1);
         await utils.base.getTableMeta.invalidate({ tableId: activeTableId });
         await utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
@@ -986,6 +1001,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
           })),
         };
       });
+      // Also update sparse page cache if the row lives there
+      for (const [pageIdx, pageRows] of sparsePagesRef.current) {
+        const rowInPage = pageRows.find((r) => r.id === rowId);
+        if (rowInPage) {
+          rowInPage.data = { ...rowInPage.data, [columnId]: value };
+          break;
+        }
+      }
       return { previous, queryKey, rowId, columnId };
     },
     onError: (_error, _variables, context) => {
@@ -1000,6 +1023,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       const shouldInvalidateFilter =
         hasActiveFilters && filteredColumnIds.has(variables.columnId);
       if ((shouldInvalidateSort || shouldInvalidateFilter) && activeTableId) {
+        // Clear sparse cache so re-fetches get fresh sorted/filtered data
+        sparsePagesRef.current = new Map();
+        sparseFetchingRef.current = new Set();
+        setSparseVersion((v) => v + 1);
         void utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
     },
@@ -2321,6 +2348,98 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     });
   }, [activeTable, orderedColumns, rows]);
 
+  // ---------------------------------------------------------------------------
+  // Sparse page cache — fetches arbitrary pages by offset for instant scroll
+  // ---------------------------------------------------------------------------
+  const [sparseVersion, setSparseVersion] = useState(0);
+
+  // Derive a stable key for the current query params so we can reset the cache
+  // when sort/filter/search changes.
+  const sparseParamsKey = useMemo(
+    () => JSON.stringify({ tableId: activeTableId, sort: sortParam, filter: filterInput, search: searchQuery }),
+    [activeTableId, sortParam, filterInput, searchQuery],
+  );
+
+  // Reset sparse cache when query params change
+  useEffect(() => {
+    if (sparseParamsRef.current !== sparseParamsKey) {
+      sparsePagesRef.current = new Map();
+      sparseFetchingRef.current = new Set();
+      sparseParamsRef.current = sparseParamsKey;
+      setSparseVersion((v) => v + 1);
+    }
+  }, [sparseParamsKey]);
+
+  // Build a Map<rowIndex, TableRow> from sparse pages for rows beyond infinite query
+  const sparseRows = useMemo(() => {
+    void sparseVersion; // re-derive on cache updates
+    const map = new Map<number, TableRow>();
+    const loadedCount = rows.length;
+    for (const [pageIndex, pageRows] of sparsePagesRef.current) {
+      const offset = pageIndex * SPARSE_PAGE_ROWS;
+      if (offset < loadedCount) continue; // Already in infinite query data
+      pageRows.forEach((row, i) => {
+        const idx = offset + i;
+        const data = row.data ?? {};
+        const cells = Object.fromEntries(
+          orderedColumns.map((column) => [column.id, data[column.id] ?? ""])
+        );
+        map.set(idx, { id: row.id, ...cells });
+      });
+    }
+    return map;
+  }, [sparseVersion, rows.length, orderedColumns]);
+
+  // Callback for TableView to request data for a visible row range.
+  // Fetches any pages that aren't already loaded by the infinite query or sparse cache.
+  const handleVisibleRangeChange = useCallback(
+    (startIndex: number, endIndex: number) => {
+      if (!activeTableId) return;
+      const loadedCount = rows.length;
+      // Only need sparse fetch for rows beyond what infinite query has loaded
+      if (endIndex < loadedCount) return;
+
+      const effectiveStart = Math.max(startIndex, loadedCount);
+      const startPage = Math.floor(effectiveStart / SPARSE_PAGE_ROWS);
+      const endPage = Math.floor(endIndex / SPARSE_PAGE_ROWS);
+
+      const pagesToFetch: number[] = [];
+      for (let p = startPage; p <= endPage; p++) {
+        if (!sparsePagesRef.current.has(p) && !sparseFetchingRef.current.has(p)) {
+          pagesToFetch.push(p);
+        }
+      }
+      if (pagesToFetch.length === 0) return;
+
+      pagesToFetch.forEach((p) => sparseFetchingRef.current.add(p));
+
+      // Fire each page fetch independently — re-render as soon as each arrives
+      // so rows appear progressively without waiting for all pages.
+      for (const pageIndex of pagesToFetch) {
+        void (async () => {
+          try {
+            const result = await utils.base.getRows.fetch({
+              tableId: activeTableId,
+              limit: SPARSE_PAGE_ROWS,
+              cursor: pageIndex * SPARSE_PAGE_ROWS,
+              ...(sortParam.length > 0 ? { sort: sortParam } : {}),
+              ...(filterInput ? { filter: filterInput } : {}),
+              ...(hasSearchQuery ? { search: searchQuery } : {}),
+            });
+            sparsePagesRef.current.set(pageIndex, result.rows);
+            // Trigger re-render immediately for this page
+            setSparseVersion((v) => v + 1);
+          } catch {
+            // Allow retry on next range change
+          } finally {
+            sparseFetchingRef.current.delete(pageIndex);
+          }
+        })();
+      }
+    },
+    [activeTableId, rows.length, sortParam, filterInput, hasSearchQuery, searchQuery, utils],
+  );
+
   const normalizedSearch = searchQuery.toLowerCase();
   const isSearchLoading = hasSearchQuery && rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
   const searchMatchesByRow = useMemo(() => {
@@ -3386,6 +3505,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     rowsHasNextPage={rowsQuery.hasNextPage ?? false}
                     rowsIsFetchingNextPage={rowsQuery.isFetchingNextPage}
                     rowsFetchNextPage={rowsQuery.fetchNextPage}
+                    sparseRows={sparseRows}
+                    onVisibleRangeChange={handleVisibleRangeChange}
                     showRowsError={showRowsError}
                     showRowsEmpty={showRowsEmpty}
                     showRowsInitialLoading={showRowsInitialLoading}
