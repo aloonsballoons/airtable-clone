@@ -705,10 +705,10 @@ body {
   --airtable-cell-hover: var(--airtable-cell-hover-bg);
   overflow: visible;
   contain: layout style paint;
-  /* Let the browser skip rendering for overscan rows outside the viewport.
-     contain-intrinsic-block-size prevents layout shift when rows become visible. */
-  content-visibility: auto;
-  contain-intrinsic-block-size: 33px;
+}
+
+.airtable-row--has-selection {
+  contain: layout style;
 }
 
 .airtable-cell {
@@ -819,9 +819,10 @@ body {
   position: absolute;
   width: 13px;
   height: 13px;
-  left: 160px;
+  right: 8px;
   top: 9px;
   pointer-events: none;
+  z-index: 2;
 }
 
 .airtable-sort-icon--active {
@@ -1295,14 +1296,27 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   contain: layout style;
 }
 
+/* Wrapper for all virtual rows — positioned as a single block so rows
+   flow naturally inside it.  Only the wrapper's transform updates during
+   scroll, eliminating gaps between individually-positioned rows. */
+.airtable-virtual-row-wrapper {
+  will-change: transform;
+}
+
+/* Persistent grid overlay — always covers the viewport (position:sticky).
+   Sits below virtual rows (z-index 0) so it's hidden when rows exist,
+   but visible through gaps during fast scrolling.  The background SVG
+   matches the table grid perfectly, making gaps imperceptible. */
+.airtable-grid-overlay {
+  isolation: isolate;
+}
+
 /* Skeleton row — used during scrollbar dragging and for unloaded rows.
    Contains per-column skeleton cells with shimmer animation. */
 .airtable-skeleton-row {
   background-color: #ffffff;
   z-index: 1;
   contain: layout style paint;
-  content-visibility: auto;
-  contain-intrinsic-block-size: 33px;
 }
 
 /* Individual skeleton cell inside a skeleton row.

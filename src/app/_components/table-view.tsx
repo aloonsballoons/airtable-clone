@@ -52,7 +52,7 @@ const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const ADD_COLUMN_WIDTH = 93;
 const LONG_TEXT_HEIGHT = 142;
-const ROW_VIRTUAL_OVERSCAN = 200;
+const ROW_VIRTUAL_OVERSCAN = 30;
 const ROW_SCROLLING_RESET_DELAY_MS = 150;
 const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
@@ -274,6 +274,7 @@ export function TableView({
   const parentRef = useRef<HTMLDivElement>(null);
   const headerScrollRef = useRef<HTMLDivElement>(null);
   const skeletonOverlayRef = useRef<HTMLDivElement>(null);
+  const gridOverlayRef = useRef<HTMLDivElement>(null);
   const scrollbarDragRef = useRef(false);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
@@ -1304,10 +1305,13 @@ export function TableView({
             }
             // Expose scroll position as CSS variable for clip-path on selected cells
             el.style.setProperty("--scroll-left", `${el.scrollLeft}px`);
-            // Keep skeleton overlay aligned to the row grid during scrollbar drag.
+            // Keep overlays aligned to the row grid during scroll.
+            const scrollTopMod = `${-(el.scrollTop % ROW_HEIGHT)}px`;
+            if (gridOverlayRef.current) {
+              gridOverlayRef.current.style.backgroundPositionY = scrollTopMod;
+            }
             if (skeletonOverlayRef.current) {
-              skeletonOverlayRef.current.style.backgroundPositionY =
-                `${-(el.scrollTop % ROW_HEIGHT)}px`;
+              skeletonOverlayRef.current.style.backgroundPositionY = scrollTopMod;
             }
 
             // Fire sparse page prefetch directly from the scroll event for
@@ -1347,6 +1351,34 @@ export function TableView({
                 : {}),
             }}
           >
+            {/* Persistent grid overlay — always in the DOM, sits BELOW virtual
+                rows (z-index 0).  Where virtual rows exist they paint on top
+                and hide it.  Where rows are absent (scroll gaps), the overlay
+                shows through as a perfect grid, making gaps invisible.  Uses
+                position:sticky so it always covers the viewport. */}
+            {gridPatternSvg && (
+              <div
+                ref={gridOverlayRef}
+                aria-hidden="true"
+                className="airtable-grid-overlay"
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  left: 0,
+                  width: totalColumnsWidth - addColumnWidth,
+                  height: `min(100vh, ${rowCanvasHeight}px)`,
+                  marginBottom: `max(-100vh, ${-rowCanvasHeight}px)`,
+                  pointerEvents: "none",
+                  zIndex: 0,
+                  backgroundColor: "#ffffff",
+                  backgroundImage: gridPatternSvg,
+                  backgroundSize: gridPatternSize,
+                  backgroundRepeat: "repeat",
+                  backgroundPositionX: "0",
+                  backgroundPositionY: `${-(parentRef.current?.scrollTop ?? 0) % ROW_HEIGHT}px`,
+                }}
+              />
+            )}
             {/* Skeleton overlay — shown during scrollbar drag to give a
                 consistent loading appearance.  Sits above all virtual rows
                 (z-index 200) so the user sees skeleton cells with shimmer
@@ -1374,6 +1406,16 @@ export function TableView({
                 }}
               />
             )}
+            <div
+              className="airtable-virtual-row-wrapper"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                zIndex: 1,
+              }}
+            >
             {rowVirtualItems.map((virtualRow) => {
               // Check both contiguous data and sparse cache
               const rowFromData = sortedTableData[virtualRow.index];
@@ -1387,9 +1429,12 @@ export function TableView({
                 return (
                   <div
                     key={virtualRow.key}
-                    className="airtable-skeleton-row absolute left-0 flex pointer-events-none"
+                    className="airtable-skeleton-row left-0 flex pointer-events-none"
                     style={{
-                      transform: `translate3d(0, ${virtualRow.start}px, 0)`,
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      transform: `translateY(${virtualRow.start}px)`,
                       height: ROW_HEIGHT,
                       width: totalColumnsWidth - addColumnWidth,
                     }}
@@ -1468,9 +1513,12 @@ export function TableView({
             return (
               <div
                 key={row.id}
-                className="airtable-row absolute left-0 flex text-[13px] text-[#1d1f24]"
+                className={clsx("airtable-row left-0 flex text-[13px] text-[#1d1f24]", rowHasSelection && "airtable-row--has-selection")}
                 style={{
-                  transform: `translate3d(0, ${virtualRow.start}px, 0)`,
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  transform: `translateY(${virtualRow.start}px)`,
                   height: `${virtualRow.size}px`,
                   width: totalColumnsWidth - addColumnWidth,
                   zIndex: rowHasSelection ? 5 : 1,
@@ -1577,7 +1625,7 @@ export function TableView({
                           alignItems: nameExpanded ? "flex-start" : "center",
                           position: "sticky",
                           left: rowNumberColumnWidth,
-                          zIndex: nameExpanded ? 100 : 90,
+                          zIndex: nameExpanded ? 100 : nameIsSelected ? 101 : 90,
                           transform: "translateZ(0)",
                           ["--airtable-cell-base" as string]:
                             nameBaseBackground,
@@ -1893,8 +1941,7 @@ export function TableView({
                         zIndex: isExpanded ? 20 : (isSelected || isEditing) ? 2 : undefined,
                         ...(isSelected || isEditing
                           ? ({
-                              ["--cell-outline-left" as string]: "0px",
-                              clipPath: `inset(-10px -10px -10px max(0px, calc(var(--scroll-left, 0px) + ${stickyColumnsWidth}px - ${virtualColumn.start}px)))`,
+                              clipPath: `inset(-10px -10px -10px max(-10px, calc(var(--scroll-left, 0px) + ${stickyColumnsWidth}px - ${virtualColumn.start}px)))`,
                             } as Record<string, string>)
                           : null),
                         ["--airtable-cell-base" as string]: cellBaseBackground,
@@ -2132,6 +2179,7 @@ export function TableView({
               </div>
             );
           })}
+            </div>
             {(showRowsError || (showRowsEmpty && !hasSearchQuery && !allRowsFiltered)) && (
               <div className="absolute inset-0 z-40 flex items-center justify-center px-4">
                 <div className="rounded-[6px] border border-[#DDE1E3] bg-white px-4 py-3 text-[12px] text-[#616670] shadow-sm">

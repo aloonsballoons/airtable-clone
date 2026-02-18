@@ -7,6 +7,7 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from "react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { skipToken } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import arrowIcon from "~/assets/arrow.svg";
@@ -265,6 +266,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const functionContainerRef = useRef<HTMLDivElement>(null);
   const [activeViewId, setActiveViewId] = useState<string | null>("default");
   const [isViewSwitching, setIsViewSwitching] = useState(false);
+  // Tracks whether hooks have had a render cycle to absorb new view config.
+  // When view data first becomes ready, the filter/search/sort hooks haven't
+  // processed it yet (their useEffects run after render). We skip the first
+  // viewDataReady=true render and only clear isViewSwitching on the second,
+  // after hooks have updated the query key.
+  const viewDataReadyPassRef = useRef(0);
   const [pendingViewName, setPendingViewName] = useState<string | null>(null);
 
   // Sparse page cache for instant scroll-to-offset fetching
@@ -404,8 +411,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   }, [baseDetailsQuery.data?.name]);
 
   const tableMetaQuery = api.base.getTableMeta.useQuery(
-    { tableId: activeTableId! },
-    { enabled: isValidTableId(activeTableId), staleTime: 10_000 }
+    isValidTableId(activeTableId) ? { tableId: activeTableId } : skipToken,
+    { staleTime: 10_000 }
   );
   useEffect(() => {
     if (tableMetaQuery.data) {
@@ -614,9 +621,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     getRowsQueryKeyForSort(tableId, sortParam, false);
 
   const rowsQuery = api.base.getRows.useInfiniteQuery(
-    getRowsQueryKey(activeTableId!),
+    isValidTableId(activeTableId) ? getRowsQueryKey(activeTableId) : skipToken,
     {
-      enabled: isValidTableId(activeTableId),
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
       placeholderData: (previousData) => previousData,
       staleTime: 10_000,
@@ -625,9 +631,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   // Fallback query without search - used when search returns no results
   const rowsQueryWithoutSearch = api.base.getRows.useInfiniteQuery(
-    getRowsQueryKeyWithoutSearch(activeTableId!),
+    isValidTableId(activeTableId) && !hasSearchQuery ? getRowsQueryKeyWithoutSearch(activeTableId) : skipToken,
     {
-      enabled: isValidTableId(activeTableId) && !hasSearchQuery,
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
       placeholderData: (previousData) => previousData,
     }
@@ -672,6 +677,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     flushPendingSearchRef.current();
     flushPendingFilterRef.current();
     setIsViewSwitching(true);
+    viewDataReadyPassRef.current = 0;
     setActiveViewId(viewId);
     // Prefetch the view data if it's a real custom view
     if (isValidUUID(viewId)) {
@@ -681,15 +687,33 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
 
   // Clear view switching state once data is loaded
   useEffect(() => {
-    if (!isViewSwitching) return;
+    if (!isViewSwitching) {
+      viewDataReadyPassRef.current = 0;
+      return;
+    }
 
     // Don't clear loading while the create mutation is still in flight
     if (createViewMutation.isPending) return;
+
+    if (activeViewId == "pending-view") return;
 
     // Check if view data is ready (for real custom views, wait for query to finish)
     const viewDataReady = !isRealCustomView ||
       (activeViewQuery.data !== undefined && !activeViewQuery.isFetching) ||
       activeViewQuery.isError;
+
+    if (!viewDataReady) {
+      viewDataReadyPassRef.current = 0;
+      return;
+    }
+
+    // When view data first becomes ready, the filter/search/sort hooks haven't
+    // processed it yet (their useEffects run after render). The rowsQuery key
+    // still reflects the OLD view's params, so isFetching may be false and
+    // placeholderData makes pages[0] truthy — causing a premature clear.
+    // Skip the first pass to let hooks absorb the new effective config.
+    viewDataReadyPassRef.current += 1;
+    if (viewDataReadyPassRef.current < 2) return;
 
     // Check if rows data is ready - just need the first page to be available
     // and rows must not be actively fetching (ensures we have fresh data for new view)
@@ -697,10 +721,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       (rowsQuery.data?.pages?.[0] !== undefined && !rowsQuery.isFetching) ||
       rowsQuery.isError;
 
-    // Note: searchSettled check removed – the search hook now bypasses debounce
-    // on view/table switches, so the query key updates immediately.
-
-    if (viewDataReady && rowsDataReady) {
+    if (rowsDataReady) {
       setIsViewSwitching(false);
     }
   }, [
@@ -2390,7 +2411,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Fetches any pages that aren't already loaded by the infinite query or sparse cache.
   const handleVisibleRangeChange = useCallback(
     (startIndex: number, endIndex: number) => {
-      if (!activeTableId) return;
+      if (!isValidTableId(activeTableId)) return;
       const loadedCount = rows.length;
       // Only need sparse fetch for rows beyond what infinite query has loaded
       if (endIndex < loadedCount) return;
@@ -2441,7 +2462,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // scrolling to any position finds data ready immediately.
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (!activeTableId || activeRowCount <= 0) return;
+    if (!isValidTableId(activeTableId) || activeRowCount <= 0) return;
 
     const state = { cancelled: false };
 
@@ -3496,13 +3517,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                 </div>
               )}
 
-              {activeTable && (
+              {activeTable && !isViewSwitching && (
                 <div
                   className="h-full"
                   key={activeViewId ?? "default"}
                   style={{
-                    pointerEvents: isViewSwitching ? "none" : "auto",
-                    visibility: isTableLoading || isViewSwitching ? "hidden" : "visible",
+                    visibility: isTableLoading ? "hidden" : "visible",
                   }}
                 >
                   <TableView

@@ -265,9 +265,14 @@ export function useTableFilter({
     viewDataLoadedRef.current = viewKey;
     setFilterItems(effectiveFilterConfig.items);
     setFilterConnector(effectiveFilterConfig.connector);
+    // Bypass debounce so the query key updates immediately (same pattern as the
+    // reset effect above). Without this, filterInput lags by 50ms and the
+    // isViewSwitching clearing effect can fire before the query key has changed.
+    setDebouncedFilterItemsImmediate(effectiveFilterConfig.items);
+    setDebouncedFilterConnectorImmediate(effectiveFilterConfig.connector);
     // Mark as "already sent" so the debounce doesn't re-persist this config
     lastSentConfigRef.current = JSON.stringify(effectiveFilterConfig);
-  }, [tableId, viewId, effectiveFilterConfig]);
+  }, [tableId, viewId, effectiveFilterConfig, setDebouncedFilterItemsImmediate, setDebouncedFilterConnectorImmediate]);
 
   // Build columnById map
   const columnById = useMemo(
