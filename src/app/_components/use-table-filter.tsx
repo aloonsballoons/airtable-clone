@@ -237,6 +237,12 @@ export function useTableFilter({
   // (e.g., after initializing from server data, the debounce fires but we shouldn't
   // re-persist the same config we just loaded).
   const lastSentConfigRef = useRef<string>("null");
+  // Version counters to prevent the persistence effect from firing with stale
+  // debouncedFilterItems during view transitions. The reset and init effects
+  // bump viewVersionRef; the persistence effect skips when versions don't match
+  // (the state updates from reset/init haven't been applied yet in that render).
+  const viewVersionRef = useRef(0);
+  const lastPersistedVersionRef = useRef(0);
 
   // Debounce filter items and connector for server queries (50ms for fast response)
   const [debouncedFilterItems, setDebouncedFilterItemsImmediate] = useDebounced(filterItems, 50);
@@ -244,6 +250,7 @@ export function useTableFilter({
 
   // Effect: Reset filter state on table/view switch
   useEffect(() => {
+    viewVersionRef.current += 1;
     viewDataLoadedRef.current = null;
     setFilterItems([]);
     setFilterConnector("and");
@@ -262,6 +269,7 @@ export function useTableFilter({
     const viewKey = `${tableId ?? ""}:${viewId ?? ""}`;
     if (viewDataLoadedRef.current === viewKey) return; // already initialized
     if (!effectiveFilterConfig) return; // still loading or no config
+    viewVersionRef.current += 1;
     viewDataLoadedRef.current = viewKey;
     setFilterItems(effectiveFilterConfig.items);
     setFilterConnector(effectiveFilterConfig.connector);
@@ -453,6 +461,14 @@ export function useTableFilter({
   // when the actual filter data changes, not when the callback reference changes
   // on view switch — which would otherwise persist stale filter data to the new view.
   useEffect(() => {
+    // During view transitions, debouncedFilterItems may still hold stale values
+    // from the previous view (state updates from reset/init effects haven't been
+    // applied yet). Skip persistence in this case to avoid saving stale filter
+    // data to the wrong view.
+    if (lastPersistedVersionRef.current !== viewVersionRef.current) {
+      lastPersistedVersionRef.current = viewVersionRef.current;
+      return;
+    }
     if (!onFilterChangeRef.current) return;
     const config =
       debouncedFilterItems.length > 0

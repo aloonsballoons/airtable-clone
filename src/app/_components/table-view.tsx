@@ -274,7 +274,7 @@ export function TableView({
   const parentRef = useRef<HTMLDivElement>(null);
   const headerScrollRef = useRef<HTMLDivElement>(null);
   const skeletonOverlayRef = useRef<HTMLDivElement>(null);
-  const gridOverlayRef = useRef<HTMLDivElement>(null);
+
   const scrollbarDragRef = useRef(false);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
@@ -1296,6 +1296,18 @@ export function TableView({
           style={{
             backgroundColor: "#F7F8FC",
             minHeight: 0,
+            // Grid pattern on the scroll container with background-attachment:local
+            // so it scrolls with content. This is the primary gap-filler — the
+            // browser tiles the SVG natively and it's always visible in the
+            // viewport, with zero JS alignment needed.
+            ...(gridPatternSvg
+              ? {
+                  backgroundImage: gridPatternSvg,
+                  backgroundSize: gridPatternSize,
+                  backgroundRepeat: "repeat-y" as const,
+                  backgroundAttachment: "local" as const,
+                }
+              : {}),
           }}
           onScroll={(e) => {
             const el = e.currentTarget;
@@ -1305,12 +1317,9 @@ export function TableView({
             }
             // Expose scroll position as CSS variable for clip-path on selected cells
             el.style.setProperty("--scroll-left", `${el.scrollLeft}px`);
-            // Keep overlays aligned to the row grid during scroll.
-            const scrollTopMod = `${-(el.scrollTop % ROW_HEIGHT)}px`;
-            if (gridOverlayRef.current) {
-              gridOverlayRef.current.style.backgroundPositionY = scrollTopMod;
-            }
+            // Keep skeleton overlay aligned to the row grid during scroll.
             if (skeletonOverlayRef.current) {
+              const scrollTopMod = `${-(el.scrollTop % ROW_HEIGHT)}px`;
               skeletonOverlayRef.current.style.backgroundPositionY = scrollTopMod;
             }
 
@@ -1338,47 +1347,8 @@ export function TableView({
               width: totalColumnsWidth,
               minWidth: totalColumnsWidth,
               height: rowCanvasHeight,
-              // Grid pattern applied directly to the canvas so it scrolls
-              // natively with the content — no JS alignment, no 1-frame lag.
-              // repeat-y tiles vertically across the data-column width only;
-              // the add-column area remains transparent (parent gray shows).
-              ...(gridPatternSvg
-                ? {
-                    backgroundImage: gridPatternSvg,
-                    backgroundSize: gridPatternSize,
-                    backgroundRepeat: "repeat-y" as const,
-                  }
-                : {}),
             }}
           >
-            {/* Persistent grid overlay — always in the DOM, sits BELOW virtual
-                rows (z-index 0).  Where virtual rows exist they paint on top
-                and hide it.  Where rows are absent (scroll gaps), the overlay
-                shows through as a perfect grid, making gaps invisible.  Uses
-                position:sticky so it always covers the viewport. */}
-            {gridPatternSvg && (
-              <div
-                ref={gridOverlayRef}
-                aria-hidden="true"
-                className="airtable-grid-overlay"
-                style={{
-                  position: "sticky",
-                  top: 0,
-                  left: 0,
-                  width: totalColumnsWidth - addColumnWidth,
-                  height: `min(100vh, ${rowCanvasHeight}px)`,
-                  marginBottom: `max(-100vh, ${-rowCanvasHeight}px)`,
-                  pointerEvents: "none",
-                  zIndex: 0,
-                  backgroundColor: "#ffffff",
-                  backgroundImage: gridPatternSvg,
-                  backgroundSize: gridPatternSize,
-                  backgroundRepeat: "repeat",
-                  backgroundPositionX: "0",
-                  backgroundPositionY: `${-(parentRef.current?.scrollTop ?? 0) % ROW_HEIGHT}px`,
-                }}
-              />
-            )}
             {/* Skeleton overlay — shown during scrollbar drag to give a
                 consistent loading appearance.  Sits above all virtual rows
                 (z-index 200) so the user sees skeleton cells with shimmer
