@@ -702,7 +702,7 @@ body {
 }
 
 .airtable-row {
-  --airtable-cell-base: transparent;
+  --airtable-cell-base: #ffffff;
   --airtable-cell-hover: var(--airtable-cell-hover-bg);
   overflow: visible;
 }
@@ -1283,15 +1283,16 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   display: none;
 }
 
-/* Row canvas — transparent so the free-table-space colour (#F7F8FC)
-   on the scroll container shows through under the add-column area.
-   Individual rows carry their own white background. */
+/* Row canvas — transparent so the sticky grid overlay inside it shows
+   through.  The overlay is viewport-sized (position:sticky) which
+   guarantees the browser always paints it during fast scrollbar-thumb
+   drags, unlike a background-image on this multi-million-px element. */
 .airtable-row-canvas {
   background-color: transparent;
 }
 
 /* Skeleton row — used during scrollbar dragging and for unloaded rows.
-   Contains per-column skeleton cells so column dividers persist. */
+   Contains per-column skeleton cells with shimmer animation. */
 .airtable-skeleton-row {
   background-color: #ffffff;
   z-index: 1;

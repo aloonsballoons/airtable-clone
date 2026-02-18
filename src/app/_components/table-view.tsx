@@ -35,13 +35,6 @@ import numberIcon from "~/assets/number.svg";
 
 type ColumnFieldType = "single_line_text" | "long_text" | "number";
 
-type ContextMenuState = {
-  type: "table" | "column" | "row";
-  id: string;
-  x: number;
-  y: number;
-} | null;
-
 type ColumnResizeState = {
   columnId: string;
   startX: number;
@@ -59,10 +52,10 @@ const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const ADD_COLUMN_WIDTH = 93;
 const LONG_TEXT_HEIGHT = 142;
-const ROW_VIRTUAL_OVERSCAN = 120;
-const ROW_SCROLLING_RESET_DELAY_MS = 50;
+const ROW_VIRTUAL_OVERSCAN = 200;
+const ROW_SCROLLING_RESET_DELAY_MS = 150;
 const PAGE_ROWS = 2000;
-const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
+const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const MAX_NUMBER_DECIMALS = 8;
@@ -212,7 +205,6 @@ export type TableViewProps = {
     type?: "single_line_text" | "long_text" | "number";
   }) => void;
   addColumnIsPending: boolean;
-  setContextMenu: Dispatch<SetStateAction<ContextMenuState>>;
   activeRowCount: number; // Filtered row count for display
   totalRowCount: number; // Total unfiltered row count for max row validation
   hasActiveFilters: boolean;
@@ -260,7 +252,6 @@ export function TableView({
   addRowsMutate,
   addColumnMutate,
   addColumnIsPending,
-  setContextMenu,
   activeRowCount,
   totalRowCount,
   hasActiveFilters,
@@ -281,6 +272,7 @@ export function TableView({
   // -------------------------------------------------------------------------
   const parentRef = useRef<HTMLDivElement>(null);
   const headerScrollRef = useRef<HTMLDivElement>(null);
+  const gridOverlayRef = useRef<HTMLDivElement>(null);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<
@@ -362,8 +354,6 @@ export function TableView({
     ? Math.max(rowCount + 1, activeRowCount)
     : rowCount;
   const addRowDisabled = !activeTableId || totalRowCount >= MAX_ROWS;
-  const canDeleteColumn = activeColumns.length > 1;
-  const canDeleteRow = activeRowCount > 1;
 
   const expandedRowId = useMemo(() => {
     if (!selectedCell) return null;
@@ -394,7 +384,6 @@ export function TableView({
     overscan: ROW_VIRTUAL_OVERSCAN,
     getItemKey: (index) => sortedTableData[index]?.id ?? sparseRows.get(index)?.id ?? `placeholder-${index}`,
     isScrollingResetDelay: ROW_SCROLLING_RESET_DELAY_MS,
-    useAnimationFrameWithResizeObserver: true,
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
@@ -469,7 +458,7 @@ export function TableView({
     getScrollElement: () => parentRef.current,
     estimateSize: (index) =>
       columnsWithAdd[index]?.width ?? DEFAULT_COLUMN_WIDTH,
-    overscan: 6,
+    overscan: 12,
     getItemKey: (index) => columnsWithAdd[index]?.id ?? index,
   });
 
@@ -537,33 +526,37 @@ export function TableView({
   }, [columnsWithAdd]);
 
   // CSS background that paints both horizontal row lines AND vertical column
-  // dividers on the row canvas. This ensures grid lines persist during fast
+  // dividers on the row canvas.  This ensures grid lines persist during fast
   // scrolling even when virtual row divs haven't painted yet.
-  const rowCanvasBackground = useMemo(() => {
+  //
+  // We encode the entire grid pattern for one row-height into a single inline
+  // SVG that tiles vertically.  A single tiny tile (dataWidth × ROW_HEIGHT)
+  // is far cheaper for the browser to rasterise + cache than N+1 separate
+  // CSS gradient layers — especially on a canvas that can be millions of
+  // pixels tall with 100k+ rows.
+  // SVG tile for grid lines — applied to the row canvas with a white
+  // background-color fallback to prevent gaps during fast scrolling.
+  const gridPatternSvg = useMemo(() => {
     const dataWidth = totalColumnsWidth - addColumnWidth;
-    // Horizontal row lines (repeating)
-    const hGradient = `repeating-linear-gradient(to bottom, #ffffff 0px, #ffffff ${ROW_HEIGHT - 1}px, #DDE1E3 ${ROW_HEIGHT - 1}px, #DDE1E3 ${ROW_HEIGHT}px)`;
-    // Vertical column dividers — each is a 1px-wide gradient at a fixed x position
-    const vGradients = columnDividerPositions.map(
-      (x) =>
-        `linear-gradient(to right, transparent ${x - 1}px, #DDE1E3 ${x - 1}px, #DDE1E3 ${x}px, transparent ${x}px)`,
+    if (dataWidth <= 0) return "";
+
+    const lines: string[] = [];
+    lines.push(
+      `<line x1="0" y1="${ROW_HEIGHT - 0.5}" x2="${dataWidth}" y2="${ROW_HEIGHT - 0.5}" stroke="%23DDE1E3" stroke-width="1"/>`
     );
-    return {
-      backgroundImage: [hGradient, ...vGradients].join(", "),
-      backgroundSize: [
-        `${dataWidth}px ${ROW_HEIGHT}px`,
-        ...vGradients.map(() => `${dataWidth}px 100%`),
-      ].join(", "),
-      backgroundRepeat: [
-        "repeat-y",
-        ...vGradients.map(() => "repeat-y"),
-      ].join(", "),
-      backgroundPosition: [
-        "0 0",
-        ...vGradients.map(() => "0 0"),
-      ].join(", "),
-    };
+    for (const x of columnDividerPositions) {
+      lines.push(
+        `<line x1="${x - 0.5}" y1="0" x2="${x - 0.5}" y2="${ROW_HEIGHT}" stroke="%23DDE1E3" stroke-width="1"/>`
+      );
+    }
+
+    return `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='${dataWidth}' height='${ROW_HEIGHT}'><rect width='${dataWidth}' height='${ROW_HEIGHT}' fill='white'/>${lines.join("")}</svg>")`;
   }, [totalColumnsWidth, addColumnWidth, columnDividerPositions]);
+
+  const gridPatternSize = useMemo(() => {
+    const dataWidth = totalColumnsWidth - addColumnWidth;
+    return `${dataWidth}px ${ROW_HEIGHT}px`;
+  }, [totalColumnsWidth, addColumnWidth]);
 
   // -------------------------------------------------------------------------
   // Border helpers
@@ -829,20 +822,6 @@ export function TableView({
     });
   };
 
-  const handleOpenContextMenu = (
-    event: ReactMouseEvent,
-    type: "table" | "column" | "row",
-    id: string,
-    allowed: boolean,
-  ) => {
-    event.preventDefault();
-    if (!allowed) {
-      setContextMenu(null);
-      return;
-    }
-    setContextMenu({ type, id, x: event.clientX, y: event.clientY });
-  };
-
   // -------------------------------------------------------------------------
   // Effects
   // -------------------------------------------------------------------------
@@ -971,7 +950,7 @@ export function TableView({
     if (lastVirtualRowIndex < 0) return;
     const firstIndex = rowVirtualRange.start;
     // Large buffer: prefetch well beyond visible area so scrolling finds data ready
-    const bufferSize = ROW_VIRTUAL_OVERSCAN * 3;
+    const bufferSize = ROW_VIRTUAL_OVERSCAN * 4;
     const start = Math.max(0, firstIndex - bufferSize);
     const end = Math.min(activeRowCount - 1, lastVirtualRowIndex + bufferSize);
     onVisibleRangeChange(start, end);
@@ -990,9 +969,13 @@ export function TableView({
 
     prefetchingRowsRef.current = true;
 
+    // Fetch multiple pages at once to build the prefetch buffer faster.
+    // When scrolling normally, fetch enough to fill the buffer in one burst
+    // rather than one page per effect cycle.
+    const pagesNeeded = Math.ceil((ROW_PREFETCH_AHEAD - Math.max(0, rowsRemaining)) / PAGE_ROWS);
     const pagesDeficit = rowsRemaining <= 0
       ? Math.min(10, Math.ceil((lastVirtualRowIndex - rowCount + 1) / PAGE_ROWS) + 2)
-      : 1;
+      : Math.max(1, Math.min(5, pagesNeeded));
 
     const fetchBurst = async () => {
       for (let i = 0; i < pagesDeficit; i++) {
@@ -1075,14 +1058,6 @@ export function TableView({
                   zIndex: 90,
                   transform: "translateZ(0)",
                 }}
-                onContextMenu={(event) =>
-                  handleOpenContextMenu(
-                    event,
-                    "column",
-                    nameColumn.id,
-                    canDeleteColumn
-                  )
-                }
               >
                 {nameColumn.type === "data" &&
                   getColumnIconSrc(nameColumn.name, nameColumn.fieldType) && (
@@ -1208,14 +1183,6 @@ export function TableView({
                     flex: "0 0 auto",
                     ["--header-base-bg" as string]: baseBackgroundColor,
                   }}
-                  onContextMenu={(event) =>
-                    handleOpenContextMenu(
-                      event,
-                      "column",
-                      column.id,
-                      canDeleteColumn
-                    )
-                  }
                 >
                   {column.type === "data" &&
                     getColumnIconSrc(column.name, column.fieldType) && (
@@ -1273,12 +1240,22 @@ export function TableView({
             minHeight: 0,
           }}
           onScroll={(e) => {
+            const el = e.currentTarget;
             // Sync horizontal scroll with header
             if (headerScrollRef.current) {
-              headerScrollRef.current.scrollLeft = e.currentTarget.scrollLeft;
+              headerScrollRef.current.scrollLeft = el.scrollLeft;
             }
             // Expose scroll position as CSS variable for clip-path on selected cells
-            e.currentTarget.style.setProperty("--scroll-left", `${e.currentTarget.scrollLeft}px`);
+            el.style.setProperty("--scroll-left", `${el.scrollLeft}px`);
+            // Keep the sticky grid overlay aligned to the row grid.
+            // The overlay is position:sticky, so its background tiles from
+            // its own top edge.  Shifting background-position-y by the
+            // negative scroll-top modulo ROW_HEIGHT keeps the grid lines
+            // aligned with the virtual row positions in the canvas.
+            if (gridOverlayRef.current) {
+              const yOffset = -(el.scrollTop % ROW_HEIGHT);
+              gridOverlayRef.current.style.backgroundPositionY = `${yOffset}px`;
+            }
           }}
         >
           <div
@@ -1287,19 +1264,40 @@ export function TableView({
               width: totalColumnsWidth,
               minWidth: totalColumnsWidth,
               height: rowCanvasHeight,
-              // Grid pattern: horizontal row lines + vertical column dividers.
-              // Ensures that during fast scrolling, any area not covered by a
-              // virtual row div still shows the full grid structure.
-              ...rowCanvasBackground,
             }}
           >
+            {/* Sticky grid overlay — stays viewport-pinned so the browser
+                always paints it, even during fast scrollbar-thumb drags.
+                Virtual row divs (data + skeleton) render on top at z-index ≥ 1. */}
+            {gridPatternSvg && (
+              <div
+                ref={gridOverlayRef}
+                aria-hidden="true"
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  width: totalColumnsWidth - addColumnWidth,
+                  height: "100vh",
+                  marginBottom: "-100vh",
+                  pointerEvents: "none",
+                  zIndex: 0,
+                  backgroundImage: gridPatternSvg,
+                  backgroundSize: gridPatternSize,
+                  backgroundRepeat: "repeat",
+                  backgroundPositionX: "0",
+                  backgroundPositionY: "0",
+                }}
+              />
+            )}
             {rowVirtualItems.map((virtualRow) => {
               // Check both contiguous data and sparse cache
               const rowFromData = sortedTableData[virtualRow.index];
               const rowFromSparse = !rowFromData ? sparseRows.get(virtualRow.index) : undefined;
               const row = rowFromData ?? rowFromSparse;
 
-              // Rows without loaded data — skeleton row with column structure
+              // Rows without loaded data — skeleton with shimmer cells.
+              // The sticky grid overlay provides the baseline grid, and
+              // these skeleton divs add shimmer bars on top.
               if (!row) {
                 return (
                   <div
@@ -1320,6 +1318,9 @@ export function TableView({
                           height: ROW_HEIGHT,
                           backgroundColor: "#ffffff",
                           borderBottom: "1px solid #DDE1E3",
+                          position: "sticky",
+                          left: 0,
+                          zIndex: 100,
                         }}
                       />
                     )}
@@ -1332,18 +1333,25 @@ export function TableView({
                           height: ROW_HEIGHT,
                           backgroundColor: "#ffffff",
                           borderBottom: "1px solid #DDE1E3",
+                          position: "sticky",
+                          left: rowNumberColumnWidth,
+                          zIndex: 100,
                         }}
                       />
                     )}
-                    {columnsWithAdd.map((col) => {
-                      if (col.type !== "data" || col.name === "Name") return null;
+                    {scrollablePaddingLeft > 0 && (
+                      <div style={{ width: scrollablePaddingLeft }} />
+                    )}
+                    {scrollableVirtualColumns.map((virtualColumn) => {
+                      const col = columnsWithAdd[virtualColumn.index];
+                      if (!col || col.type !== "data") return null;
                       return (
                         <div
                           key={col.id}
                           className="airtable-skeleton-cell"
                           style={{
-                            width: col.width,
-                            minWidth: col.width,
+                            width: virtualColumn.size,
+                            minWidth: virtualColumn.size,
                             height: ROW_HEIGHT,
                             backgroundColor: "#ffffff",
                             borderRight: "1px solid #DDE1E3",
@@ -1352,6 +1360,9 @@ export function TableView({
                         />
                       );
                     })}
+                    {scrollablePaddingRight > 0 && (
+                      <div style={{ width: scrollablePaddingRight }} />
+                    )}
                   </div>
                 );
               }
@@ -1377,17 +1388,8 @@ export function TableView({
                   transform: `translate3d(0, ${virtualRow.start}px, 0)`,
                   height: `${virtualRow.size}px`,
                   width: totalColumnsWidth - addColumnWidth,
-                  backgroundColor: "#ffffff",
                   zIndex: rowHasSelection ? 5 : 1,
                 }}
-                onContextMenu={(event) =>
-                  handleOpenContextMenu(
-                    event,
-                    "row",
-                    row.id,
-                    canDeleteRow
-                  )
-                }
               >
                 {rowNumberColumn && (
                   <div
@@ -2061,7 +2063,7 @@ export function TableView({
 
           <div
             className="flex"
-            style={{ width: totalColumnsWidth }}
+            style={{ width: totalColumnsWidth, backgroundColor: "#F7F8FC" }}
             onMouseEnter={() => setAddRowHover(true)}
             onMouseLeave={() => setAddRowHover(false)}
           >

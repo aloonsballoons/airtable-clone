@@ -15,7 +15,6 @@ import attachmentsIcon from "~/assets/attachments.svg";
 import bellIcon from "~/assets/bell.svg";
 import blueSearchIcon from "~/assets/blue-search.svg";
 import colourIcon from "~/assets/colour.svg";
-import deleteIcon from "~/assets/delete.svg";
 import filterIcon from "~/assets/filter.svg";
 import gridViewIcon from "~/assets/grid-view.svg";
 import groupIcon from "~/assets/group.svg";
@@ -56,14 +55,19 @@ const inter = Inter({
   weight: ["400", "500", "600"],
 });
 
+// Stable empty references for optimistic new-view state (avoids re-render churn)
+const EMPTY_STRING_SET = new Set<string>();
+const EMPTY_SORT_ROWS: SortConfig[] = [];
+const EMPTY_STRING_ARRAY: string[] = [];
+
 const MAX_TABLES = 1000;
 const PAGE_ROWS = 2000;
-const SPARSE_PAGE_ROWS = 500; // Smaller pages for sparse offset fetches = faster response
-const ROW_PREFETCH_AHEAD = PAGE_ROWS * 3;
+const SPARSE_PAGE_ROWS = 2000; // Match main page size for fewer round trips
+const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
 const MAX_PREFETCH_PAGES_PER_BURST = 5;
 const ROW_HEIGHT = 33;
-const ROW_VIRTUAL_OVERSCAN = 80;
-const ROW_SCROLLING_RESET_DELAY_MS = 500;
+const ROW_VIRTUAL_OVERSCAN = 200;
+const ROW_SCROLLING_RESET_DELAY_MS = 150;
 const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
@@ -147,14 +151,6 @@ type TableWorkspaceProps = {
   userName: string;
 };
 
-type ContextMenuState =
-  | {
-      type: "table" | "column" | "row";
-      id: string;
-      x: number;
-      y: number;
-    }
-  | null;
 
 type ColumnResizeState = {
   columnId: string;
@@ -200,7 +196,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const [preferredTableBaseId, setPreferredTableBaseId] = useState<string | null>(
     null
   );
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [resizing, setResizing] = useState<ColumnResizeState | null>(null);
   const [cellEdits, setCellEdits] = useState<Record<string, Record<string, string>>>(
@@ -779,12 +774,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
   });
 
-  const deleteTable = api.base.deleteTable.useMutation({
-    onSuccess: async () => {
-      await utils.base.get.invalidate({ baseId });
-      setActiveTableId(null);
-    },
-  });
 
   const renameTable = api.base.renameTable.useMutation({
     onMutate: async ({ tableId, name }) => {
@@ -811,18 +800,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
     onSettled: async () => {
       await utils.base.get.invalidate({ baseId });
-    },
-  });
-
-  const deleteColumn = api.base.deleteColumn.useMutation({
-    onSuccess: async () => {
-      if (activeTableId) {
-        sparsePagesRef.current = new Map();
-        sparseFetchingRef.current = new Set();
-        setSparseVersion((v) => v + 1);
-        await utils.base.getTableMeta.invalidate({ tableId: activeTableId });
-        await utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
-      }
     },
   });
 
@@ -963,17 +940,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     },
   });
 
-  const deleteRow = api.base.deleteRow.useMutation({
-    onSuccess: async () => {
-      if (activeTableId) {
-        sparsePagesRef.current = new Map();
-        sparseFetchingRef.current = new Set();
-        setSparseVersion((v) => v + 1);
-        await utils.base.getTableMeta.invalidate({ tableId: activeTableId });
-        await utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
-      }
-    },
-  });
 
   const updateCell = api.base.updateCell.useMutation({
     onMutate: async ({ rowId, columnId, value }) => {
@@ -1083,24 +1049,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   useEffect(() => {
     setCellEdits({});
   }, [activeTableId]);
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handleClick = () => setContextMenu(null);
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setContextMenu(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("scroll", handleClick, true);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("scroll", handleClick, true);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [contextMenu]);
 
   useEffect(() => {
     if (!highlightedFilterFieldId && !highlightedFilterOperatorId && !highlightedFilterConnectorKey) return;
@@ -1756,15 +1704,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const filterOperatorMenuHoverPadding = (filterOperatorMenuRowHeight - filterOperatorMenuTextHeight) / 2;
   const filterOperatorMenuFirstRowTop =
     filterFieldMenuTopPadding + filterFieldMenuHeaderHeight + filterFieldMenuHeaderGap;
-  const canDeleteTable = activeTables.length > 1;
-  const canDeleteColumn = activeColumns.length > 1;
-  const canDeleteRow = activeRowCount > 1;
-  const showContextMenu =
-    contextMenu &&
-    ((contextMenu.type === "table" && canDeleteTable) ||
-      (contextMenu.type === "column" && canDeleteColumn) ||
-      (contextMenu.type === "row" && canDeleteRow));
-
 
   const updateFilterCondition = useCallback(
     (
@@ -2663,38 +2602,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     }
   };
 
-  const handleDeleteTable = (tableId: string) => {
-    deleteTable.mutate({ tableId });
-    setContextMenu(null);
-  };
-
-  const handleDeleteColumn = (columnId: string) => {
-    deleteColumn.mutate({ columnId });
-    setContextMenu(null);
-  };
-
-  const handleDeleteRow = (rowId: string) => {
-    deleteRow.mutate({ rowId });
-    setContextMenu(null);
-  };
-
   const handleSignOut = async () => {
     await authClient.signOut();
     router.refresh();
-  };
-
-  const handleOpenContextMenu = (
-    event: ReactMouseEvent,
-    type: "table" | "column" | "row",
-    id: string,
-    allowed: boolean
-  ) => {
-    event.preventDefault();
-    if (!allowed) {
-      setContextMenu(null);
-      return;
-    }
-    setContextMenu({ type, id, x: event.clientX, y: event.clientY });
   };
 
   const handleFilterDragStart = (
@@ -2965,14 +2875,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             onClick={() => handleSelectTable(tableItem.id)}
                             onMouseEnter={() => setHoveredTableTabId(tableItem.id)}
                             onMouseLeave={() => setHoveredTableTabId(null)}
-                            onContextMenu={(event) =>
-                              handleOpenContextMenu(
-                                event,
-                                "table",
-                                tableItem.id,
-                                canDeleteTable
-                              )
-                            }
                             className={clsx(
                               "relative flex h-[31px] items-start whitespace-nowrap rounded-t-[3px] rounded-b-none px-[12px] pt-[8px] text-[13px] leading-[13px]",
                               isActive
@@ -3246,8 +3148,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               hideFieldsMenuRef={hideFieldsHook.hideFieldsMenuRef}
               isHideFieldsMenuOpen={hideFieldsHook.isHideFieldsMenuOpen}
               setIsHideFieldsMenuOpen={hideFieldsHook.setIsHideFieldsMenuOpen}
-              hiddenFieldCount={hideFieldsHook.hiddenFieldCount}
-              hiddenColumnIdSet={hiddenColumnIdSet}
+              hiddenFieldCount={pendingViewName ? 0 : hideFieldsHook.hiddenFieldCount}
+              hiddenColumnIdSet={pendingViewName ? EMPTY_STRING_SET : hiddenColumnIdSet}
               hideFieldsLayout={hideFieldsHook.hideFieldsLayout}
               toggleHiddenColumn={hideFieldsHook.toggleHiddenColumn}
               hideAllColumns={hideFieldsHook.hideAllColumns}
@@ -3255,8 +3157,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               filterButtonRef={filterHook.filterButtonRef}
               isFilterMenuOpen={filterHook.isFilterMenuOpen}
               setIsFilterMenuOpen={filterHook.setIsFilterMenuOpen}
-              hasActiveFilters={filterHook.hasActiveFilters}
-              filteredColumnNames={filterHook.filteredColumnNames}
+              hasActiveFilters={pendingViewName ? false : filterHook.hasActiveFilters}
+              filteredColumnNames={pendingViewName ? EMPTY_STRING_ARRAY : filterHook.filteredColumnNames}
               filterMenuRef={filterHook.filterMenuRef}
               filterFieldMenuListRef={filterFieldMenuListRef}
               filterOperatorMenuListRef={filterOperatorMenuListRef}
@@ -3371,9 +3273,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               setOpenSortFieldId={tableSortHook.setOpenSortFieldId}
               isAddSortMenuOpen={tableSortHook.isAddSortMenuOpen}
               setIsAddSortMenuOpen={tableSortHook.setIsAddSortMenuOpen}
-              hasSort={hasSort}
-              sortRows={sortRows}
-              sortedColumnIds={sortedColumnIds}
+              hasSort={pendingViewName ? false : hasSort}
+              sortRows={pendingViewName ? EMPTY_SORT_ROWS : sortRows}
+              sortedColumnIds={pendingViewName ? EMPTY_STRING_SET : sortedColumnIds}
               draggingSortId={tableSortHook.draggingSortId}
               draggingSortTop={tableSortHook.draggingSortTop}
               applySorts={handleApplySorts}
@@ -3515,7 +3417,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                     addRowsMutate={addRowsMutate}
                     addColumnMutate={addColumn.mutate}
                     addColumnIsPending={addColumn.isPending}
-                    setContextMenu={setContextMenu}
                     activeRowCount={activeRowCount}
                     totalRowCount={totalRowCount}
                     hasActiveFilters={hasActiveFilters}
@@ -3579,41 +3480,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         </div>
       </div>
 
-      {showContextMenu && contextMenu && (
-        <div
-          className="fixed z-50 min-w-[160px] rounded-[10px] border border-[#e2e8f0] bg-white p-1 text-[12px] shadow-[0_10px_30px_rgba(15,23,42,0.15)]"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {contextMenu.type === "table" && canDeleteTable && (
-            <button
-              type="button"
-              onClick={() => handleDeleteTable(contextMenu.id)}
-              className="w-full rounded-[8px] px-3 py-2 text-left text-[#dc2626] hover:bg-[#fee2e2]"
-            >
-              Delete table
-            </button>
-          )}
-          {contextMenu.type === "column" && canDeleteColumn && (
-            <button
-              type="button"
-              onClick={() => handleDeleteColumn(contextMenu.id)}
-              className="w-full rounded-[8px] px-3 py-2 text-left text-[#dc2626] hover:bg-[#fee2e2]"
-            >
-              Delete column
-            </button>
-          )}
-          {contextMenu.type === "row" && canDeleteRow && (
-            <button
-              type="button"
-              onClick={() => handleDeleteRow(contextMenu.id)}
-              className="w-full rounded-[8px] px-3 py-2 text-left text-[#dc2626] hover:bg-[#fee2e2]"
-            >
-              Delete row
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
