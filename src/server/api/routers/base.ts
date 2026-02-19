@@ -1088,12 +1088,23 @@ export const baseRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const tableRecord = await ctx.db.query.baseTable.findFirst({
-				where: eq(baseTable.id, input.tableId),
-				with: {
-					base: true,
-				},
-			});
+			const providedSort = input.sort ?? [];
+
+			// Parallelize auth check and column validation
+			const columnIds = providedSort.map((s) => s.columnId);
+			const [tableRecord, columnRecords] = await Promise.all([
+				ctx.db.query.baseTable.findFirst({
+					where: eq(baseTable.id, input.tableId),
+					with: {
+						base: true,
+					},
+				}),
+				columnIds.length > 0
+					? ctx.db.query.tableColumn.findMany({
+							where: inArray(tableColumn.id, columnIds),
+						})
+					: Promise.resolve([]),
+			]);
 
 			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
 				throw new TRPCError({ code: "NOT_FOUND" });
@@ -1107,7 +1118,6 @@ export const baseRouter = createTRPCRouter({
 				),
 			);
 
-			const providedSort = input.sort ?? [];
 			const uniqueSort: Array<{ columnId: string; direction: "asc" | "desc" }> = [];
 			const seenColumns = new Set<string>();
 			for (const item of providedSort) {
@@ -1123,16 +1133,12 @@ export const baseRouter = createTRPCRouter({
 			);
 
 			if (filteredSort.length > 0) {
-				const columnRecords = await ctx.db.query.tableColumn.findMany({
-					where: inArray(
-						tableColumn.id,
-						filteredSort.map((sort) => sort.columnId),
-					),
-				});
-				if (
-					columnRecords.length !== filteredSort.length ||
-					columnRecords.some((column) => column.tableId !== input.tableId)
-				) {
+				const validColumnIds = new Set(
+					columnRecords
+						.filter((c) => c.tableId === input.tableId)
+						.map((c) => c.id),
+				);
+				if (filteredSort.some((sort) => !validColumnIds.has(sort.columnId))) {
 					throw new TRPCError({ code: "NOT_FOUND" });
 				}
 			}
@@ -1462,12 +1468,34 @@ export const baseRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const tableRecord = await ctx.db.query.baseTable.findFirst({
-				where: eq(baseTable.id, input.tableId),
-				with: {
-					base: true,
-				},
-			});
+			// Collect all column IDs needed (sort + filter) to fetch in one query
+			const providedSort = input.sort ?? null;
+
+			const filterColumnIds = new Set<string>();
+			if (input.filter && input.filter.items.length > 0) {
+				const collectColumnIds = (item: typeof input.filter.items[number]) => {
+					if (item.type === "condition") {
+						filterColumnIds.add(item.columnId);
+						return;
+					}
+					item.conditions.forEach((child) => collectColumnIds(child));
+				};
+				input.filter.items.forEach(collectColumnIds);
+			}
+
+			// Run auth check and column lookup in parallel (single column query
+			// covers both sort and filter needs, eliminating two sequential awaits).
+			// Always fetch columns — the table may have a stored sort config that
+			// needs column type info, and the query is cheap (indexed on table_id).
+			const [tableRecord, allNeededColumns] = await Promise.all([
+				ctx.db.query.baseTable.findFirst({
+					where: eq(baseTable.id, input.tableId),
+					with: { base: true },
+				}),
+				ctx.db.query.tableColumn.findMany({
+					where: eq(tableColumn.tableId, input.tableId),
+				}),
+			]);
 
 			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
 				throw new TRPCError({ code: "NOT_FOUND" });
@@ -1481,7 +1509,11 @@ export const baseRouter = createTRPCRouter({
 				),
 			);
 
-			const providedSort = input.sort ?? null;
+			// Build a shared column lookup from the single query
+			const allColumnsById = new Map(
+				allNeededColumns.map((column) => [column.id, column]),
+			);
+
 			const legacySort =
 				tableRecord.sortColumnId
 					? [
@@ -1510,22 +1542,12 @@ export const baseRouter = createTRPCRouter({
 				(sort) => !hiddenColumnIdSet.has(sort.columnId),
 			);
 
-			let sortColumnsById = new Map<
-				string,
-				{ id: string; tableId: string; type: string | null }
-			>();
+			const sortColumnsById = allColumnsById;
 			if (effectiveSorts.length > 0) {
-				const sortColumnIds = effectiveSorts.map((sort) => sort.columnId);
-				const columnRecords = await ctx.db.query.tableColumn.findMany({
-					where: inArray(tableColumn.id, sortColumnIds),
+				const missingColumn = effectiveSorts.some((sort) => {
+					const column = sortColumnsById.get(sort.columnId);
+					return !column || column.tableId !== input.tableId;
 				});
-				sortColumnsById = new Map(
-					columnRecords.map((column) => [column.id, column]),
-				);
-
-				const missingColumn =
-					columnRecords.length !== sortColumnIds.length ||
-					columnRecords.some((column) => column.tableId !== input.tableId);
 				if (missingColumn) {
 					if (providedSort) {
 						throw new TRPCError({ code: "NOT_FOUND" });
@@ -1540,30 +1562,12 @@ export const baseRouter = createTRPCRouter({
 			type SqlExpression = ReturnType<typeof sql>;
 			let filterExpression: SqlExpression | null = null;
 			if (input.filter && input.filter.items.length > 0) {
-				const filterColumnIds = new Set<string>();
+				// Remove hidden column IDs from the set now that we have the hidden list
+				for (const id of filterColumnIds) {
+					if (hiddenColumnIdSet.has(id)) filterColumnIds.delete(id);
+				}
 
-				// Recursive function to collect column IDs from nested groups
-				const collectColumnIds = (item: typeof input.filter.items[number]) => {
-					if (item.type === "condition") {
-						if (!hiddenColumnIdSet.has(item.columnId)) {
-							filterColumnIds.add(item.columnId);
-						}
-						return;
-					}
-					// Recursively process group conditions (may contain nested groups)
-					item.conditions.forEach((child) => collectColumnIds(child));
-				};
-
-				input.filter.items.forEach(collectColumnIds);
-
-				const filterColumns = filterColumnIds.size
-					? await ctx.db.query.tableColumn.findMany({
-							where: inArray(tableColumn.id, Array.from(filterColumnIds)),
-						})
-					: [];
-				const filterColumnsById = new Map(
-					filterColumns.map((column) => [column.id, column]),
-				);
+				const filterColumnsById = allColumnsById;
 
 				const buildConditionExpression = (
 					condition: z.infer<typeof filterConditionSchema>,
@@ -1699,91 +1703,95 @@ export const baseRouter = createTRPCRouter({
 				return baseWhere;
 			})();
 
-			// Fast path: use subquery + Index Only Scan for large offsets
-			// when using default sort order and no filters/search.
-			// The subquery retrieves only IDs from the covering index
-			// (table_id, created_at, id) without heap fetches for skipped
-			// rows, then joins back for the result data.  ~7× faster.
-			const useSubqueryOptimization =
-				effectiveSorts.length === 0 &&
-				!filterExpression &&
-				!searchExpression &&
-				offset > 0;
+			// Build raw SQL WHERE clause fragments for use in raw queries
+			const buildRawWhereFragments = () => {
+				const fragments = [sql`table_id = ${input.tableId}::uuid`];
+				if (filterExpression) fragments.push(filterExpression);
+				if (searchExpression) fragments.push(searchExpression);
+				return fragments;
+			};
 
-			if (useSubqueryOptimization) {
-				const [rawResult, totalCountResult] = await Promise.all([
-					ctx.db.execute(sql`
+			// Build ORDER BY clause for sort expressions
+			const buildSortOrderClauses = () => {
+				if (effectiveSorts.length === 0) {
+					return [sql`created_at ASC`, sql`id ASC`];
+				}
+				const clauses = effectiveSorts.flatMap((sort) => {
+					const column = sortColumnsById.get(sort.columnId);
+					if (!column || column.tableId !== input.tableId) return [];
+					const columnType = column.type ?? "single_line_text";
+					if (columnType === "number") {
+						return [
+							sort.direction === "desc"
+								? sql`nullif(data ->> ${sort.columnId}, '')::numeric DESC NULLS LAST`
+								: sql`nullif(data ->> ${sort.columnId}, '')::numeric ASC NULLS FIRST`,
+						];
+					}
+					return [
+						sort.direction === "desc"
+							? sql`coalesce(data ->> ${sort.columnId}, '') DESC`
+							: sql`coalesce(data ->> ${sort.columnId}, '') ASC`,
+					];
+				});
+				clauses.push(sql`created_at ASC`, sql`id ASC`);
+				return clauses;
+			};
+
+			const orderClauses = buildSortOrderClauses();
+			const orderByFragment = sql.join(orderClauses, sql`, `);
+			const rawWhereFragments = buildRawWhereFragments();
+			const rawWhereClause = rawWhereFragments.length === 1
+				? rawWhereFragments[0]!
+				: sql.join(rawWhereFragments, sql` AND `);
+
+			// Use raw SQL with subquery for ALL queries (sorted and unsorted).
+			// The subquery sorts/paginates only IDs (much smaller tuples ~50 bytes
+			// vs ~2KB with full JSONB data), then joins back for the result data.
+			// For sorted queries on 100k rows, this reduces sort memory ~40×.
+			// Boost work_mem to ensure in-memory quicksort instead of disk-based
+			// external merge sort.
+			const needsWorkMemBoost = effectiveSorts.length > 0;
+
+			const rowsQuery = needsWorkMemBoost
+				? ctx.db.transaction(async (tx) => {
+						await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
+						return tx.execute(sql`
+							SELECT t.id, t.data
+							FROM table_row t
+							INNER JOIN (
+								SELECT id FROM table_row
+								WHERE ${rawWhereClause}
+								ORDER BY ${orderByFragment}
+								LIMIT ${input.limit}
+								OFFSET ${offset}
+							) s ON t.id = s.id
+							ORDER BY ${orderByFragment}
+						`);
+					})
+				: ctx.db.execute(sql`
 						SELECT t.id, t.data
 						FROM table_row t
 						INNER JOIN (
 							SELECT id FROM table_row
-							WHERE table_id = ${input.tableId}::uuid
-							ORDER BY created_at, id
+							WHERE ${rawWhereClause}
+							ORDER BY ${orderByFragment}
 							LIMIT ${input.limit}
 							OFFSET ${offset}
 						) s ON t.id = s.id
-						ORDER BY t.created_at, t.id
-					`),
-					ctx.db.select({ count: sql<number>`count(*)::int` }).from(tableRow).where(whereClause),
-				]);
+						ORDER BY ${orderByFragment}
+					`);
 
-				const fastRows = [...rawResult] as Array<{ id: string; data: Record<string, string> | null }>;
-				const nextCursor =
-					fastRows.length === input.limit ? offset + fastRows.length : null;
-
-				return {
-					rows: fastRows.map((row) => ({
-						id: row.id,
-						data: row.data ?? {},
-					})),
-					nextCursor,
-					totalCount: Number(totalCountResult[0]?.count ?? 0),
-				};
-			}
-
-			// Run rows query and count query in parallel
-			const [rows, totalCountResult] = await Promise.all([
-				ctx.db.query.tableRow.findMany({
-					where: whereClause,
-				orderBy: (row, { asc, desc }) =>
-					effectiveSorts.length > 0
-						? [
-								...effectiveSorts.flatMap((sort) => {
-									const column = sortColumnsById.get(sort.columnId);
-									if (!column || column.tableId !== input.tableId) return [];
-									const columnType = column.type ?? "single_line_text";
-									if (columnType === "number") {
-										const numericValue =
-											sql<number>`nullif(${tableRow.data} ->> ${sort.columnId}, '')::numeric`;
-										return [
-											sort.direction === "desc"
-												? desc(numericValue)
-												: asc(numericValue),
-										];
-									}
-									const textValue =
-										sql<string>`coalesce(${tableRow.data} ->> ${sort.columnId}, '')`;
-									return [
-										sort.direction === "desc"
-											? desc(textValue)
-											: asc(textValue),
-									];
-								}),
-								asc(row.createdAt),
-								asc(row.id),
-							]
-						: [asc(row.createdAt), asc(row.id)],
-					limit: input.limit,
-					offset,
-				}),
+			const [rawResult, totalCountResult] = await Promise.all([
+				rowsQuery,
 				ctx.db.select({ count: sql<number>`count(*)::int` }).from(tableRow).where(whereClause),
 			]);
 
+			const fastRows = [...rawResult] as Array<{ id: string; data: Record<string, string> | null }>;
 			const nextCursor =
-				rows.length === input.limit ? offset + rows.length : null;
+				fastRows.length === input.limit ? offset + fastRows.length : null;
 
 			return {
-				rows: rows.map((row) => ({
+				rows: fastRows.map((row) => ({
 					id: row.id,
 					data: row.data ?? {},
 				})),

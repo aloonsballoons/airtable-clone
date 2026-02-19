@@ -146,6 +146,13 @@ export const tableRow = createTable(
 	}),
 	(t) => [
 		index("table_row_table_created_idx").on(t.tableId, t.createdAt, t.id),
+		// GIN index on data column for faster JSONB filtering
+		index("table_row_data_gin_idx").using("gin", t.data),
+		// Trigram index on search_text for faster ILIKE searches
+		index("table_row_search_text_trgm_idx").using(
+			"gin",
+			sql`${t.searchText} gin_trgm_ops`,
+		),
 	],
 );
 

@@ -347,14 +347,16 @@ export function useTableSort({
   const [draggingSortId, setDraggingSortId] = useState<string | null>(null);
   const [draggingSortTop, setDraggingSortTop] = useState<number | null>(null);
 
-  // Parse sort config from table metadata
+  // Parse sort config from table metadata (memoized to prevent unnecessary
+  // re-renders and effect re-triggers when the underlying data hasn't changed)
   const rawSortConfig = tableMetaQuery.data?.sort ?? null;
-  const sortConfigList: SortConfig[] = Array.isArray(rawSortConfig)
-    ? rawSortConfig.map((item) => ({
-        columnId: item.columnId,
-        direction: normalizeSortDirection(item.direction),
-      }))
-    : [];
+  const sortConfigList: SortConfig[] = useMemo(() => {
+    if (!Array.isArray(rawSortConfig) || rawSortConfig.length === 0) return [];
+    return rawSortConfig.map((item) => ({
+      columnId: item.columnId,
+      direction: normalizeSortDirection(item.direction),
+    }));
+  }, [rawSortConfig]);
 
   // Filter sorts to only visible columns
   const filterActiveSorts = useCallback(
@@ -365,9 +367,10 @@ export function useTableSort({
     [visibleColumnIdSet]
   );
 
-  // Determine active sort parameter
+  // Determine active sort parameter (memoized to stabilize query keys
+  // and prevent unnecessary refetches when the sort hasn't actually changed)
   const sortParamSource = sortOverride ?? sortConfigList;
-  const sortParam = filterActiveSorts(sortParamSource);
+  const sortParam = useMemo(() => filterActiveSorts(sortParamSource), [filterActiveSorts, sortParamSource]);
   const hasSort = sortParam.length > 0;
   const shouldIncludeSortInQuery =
     sortOverride !== null || hasLoadedTableMetaRef.current;
@@ -420,6 +423,7 @@ export function useTableSort({
       const previousSort = normalizeSortList(previous?.sort ?? null);
       const nextSort = sort ?? [];
 
+      // Optimistically update table meta cache
       utils.base.getTableMeta.setData({ tableId }, (current) => {
         if (!current) return current;
         return {
@@ -428,8 +432,8 @@ export function useTableSort({
         };
       });
 
-      // Invalidate all row queries for this table since sort changed
-      await utils.base.getRows.invalidate({ tableId });
+      // No getRows invalidation needed here — sortOverride already changes
+      // the query key, which triggers a fresh fetch automatically.
 
       return { previous, previousSort, tableId };
     },
@@ -443,9 +447,9 @@ export function useTableSort({
       setSortOverride(context?.previousSort ?? null);
     },
     onSettled: async (_data, _error, variables) => {
+      // Only invalidate meta to sync with server — no getRows invalidation
+      // needed since sortOverride already drives the query key.
       await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
-      // Invalidate all row queries for this table
-      await utils.base.getRows.invalidate({ tableId: variables.tableId });
     },
   });
 
@@ -607,13 +611,20 @@ export function useTableSort({
     };
   }, [openSortFieldId]);
 
-  // Effect: Filter out sorts for hidden columns
+  // Effect: Filter out sorts for hidden columns.
+  // Use a ref to track whether we already fired this for the current config
+  // to prevent cascading re-fetches (applySorts -> mutation -> meta invalidation
+  // -> sortConfigList change -> effect re-fires).
+  const lastFilteredSortRef = useRef<string>("");
   useEffect(() => {
     if (sortConfigList.length === 0) return;
     const nextSorts = sortConfigList.filter((sort) =>
       visibleColumnIdSet.has(sort.columnId)
     );
     if (nextSorts.length !== sortConfigList.length) {
+      const key = JSON.stringify(nextSorts);
+      if (lastFilteredSortRef.current === key) return;
+      lastFilteredSortRef.current = key;
       applySorts(nextSorts.length ? nextSorts : null);
     }
   }, [applySorts, sortConfigList, visibleColumnIdSet]);
