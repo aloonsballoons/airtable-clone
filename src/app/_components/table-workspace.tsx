@@ -650,8 +650,42 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     hasActiveFilters,
     utils,
     getRowsQueryKey,
+    onBulkSuccess: () => {
+      // Clear sparse page cache so the virtualizer fetches fresh data
+      sparsePagesRef.current = new Map();
+      sparseFetchingRef.current = new Set();
+      setSparseVersion((v) => v + 1);
+    },
   });
   const { handleAddBulkRows, bulkRowsDisabled, addRowsMutate, addRowsIsPending } = bulkRowsHook;
+
+  // DEBUG: Log state after bulk row mutation settles
+  const prevAddRowsPendingRef = useRef(false);
+  useEffect(() => {
+    if (prevAddRowsPendingRef.current && !addRowsIsPending) {
+      console.log("[BULK-DEBUG] Mutation settled. State:", {
+        pagesCount: rowsQuery.data?.pages?.length,
+        firstPageRowCount: rowsQuery.data?.pages?.[0]?.rows?.length,
+        firstPageTotalCount: rowsQuery.data?.pages?.[0]?.totalCount,
+        hasNextPage: rowsQuery.hasNextPage,
+        isFetching: rowsQuery.isFetching,
+        isStale: rowsQuery.isStale,
+        totalRowCount,
+        activeRowCount,
+      });
+    }
+    prevAddRowsPendingRef.current = addRowsIsPending;
+  }, [addRowsIsPending, rowsQuery.data?.pages, rowsQuery.hasNextPage, rowsQuery.isFetching, rowsQuery.isStale, totalRowCount, activeRowCount]);
+
+  // DEBUG: Log whenever rows query data changes
+  useEffect(() => {
+    console.log("[BULK-DEBUG] rowsQuery.data changed:", {
+      pagesCount: rowsQuery.data?.pages?.length,
+      firstPageRowCount: rowsQuery.data?.pages?.[0]?.rows?.length,
+      firstPageTotalCount: rowsQuery.data?.pages?.[0]?.totalCount,
+      hasNextPage: rowsQuery.hasNextPage,
+    });
+  }, [rowsQuery.data, rowsQuery.hasNextPage]);
 
   const handleCreateView = useCallback((viewName: string) => {
     if (!activeTableId) return;
@@ -751,11 +785,15 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   ]);
 
   // Fallback: clear loading state if stuck, but only when data is actually ready.
-  // Uses a ref so the interval callback always reads current state.
+  // Uses refs so the interval callback always reads current state.
   const viewSwitchDataReadyRef = useRef(false);
   viewSwitchDataReadyRef.current =
     !rowsQuery.isFetching && !rowsQuery.isPlaceholderData &&
     rowsQuery.data?.pages?.[0] !== undefined;
+  const activeViewIdRef = useRef(activeViewId);
+  activeViewIdRef.current = activeViewId;
+  const createViewPendingRef = useRef(false);
+  createViewPendingRef.current = createViewMutation.isPending;
   useEffect(() => {
     if (!isViewSwitching) return;
 
@@ -763,7 +801,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     // Hard cap at 5s to never leave the user stuck.
     const start = Date.now();
     const interval = setInterval(() => {
-      if (viewSwitchDataReadyRef.current || Date.now() - start > 5000) {
+      const isHardCap = Date.now() - start > 5000;
+      // Don't clear prematurely during view creation: wait until the mutation
+      // completes and activeViewId moves past "pending-view", matching the
+      // guards in the main clearing effect (line ~697).
+      if (!isHardCap && (activeViewIdRef.current === "pending-view" || createViewPendingRef.current)) {
+        return;
+      }
+      if (viewSwitchDataReadyRef.current || isHardCap) {
         setIsViewSwitching(false);
       }
     }, 200);
@@ -2674,6 +2719,10 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       prevDisplaySortKeyRef.current = "";
       return;
     }
+    // While view is switching, don't re-populate display sets from potentially
+    // stale hook values (e.g. base table config leaking through "pending-view"
+    // phase when isRealCustomView is false).
+    if (isViewSwitching) return;
     const isRefetching = rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
     if (!isRefetching) {
       if (sortedColumnIdsKey !== prevDisplaySortKeyRef.current) {
@@ -2685,7 +2734,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
         setDisplayFilteredColumnIds(filteredColumnIds);
       }
     }
-  }, [activeViewId, rowsQuery.isFetching, rowsQuery.isFetchingNextPage, sortedColumnIdsKey, filteredColumnIdsKey, sortedColumnIds, filteredColumnIds]);
+  }, [activeViewId, isViewSwitching, rowsQuery.isFetching, rowsQuery.isFetchingNextPage, sortedColumnIdsKey, filteredColumnIdsKey, sortedColumnIds, filteredColumnIds]);
 
   // Clear function triggered state after fetch cycle completes
   useEffect(() => {

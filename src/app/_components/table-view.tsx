@@ -8,6 +8,7 @@ import type {
   SetStateAction,
 } from "react";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -16,8 +17,9 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
+
+import { useTableScroll, ROW_HEIGHT } from "./use-table-scroll";
 
 import { AddColumnMenu } from "./add-column-menu";
 import expandIcon from "~/assets/expand.svg";
@@ -47,15 +49,10 @@ type TableRow = Record<string, string> & { id: string };
 // Constants
 // ---------------------------------------------------------------------------
 
-const ROW_HEIGHT = 33;
 const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const ADD_COLUMN_WIDTH = 93;
 const LONG_TEXT_HEIGHT = 142;
-const ROW_VIRTUAL_OVERSCAN = 30;
-const ROW_SCROLLING_RESET_DELAY_MS = 150;
-const PAGE_ROWS = 2000;
-const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 2_000_000;
 const MAX_NUMBER_DECIMALS = 8;
@@ -143,6 +140,41 @@ const renderSearchHighlight = (value: string, query: string) => {
   }
   return parts;
 };
+
+// ---------------------------------------------------------------------------
+// Memoised row wrapper — prevents React from re-rendering unchanged rows
+// during scroll.  The `render` function is a closure over parent scope; it
+// is only invoked when the custom `areEqual` comparison returns false.
+// ---------------------------------------------------------------------------
+
+const MemoTableRow = memo(
+  function MemoTableRow({
+    render,
+  }: {
+    rowId: string;
+    rowIndex: number;
+    rowSize: number;
+    isLastRow: boolean;
+    isHot: boolean;
+    version: string;
+    render: () => ReactNode;
+  }) {
+    return <>{render()}</>;
+  },
+  (prev, next) => {
+    // "Hot" rows (selected, editing, or with pending edits) always re-render
+    // so they pick up the latest interaction state.
+    if (prev.isHot || next.isHot) return false;
+    // Cold rows: skip re-render when identity and global version are stable.
+    return (
+      prev.rowId === next.rowId &&
+      prev.rowIndex === next.rowIndex &&
+      prev.rowSize === next.rowSize &&
+      prev.isLastRow === next.isLastRow &&
+      prev.version === next.version
+    );
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Props
@@ -261,7 +293,6 @@ export function TableView({
   // Internal state
   // -------------------------------------------------------------------------
   const [addRowHover, setAddRowHover] = useState(false);
-  const [scrollbarDragging, setScrollbarDragging] = useState(false);
   const [isAddColumnMenuOpen, setIsAddColumnMenuOpen] = useState(false);
   const [addColumnMenuPosition, setAddColumnMenuPosition] = useState<{
     top: number;
@@ -271,11 +302,6 @@ export function TableView({
   // -------------------------------------------------------------------------
   // Refs
   // -------------------------------------------------------------------------
-  const parentRef = useRef<HTMLDivElement>(null);
-  const headerScrollRef = useRef<HTMLDivElement>(null);
-  const skeletonOverlayRef = useRef<HTMLDivElement>(null);
-
-  const scrollbarDragRef = useRef(false);
   const addColumnButtonRef = useRef<HTMLButtonElement>(null);
   const addColumnMenuRef = useRef<HTMLDivElement>(null);
   const cellRefs = useRef<
@@ -286,9 +312,7 @@ export function TableView({
     mode: "select" | "edit";
   } | null>(null);
   const focusTokenRef = useRef(0);
-  const prefetchingRowsRef = useRef(false);
   const isAddColumnMenuOpenRef = useRef(isAddColumnMenuOpen);
-  const lastScrollPrefetchRef = useRef({ start: -1, end: -1 });
 
   // -------------------------------------------------------------------------
   // Computed values
@@ -351,12 +375,6 @@ export function TableView({
   );
 
   const rowCount = sortedTableData.length;
-  // Use the server-reported total filtered count so the scroll area reflects
-  // the full dataset, not just the currently loaded rows. This prevents the
-  // scrollbar from acting as if the loaded page is the entire table.
-  const virtualizerCount = rowsHasNextPage
-    ? Math.max(rowCount + 1, activeRowCount)
-    : rowCount;
   const addRowDisabled = !activeTableId || totalRowCount >= MAX_ROWS;
 
   const expandedRowId = useMemo(() => {
@@ -368,105 +386,45 @@ export function TableView({
     return selectedType === "long_text" ? selectedCell.rowId : null;
   }, [orderedColumns, selectedCell]);
 
-  // Constant height — expanded cells use overlays, not taller rows.
-  const estimateRowSize = useCallback(() => ROW_HEIGHT, []);
-
   // -------------------------------------------------------------------------
-  // Virtualizers
+  // Scroll / virtualizer hook
   // -------------------------------------------------------------------------
-  const rowVirtualizer = useVirtualizer({
-    count: virtualizerCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: estimateRowSize,
-    overscan: ROW_VIRTUAL_OVERSCAN,
-    getItemKey: (index) => sortedTableData[index]?.id ?? sparseRows.get(index)?.id ?? `placeholder-${index}`,
-    isScrollingResetDelay: ROW_SCROLLING_RESET_DELAY_MS,
+  const {
+    parentRef,
+    headerScrollRef,
+    skeletonOverlayRef,
+    scrollbarDragging,
+    rowVirtualizer,
+    rowVirtualItems,
+    rowVirtualRange,
+    rowCanvasHeight,
+    lastVirtualRowIndex,
+    allRowsFiltered,
+    columnVirtualizer,
+    virtualColumns,
+    columnVirtualRange,
+    gridPatternSvg,
+    gridPatternSize,
+    handleScroll,
+  } = useTableScroll({
+    activeRowCount,
+    rowCount,
+    rowsHasNextPage,
+    rowsIsFetchingNextPage,
+    rowsFetchNextPage,
+    sortedTableData,
+    sparseRows,
+    onVisibleRangeChange,
+    columnsWithAdd,
+    defaultColumnWidth: DEFAULT_COLUMN_WIDTH,
+    columnWidths,
+    showRowsInitialLoading,
+    showRowsError,
+    showRowsEmpty,
+    hasActiveFilters,
+    expandedRowId,
   });
 
-  const virtualItems = rowVirtualizer.getVirtualItems();
-
-  // Use virtual items directly - no caching to avoid stale data during sorts/filters
-  const rowVirtualItems = virtualItems;
-
-  // Track when sortedTableData changes significantly and reset scroll if needed
-  const lastDataSignatureRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!sortedTableData?.length) {
-      lastDataSignatureRef.current = null;
-      return;
-    }
-
-    try {
-      // Create a signature from first few row IDs only to detect data changes
-      // Don't include last row IDs to avoid triggering on pagination appends
-      const firstIds = sortedTableData.slice(0, 10).map(r => r?.id ?? '').filter(Boolean).join(',');
-      const currentSignature = `${firstIds}`;
-
-      if (lastDataSignatureRef.current !== null &&
-          lastDataSignatureRef.current !== currentSignature) {
-        // Data changed significantly (sort/filter applied)
-        // Force virtualizer to remeasure immediately
-        if (rowVirtualizer?.measure) {
-          rowVirtualizer.measure();
-        }
-
-        // Check if current scroll position is beyond new data bounds
-        // Use virtualizer's total size for accurate scroll calculations
-        const scrollElement = parentRef.current;
-        if (scrollElement) {
-          const virtualizerTotalSize = rowVirtualizer.getTotalSize();
-          const maxScroll = Math.max(0, virtualizerTotalSize - scrollElement.clientHeight);
-          if (scrollElement.scrollTop > maxScroll) {
-            // Scrolled beyond new data, reset to top
-            scrollElement.scrollTop = 0;
-          }
-        }
-      }
-
-      lastDataSignatureRef.current = currentSignature;
-    } catch (error) {
-      // Silently handle any errors in data signature calculation
-      console.warn('Error in scroll reset logic:', error);
-    }
-  }, [sortedTableData]);
-  const allRowsFiltered = showRowsEmpty && hasActiveFilters;
-  const rowCanvasHeight = allRowsFiltered
-    ? 0
-    : Math.max(
-        rowVirtualizer.getTotalSize(),
-        showRowsInitialLoading || showRowsError || showRowsEmpty
-          ? ROW_HEIGHT * 5
-          : 0,
-      );
-  const rowVirtualRange = useMemo(() => {
-    if (!rowVirtualItems.length) return { start: 0, end: 0 };
-    return {
-      start: rowVirtualItems[0]?.index ?? 0,
-      end: rowVirtualItems[rowVirtualItems.length - 1]?.index ?? 0,
-    };
-  }, [rowVirtualItems]);
-  const lastVirtualRowIndex = rowVirtualItems.length
-    ? (rowVirtualItems[rowVirtualItems.length - 1]?.index ?? -1)
-    : -1;
-
-  const columnVirtualizer = useVirtualizer({
-    horizontal: true,
-    count: columnsWithAdd.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: (index) =>
-      columnsWithAdd[index]?.width ?? DEFAULT_COLUMN_WIDTH,
-    overscan: 12,
-    getItemKey: (index) => columnsWithAdd[index]?.id ?? index,
-  });
-
-  const virtualColumns = columnVirtualizer.getVirtualItems();
-  const columnVirtualRange = useMemo(() => {
-    if (!virtualColumns.length) return { start: 0, end: 0 };
-    return {
-      start: virtualColumns[0]?.index ?? 0,
-      end: virtualColumns[virtualColumns.length - 1]?.index ?? 0,
-    };
-  }, [virtualColumns]);
   const nameColumnIndex = columnsWithAdd.findIndex(
     (column) => column.type === "data" && column.name === "Name",
   );
@@ -505,81 +463,25 @@ export function TableView({
     totalScrollableWidth - lastScrollableEnd,
   );
 
-  // Column divider positions (right edge of each data column, excluding
-  // row-number, Name, and add-column — those have their own treatment).
-  // Used to draw persistent vertical grid lines on the row canvas background.
-  const columnDividerPositions = useMemo(() => {
-    const positions: number[] = [];
-    let x = 0;
-    for (const col of columnsWithAdd) {
-      x += col.width;
-      // Skip row-number (no divider) and add column (no divider)
-      if (col.type === "row-number" || col.type === "add") continue;
-      // Skip Name column (has its own full-height divider)
-      if (col.type === "data" && col.name === "Name") continue;
-      positions.push(x);
-    }
-    return positions;
-  }, [columnsWithAdd]);
-
-  // SVG tile for grid lines — applied directly as a CSS background on
-  // the row canvas.  The tile (dataWidth × ROW_HEIGHT) repeats vertically.
-  // Because the background shares the same coordinate system as the
-  // absolutely-positioned virtual rows, the grid lines stay aligned
-  // during fast scrolling without any JavaScript adjustment.
-  const gridPatternSvg = useMemo(() => {
-    const dataWidth = totalColumnsWidth - addColumnWidth;
-    if (dataWidth <= 0) return "";
-
-    const lines: string[] = [];
-    lines.push(
-      `<line x1="0" y1="${ROW_HEIGHT - 0.5}" x2="${dataWidth}" y2="${ROW_HEIGHT - 0.5}" stroke="%23DDE1E3" stroke-width="1"/>`
-    );
-    for (const x of columnDividerPositions) {
-      lines.push(
-        `<line x1="${x - 0.5}" y1="0" x2="${x - 0.5}" y2="${ROW_HEIGHT}" stroke="%23DDE1E3" stroke-width="1"/>`
-      );
-    }
-
-    return `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='${dataWidth}' height='${ROW_HEIGHT}'><rect width='${dataWidth}' height='${ROW_HEIGHT}' fill='white'/>${lines.join("")}</svg>")`;
-  }, [totalColumnsWidth, addColumnWidth, columnDividerPositions]);
-
-  const gridPatternSize = useMemo(() => {
-    const dataWidth = totalColumnsWidth - addColumnWidth;
-    return `${dataWidth}px ${ROW_HEIGHT}px`;
-  }, [totalColumnsWidth, addColumnWidth]);
-
-  // Skeleton SVG tile — same grid as gridPatternSvg but with gray shimmer
-  // bars in each cell.  Used by the drag-scroll skeleton overlay.
-  const skeletonPatternSvg = useMemo(() => {
-    const dataWidth = totalColumnsWidth - addColumnWidth;
-    if (dataWidth <= 0) return "";
-    const parts: string[] = [];
-    parts.push(
-      `<rect width="${dataWidth}" height="${ROW_HEIGHT}" fill="white"/>`
-    );
-    parts.push(
-      `<line x1="0" y1="${ROW_HEIGHT - 0.5}" x2="${dataWidth}" y2="${ROW_HEIGHT - 0.5}" stroke="%23DDE1E3" stroke-width="1"/>`
-    );
-    for (const x of columnDividerPositions) {
-      parts.push(
-        `<line x1="${x - 0.5}" y1="0" x2="${x - 0.5}" y2="${ROW_HEIGHT}" stroke="%23DDE1E3" stroke-width="1"/>`
-      );
-    }
-    const barY = Math.round((ROW_HEIGHT - 12) / 2);
-    let colX = 0;
-    for (const col of columnsWithAdd) {
-      if (col.type === "add") break;
-      const barW = Math.min(col.width * 0.6, 120);
-      if (barW > 4) {
-        parts.push(
-          `<rect x="${colX + 8}" y="${barY}" width="${barW}" height="12" rx="4" fill="%23E8E8E8"/>`
-        );
-      }
-      colX += col.width;
-    }
-    return `url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='${dataWidth}' height='${ROW_HEIGHT}'>${parts.join("")}</svg>")`;
-  }, [totalColumnsWidth, addColumnWidth, columnDividerPositions, columnsWithAdd]);
+  // -------------------------------------------------------------------------
+  // Row render version — a cheap fingerprint of all shared state that affects
+  // how ANY row renders.  Stable during vertical-only scrolling so that
+  // MemoTableRow can skip re-rendering cold rows.
+  // -------------------------------------------------------------------------
+  const rowRenderVersion =
+    columnsWithAdd.map((c) => `${c.id}:${c.width}`).join(",") +
+    "|" +
+    virtualColumns.map((v) => `${v.index}:${v.start}:${v.size}`).join(",") +
+    "|" +
+    searchQuery +
+    "|" +
+    scrollablePaddingLeft +
+    "|" +
+    scrollablePaddingRight +
+    "|" +
+    [...sortedColumnIds].join(",") +
+    "|" +
+    [...filteredColumnIds].join(",");
 
   // -------------------------------------------------------------------------
   // Border helpers
@@ -917,15 +819,6 @@ export function TableView({
   }, [setSelectedCell, setEditingCell]);
 
   useEffect(() => {
-    rowVirtualizer.measure();
-  }, [rowVirtualizer, expandedRowId]);
-
-  useEffect(() => {
-    columnVirtualizer.measure();
-  }, [columnVirtualizer, columnWidths, columnsWithAdd.length]);
-
-
-  useEffect(() => {
     const focusTarget = editingCell ?? selectedCell;
     if (!focusTarget) {
       lastFocusedRef.current = null;
@@ -964,93 +857,6 @@ export function TableView({
     columnVirtualRange.start,
     columnVirtualRange.end,
   ]);
-
-  // Report visible range so parent can fetch sparse pages directly.
-  // Uses useLayoutEffect to fire synchronously after render — earlier than
-  // useEffect — so the fetch request is dispatched before the browser paints
-  // the skeleton frame.  Large buffer ensures data is pre-fetched well ahead.
-  useLayoutEffect(() => {
-    if (lastVirtualRowIndex < 0) return;
-    const firstIndex = rowVirtualRange.start;
-    // Large buffer: prefetch well beyond visible area so scrolling finds data ready
-    const bufferSize = ROW_VIRTUAL_OVERSCAN * 4;
-    const start = Math.max(0, firstIndex - bufferSize);
-    const end = Math.min(activeRowCount - 1, lastVirtualRowIndex + bufferSize);
-    onVisibleRangeChange(start, end);
-  }, [lastVirtualRowIndex, rowVirtualRange.start, activeRowCount, onVisibleRangeChange]);
-
-  // Sequential burst-fetch for infinite query (keeps sequential pages loading in background)
-  useEffect(() => {
-    if (lastVirtualRowIndex < 0) return;
-    if (!rowsHasNextPage) return;
-    if (rowsIsFetchingNextPage) return;
-    if (prefetchingRowsRef.current) return;
-
-    const rowsRemaining = rowCount - lastVirtualRowIndex - 1;
-
-    if (rowsRemaining > ROW_PREFETCH_AHEAD) return;
-
-    prefetchingRowsRef.current = true;
-
-    // Fetch multiple pages at once to build the prefetch buffer faster.
-    // When scrolling normally, fetch enough to fill the buffer in one burst
-    // rather than one page per effect cycle.
-    const pagesNeeded = Math.ceil((ROW_PREFETCH_AHEAD - Math.max(0, rowsRemaining)) / PAGE_ROWS);
-    const pagesDeficit = rowsRemaining <= 0
-      ? Math.min(10, Math.ceil((lastVirtualRowIndex - rowCount + 1) / PAGE_ROWS) + 2)
-      : Math.max(1, Math.min(5, pagesNeeded));
-
-    const fetchBurst = async () => {
-      for (let i = 0; i < pagesDeficit; i++) {
-        await rowsFetchNextPage();
-      }
-    };
-
-    void fetchBurst().finally(() => {
-      prefetchingRowsRef.current = false;
-    });
-  }, [
-    lastVirtualRowIndex,
-    rowCount,
-    rowsHasNextPage,
-    rowsFetchNextPage,
-    rowsIsFetchingNextPage,
-  ]);
-
-  // -------------------------------------------------------------------------
-  // Scrollbar drag detection — show skeleton overlay while dragging
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    const el = parentRef.current;
-    if (!el) return;
-
-    const handleMouseDown = (e: MouseEvent) => {
-      // Only detect clicks directly on the scroll container (i.e. the
-      // scrollbar track/thumb), not on child elements.
-      if (e.target !== el) return;
-      const onVScrollbar = e.offsetX >= el.clientWidth;
-      const onHScrollbar = e.offsetY >= el.clientHeight;
-      if (onVScrollbar || onHScrollbar) {
-        scrollbarDragRef.current = true;
-        setScrollbarDragging(true);
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (scrollbarDragRef.current) {
-        scrollbarDragRef.current = false;
-        setScrollbarDragging(false);
-      }
-    };
-
-    el.addEventListener("mousedown", handleMouseDown);
-    window.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      el.removeEventListener("mousedown", handleMouseDown);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, []);
 
   // -------------------------------------------------------------------------
   // Render
@@ -1296,50 +1102,8 @@ export function TableView({
           style={{
             backgroundColor: "#F7F8FC",
             minHeight: 0,
-            // Grid pattern on the scroll container with background-attachment:local
-            // so it scrolls with content. This is the primary gap-filler — the
-            // browser tiles the SVG natively and it's always visible in the
-            // viewport, with zero JS alignment needed.
-            ...(gridPatternSvg
-              ? {
-                  backgroundImage: gridPatternSvg,
-                  backgroundSize: gridPatternSize,
-                  backgroundRepeat: "repeat-y" as const,
-                  backgroundAttachment: "local" as const,
-                }
-              : {}),
           }}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            // Sync horizontal scroll with header
-            if (headerScrollRef.current) {
-              headerScrollRef.current.scrollLeft = el.scrollLeft;
-            }
-            // Expose scroll position as CSS variable for clip-path on selected cells
-            el.style.setProperty("--scroll-left", `${el.scrollLeft}px`);
-            // Keep skeleton overlay aligned to the row grid during scroll.
-            if (skeletonOverlayRef.current) {
-              const scrollTopMod = `${-(el.scrollTop % ROW_HEIGHT)}px`;
-              skeletonOverlayRef.current.style.backgroundPositionY = scrollTopMod;
-            }
-
-            // Fire sparse page prefetch directly from the scroll event for
-            // minimum latency.  This runs synchronously during scroll, before
-            // the React render cycle, giving fetches an extra frame head start.
-            const scrollTop = el.scrollTop;
-            const clientHeight = el.clientHeight;
-            const firstVisibleRow = Math.floor(scrollTop / ROW_HEIGHT);
-            const lastVisibleRow = Math.ceil((scrollTop + clientHeight) / ROW_HEIGHT);
-            const bufferSize = ROW_VIRTUAL_OVERSCAN * 4;
-            const prefetchStart = Math.max(0, firstVisibleRow - bufferSize);
-            const prefetchEnd = Math.min(activeRowCount - 1, lastVisibleRow + bufferSize);
-            const last = lastScrollPrefetchRef.current;
-            // Only dispatch when the range shifts significantly (≥100 rows)
-            if (Math.abs(prefetchStart - last.start) >= 100 || Math.abs(prefetchEnd - last.end) >= 100) {
-              lastScrollPrefetchRef.current = { start: prefetchStart, end: prefetchEnd };
-              onVisibleRangeChange(prefetchStart, prefetchEnd);
-            }
-          }}
+          onScroll={(e) => handleScroll(e.currentTarget)}
         >
           <div
             className="airtable-row-canvas relative"
@@ -1347,14 +1111,21 @@ export function TableView({
               width: totalColumnsWidth,
               minWidth: totalColumnsWidth,
               height: rowCanvasHeight,
+              ...(gridPatternSvg
+                ? {
+                    backgroundImage: gridPatternSvg,
+                    backgroundSize: gridPatternSize,
+                    backgroundRepeat: "repeat-y" as const,
+                  }
+                : {}),
             }}
           >
-            {/* Skeleton overlay — shown during scrollbar drag to give a
-                consistent loading appearance.  Sits above all virtual rows
-                (z-index 200) so the user sees skeleton cells with shimmer
-                instead of stale / partially-rendered data.  Removed the
-                instant the drag ends, revealing the real rows beneath. */}
-            {scrollbarDragging && skeletonPatternSvg && (
+            {/* Skeleton overlay — shown during scrollbar drag.  Renders
+                stationary skeleton rows that stay fixed in the viewport
+                while the scrollbar moves.  Uses position:sticky so rows
+                don't scroll with the canvas.  Real virtual rows are hidden
+                behind it (display:none) to avoid rendering churn. */}
+            {scrollbarDragging && (
               <div
                 ref={skeletonOverlayRef}
                 aria-hidden="true"
@@ -1367,14 +1138,88 @@ export function TableView({
                   marginBottom: `max(-100vh, ${-rowCanvasHeight}px)`,
                   pointerEvents: "none",
                   zIndex: 200,
-                  backgroundColor: "#ffffff",
-                  backgroundImage: skeletonPatternSvg,
-                  backgroundSize: gridPatternSize,
-                  backgroundRepeat: "repeat",
-                  backgroundPositionX: "0",
-                  backgroundPositionY: `${-(parentRef.current?.scrollTop ?? 0) % ROW_HEIGHT}px`,
+                  overflow: "hidden",
                 }}
-              />
+              >
+                {Array.from({ length: Math.ceil((parentRef.current?.clientHeight ?? 800) / ROW_HEIGHT) }, (_, i) => (
+                  <div
+                    key={i}
+                    className="flex"
+                    style={{
+                      height: ROW_HEIGHT,
+                      width: totalColumnsWidth - addColumnWidth,
+                      borderBottom: "1px solid #DDE1E3",
+                      backgroundColor: "#ffffff",
+                    }}
+                  >
+                    {rowNumberColumn && (
+                      <div
+                        style={{
+                          width: rowNumberColumnWidth,
+                          minWidth: rowNumberColumnWidth,
+                          height: ROW_HEIGHT,
+                          backgroundColor: "#ffffff",
+                          borderRight: "none",
+                          position: "sticky",
+                          left: 0,
+                        }}
+                      />
+                    )}
+                    {nameColumn && (
+                      <div
+                        style={{
+                          width: nameColumnWidth,
+                          minWidth: nameColumnWidth,
+                          height: ROW_HEIGHT,
+                          backgroundColor: "#ffffff",
+                          borderRight: "none",
+                          position: "sticky",
+                          left: rowNumberColumnWidth,
+                          display: "flex",
+                          alignItems: "center",
+                          paddingLeft: 8,
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: Math.min(nameColumnWidth * 0.6, 120),
+                            height: 12,
+                            borderRadius: 4,
+                            backgroundColor: "#E8E8E8",
+                          }}
+                        />
+                      </div>
+                    )}
+                    {columnsWithAdd.map((col) => {
+                      if (col.type !== "data" || col.name === "Name") return null;
+                      return (
+                        <div
+                          key={col.id}
+                          style={{
+                            width: col.width,
+                            minWidth: col.width,
+                            height: ROW_HEIGHT,
+                            backgroundColor: "#ffffff",
+                            borderRight: "1px solid #DDE1E3",
+                            display: "flex",
+                            alignItems: "center",
+                            paddingLeft: 8,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: Math.min(col.width * 0.6, 120),
+                              height: 12,
+                              borderRadius: 4,
+                              backgroundColor: "#E8E8E8",
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             )}
             <div
               className="airtable-virtual-row-wrapper"
@@ -1384,6 +1229,14 @@ export function TableView({
                 left: 0,
                 width: "100%",
                 zIndex: 1,
+                // Single wrapper offset: translate to the first virtual item's
+                // start position.  Rows inside render in normal document flow
+                // (no per-row absolute positioning) so the browser can composite
+                // scroll updates in one pass instead of repositioning N rows.
+                transform: `translateY(${rowVirtualItems[0]?.start ?? 0}px)`,
+                // Hide real rows during scrollbar drag — the skeleton overlay
+                // covers the viewport and we avoid expensive row rendering.
+                display: scrollbarDragging ? "none" : undefined,
               }}
             >
             {rowVirtualItems.map((virtualRow) => {
@@ -1401,10 +1254,6 @@ export function TableView({
                     key={virtualRow.key}
                     className="airtable-skeleton-row left-0 flex pointer-events-none"
                     style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      transform: `translateY(${virtualRow.start}px)`,
                       height: ROW_HEIGHT,
                       width: totalColumnsWidth - addColumnWidth,
                     }}
@@ -1469,26 +1318,33 @@ export function TableView({
 
 
 
+            const isLastRow = virtualRow.index === rowCount - 1 && !rowsHasNextPage;
+            const isHot = selectedCell?.rowId === row.id || editingCell?.rowId === row.id || !!cellEdits[row.id];
+
+            return (
+              <MemoTableRow
+                key={row.id}
+                rowId={row.id}
+                rowIndex={virtualRow.index}
+                rowSize={virtualRow.size}
+                isLastRow={isLastRow}
+                isHot={isHot}
+                version={rowRenderVersion}
+                render={() => {
             const rowSearchMatches = hasSearchQuery
               ? searchMatchesByRow.get(row.id)
               : null;
-            const isLastRow = virtualRow.index === rowCount - 1 && !rowsHasNextPage;
             const rowHasSelection = selectedCell?.rowId === row.id;
             const rowNumberBaseBg = rowHasSelection
               ? "var(--airtable-cell-hover-bg)"
               : "#ffffff";
             const rowNumberHoverBg = "var(--airtable-cell-hover-bg)";
 
-
             return (
               <div
-                key={row.id}
                 className={clsx("airtable-row left-0 flex text-[13px] text-[#1d1f24]", rowHasSelection && "airtable-row--has-selection")}
                 style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  transform: `translateY(${virtualRow.start}px)`,
+                  position: "relative",
                   height: `${virtualRow.size}px`,
                   width: totalColumnsWidth - addColumnWidth,
                   zIndex: rowHasSelection ? 5 : 1,
@@ -1576,6 +1432,41 @@ export function TableView({
                       : nameIsSelected
                       ? "#ffffff"
                       : "var(--airtable-cell-hover-bg)";
+
+                    // Lightweight path for non-selected, non-editing Name cells
+                    if (!nameIsSelected && !nameIsEditing) {
+                      return (
+                        <div
+                          className="airtable-sticky-column airtable-cell relative flex overflow-visible px-2"
+                          style={{
+                            ...bodyCellBorder(nameColumn, true, isLastRow),
+                            width: nameColumnWidth,
+                            minWidth: nameColumnWidth,
+                            maxWidth: nameColumnWidth,
+                            flex: "0 0 auto",
+                            height: 33,
+                            alignItems: "center",
+                            position: "sticky",
+                            left: rowNumberColumnWidth,
+                            zIndex: 90,
+                            transform: "translateZ(0)",
+                            ["--airtable-cell-base" as string]: nameBaseBackground,
+                            ["--airtable-cell-hover" as string]: nameHoverBackground,
+                          }}
+                          onClick={() => focusCell(row.id, nameColumn.id)}
+                        >
+                          <div
+                            className="h-full w-full truncate text-[13px] text-[#1d1f24] leading-[33px]"
+                            style={{ textAlign: nameIsNumber ? "right" : "left" }}
+                          >
+                            {showNameSearchOverlay
+                              ? renderSearchHighlight(nameEditedValue, searchQuery)
+                              : nameEditedValue}
+                          </div>
+                        </div>
+                      );
+                    }
+
                     return (
                       <div
                         className={clsx(
@@ -1583,7 +1474,9 @@ export function TableView({
                           nameIsSelected &&
                             (nameIsEditing
                               ? "airtable-cell--editing"
-                              : "airtable-cell--selected")
+                              : "airtable-cell--selected"),
+                          (nameIsSelected || nameIsEditing) && "airtable-cell--no-sel-right",
+                          (nameIsSelected || nameIsEditing) && virtualRow.index === 0 && "airtable-cell--no-sel-top"
                         )}
                         style={{
                           ...bodyCellBorder(nameColumn, true, isLastRow),
@@ -1835,19 +1728,19 @@ export function TableView({
                 {scrollableVirtualColumns.map((virtualColumn) => {
                   const column = columnsWithAdd[virtualColumn.index];
                   if (!column) return null;
+                  if (column.type === "add") return null;
+                  if (column.type !== "data") return null;
+
                   const isSelected =
-                    column.type === "data" &&
                     selectedCell?.rowId === row.id &&
                     selectedCell?.columnId === column.id;
-                  const isSortedColumn =
-                    column.type === "data" &&
-                    sortedColumnIds.has(column.id);
-                  const isFilteredColumn =
-                    column.type === "data" &&
-                    filteredColumnIds.has(column.id);
+                  const isEditing =
+                    editingCell?.rowId === row.id &&
+                    editingCell?.columnId === column.id;
+                  const isSortedColumn = sortedColumnIds.has(column.id);
+                  const isFilteredColumn = filteredColumnIds.has(column.id);
                   const cellHasSearchMatch =
                     hasSearchQuery && rowSearchMatches?.has(column.id);
-                  const rowHasSelection = selectedCell?.rowId === row.id;
                   const cellBaseBackground = cellHasSearchMatch
                     ? "#FFF3D3"
                     : isFilteredColumn
@@ -1869,28 +1762,46 @@ export function TableView({
                     ? "#ffffff"
                     : "var(--airtable-cell-hover-bg)";
                   const cellStyle = bodyCellBorder(column, false, isLastRow);
-
-                    if (column.type === "add") return null;
-                    if (column.type !== "data") {
-                      return null;
-                    }
-
-                    const originalValue = row[column.id] ?? "";
-                    const editedValue =
-                      cellEdits[row.id]?.[column.id] ?? originalValue;
-                  const isLongText =
-                    column.type === "data" && column.fieldType === "long_text";
-                  const isNumber =
-                    column.type === "data" && column.fieldType === "number";
-                  const isEditing =
-                    editingCell?.rowId === row.id &&
-                    editingCell?.columnId === column.id;
-                  const showSearchOverlay =
-                    cellHasSearchMatch && !isEditing;
+                  const originalValue = row[column.id] ?? "";
+                  const editedValue =
+                    cellEdits[row.id]?.[column.id] ?? originalValue;
+                  const isLongText = column.fieldType === "long_text";
+                  const isNumber = column.fieldType === "number";
+                  const showSearchOverlay = cellHasSearchMatch && !isEditing;
                   const isExpanded =
                     isLongText &&
                     selectedCell?.rowId === row.id &&
                     selectedCell?.columnId === column.id;
+
+                  // Lightweight path: non-selected, non-editing cells render a
+                  // plain div instead of an <input> to reduce DOM weight.
+                  if (!isSelected && !isEditing) {
+                    return (
+                      <div
+                        key={`${row.id}-${column.id}`}
+                        className="airtable-cell relative flex overflow-visible px-2"
+                        style={{
+                          ...cellStyle,
+                          width: virtualColumn.size,
+                          flex: "0 0 auto",
+                          height: 33,
+                          alignItems: "center",
+                          ["--airtable-cell-base" as string]: cellBaseBackground,
+                          ["--airtable-cell-hover" as string]: cellHoverBackground,
+                        }}
+                        onClick={() => focusCell(row.id, column.id)}
+                      >
+                        <div
+                          className="h-full w-full truncate text-[13px] text-[#1d1f24] leading-[33px]"
+                          style={{ textAlign: isNumber ? "right" : "left" }}
+                        >
+                          {showSearchOverlay
+                            ? renderSearchHighlight(editedValue, searchQuery)
+                            : editedValue}
+                        </div>
+                      </div>
+                    );
+                  }
 
                     return (
                     <div
@@ -1900,7 +1811,9 @@ export function TableView({
                         isSelected &&
                           (isEditing
                             ? "airtable-cell--editing"
-                            : "airtable-cell--selected")
+                            : "airtable-cell--selected"),
+                        (isSelected || isEditing) && virtualColumn.index === nameColumnIndex + 1 && "airtable-cell--no-sel-left",
+                        (isSelected || isEditing) && virtualRow.index === 0 && "airtable-cell--no-sel-top"
                       )}
                       style={{
                         ...cellStyle,
@@ -2147,6 +2060,9 @@ export function TableView({
                   <div style={{ width: scrollablePaddingRight }} />
                 )}
               </div>
+            );
+                }}
+              />
             );
           })}
             </div>

@@ -9,6 +9,7 @@ interface UseBulkRowsOptions {
   hasActiveFilters: boolean;
   utils: ReturnType<typeof api.useUtils>;
   getRowsQueryKey: (tableId: string) => RouterInputs["base"]["getRows"];
+  onBulkSuccess?: () => void;
 }
 
 export function useBulkRows({
@@ -17,6 +18,7 @@ export function useBulkRows({
   hasActiveFilters,
   utils,
   getRowsQueryKey,
+  onBulkSuccess,
 }: UseBulkRowsOptions) {
   const addRows = api.base.addRows.useMutation({
     onMutate: async ({ tableId, count, ids }) => {
@@ -63,22 +65,32 @@ export function useBulkRows({
       return { queryKey, tableId, previous: null, isSingleRow: false };
     },
     onSuccess: async (_data, variables, context) => {
-      if (!context?.queryKey) return;
+      const tableId = variables.tableId;
+      const isSingleRow = variables.count === 1;
 
-      // For bulk operations, clear the cache and refetch from page 1
-      if (!context.isSingleRow) {
-        // Clear all cached pages by setting data to undefined
-        utils.base.getRows.setInfiniteData(context.queryKey, undefined);
-
-        // Force refetch - invalidate marks as stale and refetches if the query is active
-        await utils.base.getRows.refetch(context.queryKey);
-      } else {
-        // For single row, just invalidate to refetch current data
-        await utils.base.getRows.invalidate(context.queryKey);
+      // Notify caller to clear sparse page cache before invalidation
+      if (!isSingleRow) {
+        onBulkSuccess?.();
       }
 
-      // Also invalidate and refetch table meta to update row count
-      await utils.base.getTableMeta.refetch({ tableId: context.tableId });
+      // Use the specific query key captured in onMutate to ensure we
+      // invalidate the exact infinite query the component is observing.
+      const queryKey = context?.queryKey ?? getRowsQueryKey(tableId);
+
+      console.log("[BULK-DEBUG] onSuccess: invalidating getRows", {
+        tableId,
+        isSingleRow,
+        hasQueryKey: !!context?.queryKey,
+        queryKey: JSON.stringify(queryKey),
+      });
+
+      await utils.base.getRows.invalidate(queryKey);
+
+      console.log("[BULK-DEBUG] onSuccess: getRows invalidated, refetching tableMeta");
+
+      await utils.base.getTableMeta.refetch({ tableId });
+
+      console.log("[BULK-DEBUG] onSuccess: complete");
     },
     onError: (_error, _variables, context) => {
       // On error, revert optimistic update

@@ -32,3 +32,6 @@ const handler = (req: NextRequest) =>
 	});
 
 export { handler as GET, handler as POST };
+
+// Bulk-insert + index-rebuild can exceed the default 10s/60s limit.
+export const maxDuration = 300;

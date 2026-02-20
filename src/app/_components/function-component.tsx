@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { useId, useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState } from "react";
 import type {
   Dispatch,
   MouseEvent as ReactMouseEvent,
@@ -398,8 +398,10 @@ export function FunctionBar({
   showSearchSpinner,
   showNoSearchResults,
 }: FunctionBarProps) {
-  const searchMaskId = useId();
-  const closeMaskId = useId();
+  // Static IDs avoid useId() hydration mismatches in SVG clipPath/mask elements.
+  // Safe because only one FunctionBar is rendered at a time.
+  const searchMaskId = "fn-search-svg";
+  const closeMaskId = "fn-close-svg";
 
   // Dynamic hide fields button width
   const hideFieldsTextRef = useRef<HTMLSpanElement>(null);

@@ -1,6 +1,7 @@
 import { faker } from "@faker-js/faker";
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { after } from "next/server";
 import { z } from "zod";
 
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
@@ -795,47 +796,98 @@ export const baseRouter = createTRPCRouter({
 							return { added: input.count };
 						}
 
-						// OPTIMIZATION: For large inserts, temporarily drop indexes for massive speedup
-						// Rebuilding indexes after is much faster than updating them for each row
+						// Use lexicon-based data generation for UNIQUE data across all 100k rows
+						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
+						const shouldDropIndexes = input.count >= 10_000;
 
-						// Increase work_mem and maintenance_work_mem for better performance
-						await ctx.db.execute(sql`SET LOCAL work_mem = '512MB'`);
-						await ctx.db.execute(sql`SET LOCAL maintenance_work_mem = '512MB'`);
+						// IMPORTANT: Index drop and rebuild are kept OUTSIDE the
+						// transaction. If the Vercel function times out during a
+						// long-running transaction, PostgreSQL rolls back the entire
+						// txn — including the INSERT. By auto-committing the DROP
+						// and INSERT separately, the rows survive a timeout during
+						// the subsequent index rebuild phase.
 
-						// For bulk inserts >= 10k rows, drop and recreate indexes
-						if (input.count >= 10_000) {
-							// Drop the non-primary key indexes on table_row
-							await ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`);
-							await ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_created_idx`);
+						if (shouldDropIndexes) {
+							// Drop ALL non-primary-key indexes on table_row in parallel.
+							// GIN indexes are the single biggest bottleneck during
+							// bulk INSERT — dropping + rebuilding from scratch is
+							// dramatically faster than incremental maintenance.
+							await Promise.all([
+								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`),
+								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_created_idx`),
+								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_data_gin_idx`),
+								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_search_text_trgm_idx`),
+							]);
 							markPhase("drop-indexes");
 						}
 
-						// Use lexicon-based data generation for UNIQUE data across all 100k rows
-						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
+						try {
+							// Transaction scoped to SET LOCAL + INSERT only so the
+							// memory/WAL settings actually apply to the insert.
+							await ctx.db.transaction(async (tx) => {
+								await tx.execute(sql`SET LOCAL work_mem = '512MB'`);
+								await tx.execute(sql`SET LOCAL maintenance_work_mem = '512MB'`);
+								await tx.execute(sql`SET LOCAL synchronous_commit = 'off'`);
 
-						// Single optimized INSERT without index overhead
-						await ctx.db.execute(sql`
-							INSERT INTO table_row (id, table_id, data, search_text)
-							SELECT
-								gen_random_uuid(),
-								${input.tableId}::uuid,
-								${bulkExpressions.dataExpression},
-								${bulkExpressions.searchTextExpression}
-							FROM generate_series(1::int, ${sql.raw(String(input.count))}::int) AS series(row_num)
-						`);
-						markPhase("insert");
+								await tx.execute(sql`
+									INSERT INTO table_row (id, table_id, data, search_text)
+									SELECT
+										gen_random_uuid(),
+										${input.tableId}::uuid,
+										${bulkExpressions.dataExpression},
+										${bulkExpressions.searchTextExpression}
+									FROM generate_series(1::int, ${sql.raw(String(input.count))}::int) AS series(row_num)
+								`);
+								markPhase("insert");
+							});
+						} finally {
+							// Always rebuild indexes — even if the INSERT failed,
+							// we dropped them above and must restore them.
+							if (shouldDropIndexes) {
+								// Btree indexes in parallel (fast, needed for pagination)
+								await Promise.all([
+									ctx.db.execute(sql`
+										CREATE INDEX IF NOT EXISTS table_row_table_idx
+										ON table_row (table_id)
+									`),
+									ctx.db.execute(sql`
+										CREATE INDEX IF NOT EXISTS table_row_table_created_idx
+										ON table_row (table_id, created_at, id)
+									`),
+								]);
+								markPhase("rebuild-btree-indexes");
 
-						// Recreate the indexes (non-concurrently for speed)
-						if (input.count >= 10_000) {
-							await ctx.db.execute(sql`
-								CREATE INDEX IF NOT EXISTS table_row_table_idx
-								ON table_row (table_id)
-							`);
-							await ctx.db.execute(sql`
-								CREATE INDEX IF NOT EXISTS table_row_table_created_idx
-								ON table_row (table_id, created_at, id)
-							`);
-							markPhase("rebuild-indexes");
+								// Defer GIN index rebuilds to run AFTER the response is sent.
+								// GIN indexes are the dominant bottleneck (~30-120s for 100k rows)
+								// but are only needed for search/filter, not basic pagination.
+								// Using next/server after() ensures the callback completes even
+								// on serverless platforms like Vercel.
+								after(async () => {
+									const ginStart = process.hrtime.bigint();
+									try {
+										await Promise.all([
+											ctx.db.execute(sql`
+												CREATE INDEX IF NOT EXISTS table_row_data_gin_idx
+												ON table_row USING gin (data)
+											`),
+											ctx.db.execute(sql`
+												CREATE INDEX IF NOT EXISTS table_row_search_text_trgm_idx
+												ON table_row USING gin (search_text gin_trgm_ops)
+											`),
+										]);
+										const ginMs = roundMilliseconds(
+											nanosecondsToMilliseconds(process.hrtime.bigint() - ginStart),
+										);
+										console.info("[base.addRows] GIN indexes rebuilt", {
+											ginMs,
+											tableId: input.tableId,
+											count: input.count,
+										});
+									} catch (error) {
+										console.error("[base.addRows] GIN index rebuild failed:", error);
+									}
+								});
+							}
 						}
 
 						return { added: input.count };
