@@ -283,6 +283,12 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   const sparsePagesRef = useRef<Map<number, { id: string; data: Record<string, string> }[]>>(new Map());
   const sparseFetchingRef = useRef<Set<number>>(new Set());
   const sparseParamsRef = useRef<string>("");
+  // Incremental sparse row map — avoid rebuilding entire Map on each page arrival
+  const sparseRowsMapRef = useRef<Map<number, TableRow>>(new Map());
+  const sparseProcessedPagesRef = useRef<Set<number>>(new Set());
+  // RAF-batched sparse version updates — coalesce rapid page arrivals into fewer re-renders
+  const sparseRafRef = useRef<number>(0);
+  const orderedColumnsRef = useRef([] as { id: string; name: string; type: string | null }[]);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId }, { staleTime: 30_000 });
 
@@ -431,18 +437,25 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     const initials = formatInitials(baseName);
     const faviconUrl = `/api/favicon?initials=${encodeURIComponent(initials)}&v=${Date.now()}`;
 
-    // Update all favicon links
-    const links = document.querySelectorAll<HTMLLinkElement>("link[rel*='icon']");
-    links.forEach((link) => {
-      link.href = faviconUrl;
-    });
+    // Remove all existing favicon links (including Next.js-managed ones)
+    document.querySelectorAll<HTMLLinkElement>("link[rel*='icon']").forEach((l) => l.remove());
+
+    // Create a fresh link element so the browser picks up the change
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/svg+xml";
+    link.href = faviconUrl;
+    link.setAttribute("data-dynamic-favicon", "true");
+    document.head.appendChild(link);
 
     // Cleanup: restore default favicon when unmounting
     return () => {
-      const links = document.querySelectorAll<HTMLLinkElement>("link[rel*='icon']");
-      links.forEach((link) => {
-        link.href = "/logo.svg";
-      });
+      document.querySelectorAll<HTMLLinkElement>("link[data-dynamic-favicon]").forEach((l) => l.remove());
+      const defaultLink = document.createElement("link");
+      defaultLink.rel = "icon";
+      defaultLink.type = "image/svg+xml";
+      defaultLink.href = "/logo.svg";
+      document.head.appendChild(defaultLink);
     };
   }, [baseDetailsQuery.data?.name]);
 
@@ -497,6 +510,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       ),
     [hiddenColumnIdSet, orderedAllColumns]
   );
+  orderedColumnsRef.current = orderedColumns;
   const visibleColumnIdSet = useMemo(
     () => new Set(orderedColumns.map((column) => column.id)),
     [orderedColumns]
@@ -676,9 +690,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     getRowsQueryKey,
     onBulkSuccess: () => {
       // Clear sparse page cache so the virtualizer fetches fresh data
-      sparsePagesRef.current = new Map();
-      sparseFetchingRef.current = new Set();
-      setSparseVersion((v) => v + 1);
+      resetSparseCache();
     },
   });
   const { handleAddBulkRows, bulkRowsDisabled, addRowsMutate, addRowsIsPending } = bulkRowsHook;
@@ -1216,9 +1228,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       }
     },
     onSettled: async (_data, _error, variables) => {
-      sparsePagesRef.current = new Map();
-      sparseFetchingRef.current = new Set();
-      setSparseVersion((v) => v + 1);
+      resetSparseCache();
       await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
       await utils.base.getRows.invalidate(getRowsQueryKey(variables.tableId));
     },
@@ -1253,9 +1263,15 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       });
       // Also update sparse page cache if the row lives there
       for (const [pageIdx, pageRows] of sparsePagesRef.current) {
-        const rowInPage = pageRows.find((r) => r.id === rowId);
-        if (rowInPage) {
-          rowInPage.data = { ...rowInPage.data, [columnId]: value };
+        const rowIdx = pageRows.findIndex((r) => r.id === rowId);
+        if (rowIdx >= 0) {
+          pageRows[rowIdx]!.data = { ...pageRows[rowIdx]!.data, [columnId]: value };
+          // Keep incremental map in sync
+          const globalIdx = pageIdx * SPARSE_PAGE_ROWS + rowIdx;
+          const existing = sparseRowsMapRef.current.get(globalIdx);
+          if (existing) {
+            sparseRowsMapRef.current.set(globalIdx, { ...existing, [columnId]: value });
+          }
           break;
         }
       }
@@ -1274,9 +1290,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         hasActiveFilters && filteredColumnIds.has(variables.columnId);
       if ((shouldInvalidateSort || shouldInvalidateFilter) && activeTableId) {
         // Clear sparse cache so re-fetches get fresh sorted/filtered data
-        sparsePagesRef.current = new Map();
-        sparseFetchingRef.current = new Set();
-        setSparseVersion((v) => v + 1);
+        resetSparseCache();
         void utils.base.getRows.invalidate(getRowsQueryKey(activeTableId));
       }
     },
@@ -2584,10 +2598,64 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     });
   }, [activeTable, orderedColumns, rows]);
 
+  const tableDataById = useMemo(
+    () => new Map(tableData.map((row) => [row.id, row])),
+    [tableData],
+  );
+
   // ---------------------------------------------------------------------------
   // Sparse page cache — fetches arbitrary pages by offset for instant scroll
   // ---------------------------------------------------------------------------
   const [sparseVersion, setSparseVersion] = useState(0);
+
+  // Microtask-batched sparse update — coalesces rapid page arrivals into a
+  // single re-render without the ~16ms RAF delay.  React 18 already batches
+  // state updates within the same microtask, so multiple calls coalesce.
+  const scheduleSparseUpdate = useCallback(() => {
+    if (sparseRafRef.current) return;
+    sparseRafRef.current = 1; // flag: pending
+    queueMicrotask(() => {
+      sparseRafRef.current = 0;
+      setSparseVersion((v) => v + 1);
+    });
+  }, []);
+
+  // Process a fetched sparse page: store raw data, build TableRow entries
+  // in the incremental map, then schedule a batched re-render.
+  const processSparsePageResult = useCallback(
+    (pageIndex: number, pageRows: { id: string; data: Record<string, string> }[]) => {
+      sparsePagesRef.current.set(pageIndex, pageRows);
+
+      // Eagerly transform rows into the incremental map
+      const cols = orderedColumnsRef.current;
+      const offset = pageIndex * SPARSE_PAGE_ROWS;
+      const map = sparseRowsMapRef.current;
+      for (let i = 0; i < pageRows.length; i++) {
+        const row = pageRows[i]!;
+        const data = row.data ?? {};
+        const cells: Record<string, string> = { id: row.id };
+        for (let c = 0; c < cols.length; c++) {
+          const col = cols[c]!;
+          cells[col.id] = data[col.id] ?? "";
+        }
+        map.set(offset + i, cells as TableRow);
+      }
+      sparseProcessedPagesRef.current.add(pageIndex);
+
+      scheduleSparseUpdate();
+    },
+    [scheduleSparseUpdate],
+  );
+
+  // Clear all sparse caches (called on param changes, bulk ops, etc.)
+  const resetSparseCache = useCallback(() => {
+    sparseRafRef.current = 0;
+    sparsePagesRef.current = new Map();
+    sparseFetchingRef.current = new Set();
+    sparseRowsMapRef.current = new Map();
+    sparseProcessedPagesRef.current = new Set();
+    setSparseVersion((v) => v + 1);
+  }, []);
 
   // Derive a stable key for the current query params so we can reset the cache
   // when sort/filter/search changes.
@@ -2599,32 +2667,29 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   // Reset sparse cache when query params change
   useEffect(() => {
     if (sparseParamsRef.current !== sparseParamsKey) {
-      sparsePagesRef.current = new Map();
-      sparseFetchingRef.current = new Set();
       sparseParamsRef.current = sparseParamsKey;
-      setSparseVersion((v) => v + 1);
+      resetSparseCache();
     }
-  }, [sparseParamsKey]);
+  }, [sparseParamsKey, resetSparseCache]);
 
-  // Build a Map<rowIndex, TableRow> from sparse pages for rows beyond infinite query
+  // Incremental sparse row map — only process newly arrived pages.
+  // The heavy transform work already happened in processSparsePageResult;
+  // this useMemo just returns the ref and handles rows.length changes.
   const sparseRows = useMemo(() => {
-    void sparseVersion; // re-derive on cache updates
-    const map = new Map<number, TableRow>();
+    void sparseVersion; // react to cache updates
+    const map = sparseRowsMapRef.current;
     const loadedCount = rows.length;
-    for (const [pageIndex, pageRows] of sparsePagesRef.current) {
-      const offset = pageIndex * SPARSE_PAGE_ROWS;
-      if (offset < loadedCount) continue; // Already in infinite query data
-      pageRows.forEach((row, i) => {
-        const idx = offset + i;
-        const data = row.data ?? {};
-        const cells = Object.fromEntries(
-          orderedColumns.map((column) => [column.id, data[column.id] ?? ""])
-        );
-        map.set(idx, { id: row.id, ...cells });
-      });
+    // Purge entries now covered by the infinite query
+    if (loadedCount > 0) {
+      for (const idx of map.keys()) {
+        if (idx < loadedCount) map.delete(idx);
+      }
     }
-    return map;
-  }, [sparseVersion, rows.length, orderedColumns]);
+    // Return a new Map so React.memo consumers (TableView) detect the change.
+    // The map typically has <10k entries (visible range ± prefetch buffer),
+    // so the shallow copy is cheap (~1-2ms).
+    return new Map(map);
+  }, [sparseVersion, rows.length]);
 
   // Callback for TableView to request data for a visible row range.
   // Fetches any pages that aren't already loaded by the infinite query or sparse cache.
@@ -2649,8 +2714,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
 
       pagesToFetch.forEach((p) => sparseFetchingRef.current.add(p));
 
-      // Fire each page fetch independently — re-render as soon as each arrives
-      // so rows appear progressively without waiting for all pages.
+      // Fire each page fetch independently — rows appear progressively
       for (const pageIndex of pagesToFetch) {
         void (async () => {
           try {
@@ -2662,9 +2726,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
               ...(filterInput ? { filter: filterInput } : {}),
               ...(hasSearchQuery ? { search: searchQuery } : {}),
             });
-            sparsePagesRef.current.set(pageIndex, result.rows);
-            // Trigger re-render immediately for this page
-            setSparseVersion((v) => v + 1);
+            processSparsePageResult(pageIndex, result.rows);
           } catch {
             // Allow retry on next range change
           } finally {
@@ -2673,7 +2735,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         })();
       }
     },
-    [activeTableId, rows.length, sortParam, filterInput, hasSearchQuery, searchQuery, utils],
+    [activeTableId, rows.length, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult],
   );
 
   // ---------------------------------------------------------------------------
@@ -2686,13 +2748,13 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     const state = { cancelled: false };
 
     const fetchAll = async () => {
-      // Let the initial data and UI settle before starting background work
-      await new Promise((r) => setTimeout(r, 1000));
+      // Brief settle before starting background work
+      await new Promise((r) => setTimeout(r, 200));
       if (state.cancelled) return;
 
       const totalPages = Math.ceil(activeRowCount / SPARSE_PAGE_ROWS);
-      // Fetch in small parallel batches to balance speed vs server load
-      const BATCH_SIZE = 3;
+      // Aggressively parallel batches to fill cache before user scrolls
+      const BATCH_SIZE = 10;
 
       for (let batchStart = 0; batchStart < totalPages && !state.cancelled; batchStart += BATCH_SIZE) {
         const batch: Promise<void>[] = [];
@@ -2715,8 +2777,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                   ...(hasSearchQuery ? { search: searchQuery } : {}),
                 });
                 if (!state.cancelled) {
-                  sparsePagesRef.current.set(page, result.rows);
-                  setSparseVersion((v) => v + 1);
+                  processSparsePageResult(page, result.rows);
                 }
               } catch {
                 // Skip — will retry on demand via handleVisibleRangeChange
@@ -2729,10 +2790,9 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         if (batch.length > 0) {
           await Promise.all(batch);
         }
-        // Brief pause between batches to keep the server responsive for
-        // interactive (on-demand) fetches.
+        // Minimal pause between batches
         if (!state.cancelled) {
-          await new Promise((r) => setTimeout(r, 50));
+          await new Promise((r) => setTimeout(r, 10));
         }
       }
     };
@@ -2742,18 +2802,19 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     return () => {
       state.cancelled = true;
     };
-  }, [activeTableId, activeRowCount, sortParam, filterInput, hasSearchQuery, searchQuery, utils]);
+  }, [activeTableId, activeRowCount, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult]);
 
   const normalizedSearch = searchQuery.toLowerCase();
   const isSearchLoading = hasSearchQuery && rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
-  const searchMatchesByRow = useMemo(() => {
+  // Base search: O(rows × columns) but does NOT depend on cellEdits, so it
+  // only reruns when the search query or underlying data changes.
+  const baseSearchMatchesByRow = useMemo(() => {
     if (!normalizedSearch) return new Map<string, Set<string>>();
     const matches = new Map<string, Set<string>>();
     tableData.forEach((row) => {
-      const rowEdits = cellEdits[row.id];
       let rowMatches: Set<string> | null = null;
       for (const column of orderedColumns) {
-        const value = rowEdits?.[column.id] ?? row[column.id] ?? "";
+        const value = row[column.id] ?? "";
         if (String(value).toLowerCase().includes(normalizedSearch)) {
           if (!rowMatches) {
             rowMatches = new Set<string>();
@@ -2766,7 +2827,37 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       }
     });
     return matches;
-  }, [cellEdits, normalizedSearch, orderedColumns, tableData]);
+  }, [normalizedSearch, orderedColumns, tableData]);
+
+  // Cheap patch: only reprocesses the few rows with active edits.
+  // Returns baseSearchMatchesByRow by reference when cellEdits is empty.
+  const searchMatchesByRow = useMemo(() => {
+    const editedRowIds = Object.keys(cellEdits);
+    if (editedRowIds.length === 0 || !normalizedSearch) return baseSearchMatchesByRow;
+
+    const patched = new Map(baseSearchMatchesByRow);
+    for (const rowId of editedRowIds) {
+      const rowEdits = cellEdits[rowId];
+      if (!rowEdits) continue;
+      const row = tableDataById.get(rowId);
+      if (!row) continue;
+
+      let rowMatches: Set<string> | null = null;
+      for (const column of orderedColumns) {
+        const value = rowEdits[column.id] ?? row[column.id] ?? "";
+        if (String(value).toLowerCase().includes(normalizedSearch)) {
+          if (!rowMatches) rowMatches = new Set<string>();
+          rowMatches.add(column.id);
+        }
+      }
+      if (rowMatches && rowMatches.size > 0) {
+        patched.set(rowId, rowMatches);
+      } else {
+        patched.delete(rowId);
+      }
+    }
+    return patched;
+  }, [baseSearchMatchesByRow, cellEdits, normalizedSearch, orderedColumns, tableDataById]);
 
   // Compute which columns have rows that match the search (including column name matches)
   const columnsWithSearchMatches = useMemo(() => {

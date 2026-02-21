@@ -1,10 +1,8 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
-  useState,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -13,11 +11,11 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 // ---------------------------------------------------------------------------
 
 export const ROW_HEIGHT = 33;
-const ROW_VIRTUAL_OVERSCAN = 100;
+const ROW_VIRTUAL_OVERSCAN = 200;
 const ROW_SCROLLING_RESET_DELAY_MS = 150;
 const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
-const SPARSE_PREFETCH_BUFFER = 800;
+const SPARSE_PREFETCH_BUFFER = 3000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,15 +91,8 @@ export function useTableScroll({
   // Refs
   // -------------------------------------------------------------------------
   const parentRef = useRef<HTMLDivElement>(null);
-  const skeletonOverlayRef = useRef<HTMLDivElement>(null);
-  const scrollbarDragRef = useRef(false);
   const prefetchingRowsRef = useRef(false);
   const lastScrollPrefetchRef = useRef({ start: -1, end: -1 });
-
-  // -------------------------------------------------------------------------
-  // Scrollbar drag state
-  // -------------------------------------------------------------------------
-  const [scrollbarDragging, setScrollbarDragging] = useState(false);
 
   // -------------------------------------------------------------------------
   // Virtualizer count — full dataset size so the scrollbar reflects reality
@@ -242,7 +233,7 @@ export function useTableScroll({
   // -------------------------------------------------------------------------
   // Visible range reporting (sparse prefetch trigger)
   // -------------------------------------------------------------------------
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (lastVirtualRowIndex < 0) return;
     const firstIndex = rowVirtualRange.start;
     const bufferSize = SPARSE_PREFETCH_BUFFER;
@@ -301,39 +292,6 @@ export function useTableScroll({
     rowsFetchNextPage,
     rowsIsFetchingNextPage,
   ]);
-
-  // -------------------------------------------------------------------------
-  // Scrollbar drag detection
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    const el = parentRef.current;
-    if (!el) return;
-
-    const handleMouseDown = (e: MouseEvent) => {
-      if (e.target !== el) return;
-      const onVScrollbar = e.offsetX >= el.clientWidth;
-      const onHScrollbar = e.offsetY >= el.clientHeight;
-      if (onVScrollbar || onHScrollbar) {
-        scrollbarDragRef.current = true;
-        setScrollbarDragging(true);
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (scrollbarDragRef.current) {
-        scrollbarDragRef.current = false;
-        setScrollbarDragging(false);
-      }
-    };
-
-    el.addEventListener("mousedown", handleMouseDown);
-    window.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      el.removeEventListener("mousedown", handleMouseDown);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, []);
 
   // -------------------------------------------------------------------------
   // onScroll handler (for the scroll container)
@@ -424,10 +382,6 @@ export function useTableScroll({
   return {
     // Refs (to be attached to DOM elements)
     parentRef,
-    skeletonOverlayRef,
-
-    // State
-    scrollbarDragging,
 
     // Row virtualizer
     rowVirtualizer,
@@ -436,6 +390,7 @@ export function useTableScroll({
     rowCanvasHeight,
     lastVirtualRowIndex,
     allRowsFiltered,
+    isScrolling: rowVirtualizer.isScrolling,
 
     // Column virtualizer
     columnVirtualizer,
