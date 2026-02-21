@@ -1,11 +1,10 @@
 "use client";
 
 import { Inter } from "next/font/google";
-import Image from "next/image";
 
-import greySearchIcon from "~/assets/grey-search.svg";
-import gridViewIcon from "~/assets/grid-view.svg";
-import settingsIcon from "~/assets/settings.svg";
+import GreySearchIcon from "~/assets/grey-search.svg";
+import GridViewIcon from "~/assets/grid-view.svg";
+import SettingsIcon from "~/assets/settings.svg";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -44,7 +43,7 @@ export type GridViewContainerProps = {
   onSettings?: () => void;
 };
 
-const DEFAULT_VIEWS: ViewItem[] = [{ id: "default", name: "Grid view" }];
+const DEFAULT_VIEWS: ViewItem[] = [];
 
 const VIEW_ROW_STRIDE = 32;
 const FIRST_VIEW_TEXT_TOP = 94;
@@ -113,12 +112,8 @@ export function GridViewContainer({
       </button>
 
       {/* 2. "Find a view" at 44,64; grey-search 14×13 at 20,56; settings 17×16 at 245,55 */}
-      <Image
-        src={greySearchIcon}
-        alt=""
-        width={14}
-        height={13}
-        className="absolute flex-shrink-0"
+      <GreySearchIcon
+        className="absolute h-[13px] w-[14px] flex-shrink-0"
         style={{ left: 20, top: 56 }}
       />
       <button
@@ -137,13 +132,7 @@ export function GridViewContainer({
         style={{ left: 245, top: 55 }}
         aria-label="View settings"
       >
-        <Image
-          src={settingsIcon}
-          alt=""
-          width={17}
-          height={16}
-          className="flex-shrink-0"
-        />
+        <SettingsIcon className="h-[16px] w-[17px] flex-shrink-0" />
       </button>
 
       {/* 3 & 4. Grid view rows: icon 17×15 at 17,y; text at 44,y; each 32px below previous */}
@@ -189,12 +178,8 @@ export function GridViewContainer({
                 pointerEvents: "none",
               }}
             >
-              <Image
-                src={gridViewIcon}
-                alt=""
-                width={17}
-                height={15}
-                className="flex-shrink-0"
+              <GridViewIcon
+                className="h-[15px] w-[17px] flex-shrink-0"
                 style={{ display: "block" }}
               />
             </span>

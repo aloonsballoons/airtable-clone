@@ -1,11 +1,12 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import type { RefObject } from "react";
-import assigneeIcon from "~/assets/assignee.svg";
-import attachmentsIcon from "~/assets/attachments.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import numberIcon from "~/assets/number.svg";
-import statusIcon from "~/assets/status.svg";
+import type { FC, SVGProps } from "react";
+import AssigneeIcon from "~/assets/assignee.svg";
+import AttachmentsIcon from "~/assets/attachments.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import NumberIcon from "~/assets/number.svg";
+import StatusIcon from "~/assets/status.svg";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,7 +20,7 @@ export type HideFieldsRow = {
   toggleOffset: number;
   iconLeftOffset: number;
   iconTopOffset: number;
-  iconSpec: { src: string; width: number; height: number };
+  iconSpec: { Icon: FC<SVGProps<SVGSVGElement>>; width: number; height: number };
   textOffset: number;
   reorderOffset: number;
 };
@@ -76,19 +77,19 @@ const coerceColumnType = (value?: string | null): ColumnFieldType =>
 
 const hideFieldsIconSpecByName: Record<
   string,
-  { src: string; width: number; height: number; gap: number }
+  { Icon: FC<SVGProps<SVGSVGElement>>; width: number; height: number; gap: number }
 > = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, gap: 9 },
-  Status: { src: statusIcon.src, width: 17, height: 17, gap: 7 },
-  Attachments: { src: attachmentsIcon.src, width: 17, height: 14, gap: 8 },
-  Name: { src: nameIcon.src, width: 12.6, height: 12.6, gap: 10 },
-  Notes: { src: notesIcon.src, width: 15, height: 13, gap: 8 },
-  Number: { src: numberIcon.src, width: 13, height: 13, gap: 9.5 },
+  Assignee: { Icon: AssigneeIcon, width: 15, height: 16, gap: 9 },
+  Status: { Icon: StatusIcon, width: 17, height: 17, gap: 7 },
+  Attachments: { Icon: AttachmentsIcon, width: 17, height: 14, gap: 8 },
+  Name: { Icon: NameIcon, width: 12.6, height: 12.6, gap: 10 },
+  Notes: { Icon: NotesIcon, width: 15, height: 13, gap: 8 },
+  Number: { Icon: NumberIcon, width: 13, height: 13, gap: 9.5 },
 };
 
 const hideFieldsIconSpecByType: Record<
   ColumnFieldType,
-  { src: string; width: number; height: number; gap: number }
+  { Icon: FC<SVGProps<SVGSVGElement>>; width: number; height: number; gap: number }
 > = {
   // Non-null assertions are safe here: these keys are defined in hideFieldsIconSpecByName.
   single_line_text: hideFieldsIconSpecByName["Name"]!,

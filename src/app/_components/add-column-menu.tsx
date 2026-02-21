@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import helpIcon from "~/assets/help.svg";
-import lightArrowIcon from "~/assets/light-arrow.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import numberIcon from "~/assets/number.svg";
-import searchIcon from "~/assets/search.svg";
+import type { FC, SVGProps } from "react";
+import HelpIcon from "~/assets/help.svg";
+import LightArrowIcon from "~/assets/light-arrow.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import NumberIcon from "~/assets/number.svg";
+import SearchIcon from "~/assets/search.svg";
 
 const ADD_COLUMN_MENU_WIDTH = 400;
 const ADD_COLUMN_OPTION_WIDTH = 380;
@@ -18,40 +19,24 @@ type ColumnFieldType = "single_line_text" | "long_text" | "number";
 const addColumnTypeOptions: Array<{
   type: ColumnFieldType;
   label: string;
-  icon: { src: string; width: number; height: number; gap: number; paddingLeft: number };
+  icon: { Icon: FC<SVGProps<SVGSVGElement>>; width: number; height: number; gap: number; paddingLeft: number };
 }> = [
   {
     type: "single_line_text",
     label: "Single line text",
-    icon: { src: nameIcon.src, width: 12, height: 12, gap: 10, paddingLeft: 8 },
+    icon: { Icon: NameIcon, width: 12, height: 12, gap: 10, paddingLeft: 8 },
   },
   {
     type: "long_text",
     label: "Long line text",
-    icon: { src: notesIcon.src, width: 15, height: 13, gap: 8, paddingLeft: 7 },
+    icon: { Icon: NotesIcon, width: 15, height: 13, gap: 8, paddingLeft: 7 },
   },
   {
     type: "number",
     label: "Number",
-    icon: { src: numberIcon.src, width: 14, height: 14, gap: 9, paddingLeft: 7 },
+    icon: { Icon: NumberIcon, width: 14, height: 14, gap: 9, paddingLeft: 7 },
   },
 ];
-
-// Preload all SVG images at module level so they're cached before the dropdown opens
-if (typeof window !== "undefined") {
-  for (const opt of addColumnTypeOptions) {
-    const img = new Image();
-    img.src = opt.icon.src;
-  }
-  {
-    const img = new Image();
-    img.src = searchIcon.src;
-  }
-  {
-    const img = new Image();
-    img.src = helpIcon.src;
-  }
-}
 
 interface AddColumnMenuProps {
   existingColumnNames: string[];
@@ -152,17 +137,13 @@ export function AddColumnMenu({
       >
         <div className="airtable-add-column-header">
           <div className="airtable-add-column-search">
-            <img
-              alt=""
-              loading="eager"
-              decoding="sync"
+            <SearchIcon
               className="h-[14px] w-[14px] flex-shrink-0"
               style={{ mixBlendMode: "darken" }}
-              src={searchIcon.src}
             />
             <span className="airtable-add-column-placeholder">Find a field type</span>
           </div>
-          <img alt="" loading="eager" decoding="sync" className="airtable-add-column-help" src={helpIcon.src} />
+          <HelpIcon className="airtable-add-column-help" />
         </div>
         <div
           className="airtable-dropdown-separator"
@@ -184,15 +165,12 @@ export function AddColumnMenu({
                 }}
                 onClick={() => handleSelectFieldType(option.type)}
               >
-                <img
-                  alt=""
-                  loading="eager"
-                  decoding="sync"
+                <option.icon.Icon
+                  className={`w-[${option.icon.width}px] h-[${option.icon.height}px]`}
                   style={{
                     width: option.icon.width,
                     height: option.icon.height,
                   }}
-                  src={option.icon.src}
                 />
                 <span>{option.label}</span>
               </button>
@@ -268,30 +246,26 @@ export function AddColumnMenu({
             boxSizing: "border-box",
           }}
         >
-          <img
-            alt=""
-            loading="eager"
-            decoding="sync"
-            style={{
-              width: selectedOption?.icon.width ?? 12,
-              height: selectedOption?.icon.height ?? 12,
-            }}
-            src={selectedOption?.icon.src ?? nameIcon.src}
-          />
+          {(() => {
+            const IconComp = selectedOption?.icon.Icon ?? NameIcon;
+            return (
+              <IconComp
+                style={{
+                  width: selectedOption?.icon.width ?? 12,
+                  height: selectedOption?.icon.height ?? 12,
+                }}
+              />
+            );
+          })()}
           <span style={{ position: "relative", top: "-0.5px" }}>
             {selectedOption?.label ?? "Single line text"}
           </span>
-          <img
-            alt=""
-            loading="eager"
-            decoding="sync"
-            src={lightArrowIcon.src}
+          <LightArrowIcon
+            className="h-[6px] w-[10px]"
             style={{
               position: "absolute",
               left: 348,
               top: 15,
-              width: 10,
-              height: 6,
             }}
           />
         </button>

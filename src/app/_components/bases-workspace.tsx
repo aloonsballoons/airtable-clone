@@ -5,32 +5,33 @@ import { Inter } from "next/font/google";
 import { useRouter } from "next/navigation";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
-import airtableIcon from "~/assets/airtable.svg";
-import baseArrowIcon from "~/assets/base-arrow.svg";
-import baseDoorIcon from "~/assets/base-door.svg";
-import basePlusIcon from "~/assets/base-plus.svg";
-import baseThreeIcon from "~/assets/base-three.svg";
-import bellIcon from "~/assets/bell.svg";
-import bigTextIcon from "~/assets/big-text.svg";
-import calendarIcon from "~/assets/calendar.svg";
-import campaignIcon from "~/assets/campaign.svg";
-import commandIcon from "~/assets/command.svg";
-import dataIcon from "~/assets/data.svg";
-import deleteIcon from "~/assets/delete.svg";
-import downBaseArrowIcon from "~/assets/down-base-arrow.svg";
-import helpIcon from "~/assets/help.svg";
-import homeIcon from "~/assets/home.svg";
-import importIcon from "~/assets/import.svg";
-import logoIcon from "~/assets/logo.svg";
-import marketplaceIcon from "~/assets/marketplace.svg";
-import peopleIcon from "~/assets/people.svg";
-import performanceIcon from "~/assets/performance.svg";
-import renameIcon from "~/assets/rename.svg";
-import searchIcon from "~/assets/search.svg";
-import shareIcon from "~/assets/share.svg";
-import starIcon from "~/assets/star.svg";
-import templateIcon from "~/assets/template.svg";
-import { authClient } from "~/server/better-auth/client";
+import AirtableIcon from "~/assets/airtable.svg";
+import BaseArrowIcon from "~/assets/base-arrow.svg";
+import BaseDoorIcon from "~/assets/base-door.svg";
+import BasePlusIcon from "~/assets/base-plus.svg";
+import BaseThreeIcon from "~/assets/base-three.svg";
+import BellIcon from "~/assets/bell.svg";
+import BigTextIcon from "~/assets/big-text.svg";
+import CalendarIcon from "~/assets/calendar.svg";
+import CampaignIcon from "~/assets/campaign.svg";
+import CommandIcon from "~/assets/command.svg";
+import DataIcon from "~/assets/data.svg";
+import DeleteIcon from "~/assets/delete.svg";
+import DownBaseArrowIcon from "~/assets/down-base-arrow.svg";
+import HelpIcon from "~/assets/help.svg";
+import HomeIcon from "~/assets/home.svg";
+import ImportIcon from "~/assets/import.svg";
+import LogoIcon from "~/assets/logo.svg";
+import MarketplaceIcon from "~/assets/marketplace.svg";
+import PeopleIcon from "~/assets/people.svg";
+import PerformanceIcon from "~/assets/performance.svg";
+import RenameIcon from "~/assets/rename.svg";
+import SearchIcon from "~/assets/search.svg";
+import ShareIcon from "~/assets/share.svg";
+import StarIcon from "~/assets/star.svg";
+import TemplateIcon from "~/assets/template.svg";
+import LogoutIcon from "~/assets/logout.svg";
+import { handleLogout } from "./handle-logout";
 import { api } from "~/trpc/react";
 
 const inter = Inter({
@@ -40,6 +41,7 @@ const inter = Inter({
 
 type BasesWorkspaceProps = {
   userName: string;
+  userEmail: string;
 };
 
 const formatInitials = (name: string) => {
@@ -103,7 +105,7 @@ const formatLastOpened = (openedAt: Date) => {
   return `Opened ${value} year${value === 1 ? "" : "s"} ago`;
 };
 
-export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
+export function BasesWorkspace({ userName, userEmail }: BasesWorkspaceProps) {
   const router = useRouter();
   const utils = api.useUtils();
 
@@ -168,9 +170,28 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
   };
 
   const handleSignOut = async () => {
-    await authClient.signOut();
-    router.refresh();
+    await handleLogout(() => router.refresh());
   };
+
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
+  const userIconRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!showUserDropdown) return;
+    const handleClickOutside = (event: globalThis.MouseEvent) => {
+      if (
+        userDropdownRef.current &&
+        !userDropdownRef.current.contains(event.target as Node) &&
+        userIconRef.current &&
+        !userIconRef.current.contains(event.target as Node)
+      ) {
+        setShowUserDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showUserDropdown]);
 
   const handleOpenMenu = (event: MouseEvent, baseId: string) => {
     event.stopPropagation();
@@ -240,6 +261,20 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
     baseListQuery.isLoading && !baseListQuery.isFetched;
   const userInitial = formatUserInitial(userName);
 
+  const [skeletonCount, setSkeletonCount] = useState(() => {
+    if (typeof window === "undefined") return 0;
+    const stored = localStorage.getItem("baseCount");
+    return stored ? parseInt(stored, 10) || 0 : 0;
+  });
+
+  useEffect(() => {
+    if (baseListQuery.data) {
+      const count = baseListQuery.data.length;
+      setSkeletonCount(count);
+      localStorage.setItem("baseCount", String(count));
+    }
+  }, [baseListQuery.data]);
+
   return (
     <div
       className={clsx(
@@ -266,32 +301,24 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
             </svg>
           </button>
           <div className="flex items-center gap-2">
-            <img
-              alt="Logo"
+            <LogoIcon
               className="h-[23.76px] w-[27.72px] shrink-0"
-              src={logoIcon.src}
             />
-            <img
-              alt="Airtable"
+            <AirtableIcon
               className="h-[18.39px] w-[71.61px] shrink-0"
-              src={airtableIcon.src}
             />
           </div>
         </div>
 
         <div className="hidden flex-1 justify-center md:flex">
           <div className="airtable-outline airtable-selection-hover relative flex h-[34px] w-[335px] items-center gap-2 rounded-[17px] bg-white px-3 text-[13px] text-[#616670]">
-            <img
-              alt=""
+            <SearchIcon
               className="h-[14.5px] w-[14.5px] shrink-0"
-              src={searchIcon.src}
             />
             <span className="flex-1">Search...</span>
             <div className="flex items-center gap-1 text-[#989aa0]">
-              <img
-                alt=""
+              <CommandIcon
                 className="h-[11px] w-[10px] shrink-0"
-                src={commandIcon.src}
               />
               <span>K</span>
             </div>
@@ -304,40 +331,137 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
             className="hidden items-center gap-2 text-[13px] md:flex"
             aria-label="Help"
           >
-            <img alt="" className="h-[15px] w-[15px]" src={helpIcon.src} />
+            <HelpIcon className="h-[15px] w-[15px]" />
             Help
           </button>
           <button type="button" className="airtable-circle relative" aria-label="Notifications">
-            <img alt="" className="h-[18px] w-[17px]" src={bellIcon.src} />
+            <BellIcon className="h-[18px] w-[17px]" />
           </button>
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="airtable-circle relative overflow-hidden"
-            aria-label="Sign out"
-          >
-            <svg
-              className="absolute inset-0 m-auto h-[29px] w-[29px]"
-              width="29"
-              height="29"
-              viewBox="0 0 29 29"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
+          <div className="relative">
+            <button
+              ref={userIconRef}
+              type="button"
+              onClick={() => setShowUserDropdown((prev) => !prev)}
+              className="airtable-circle relative cursor-pointer overflow-hidden"
+              aria-label="User menu"
             >
-              <circle cx="14.5" cy="14.5" r="14.5" fill="#E8E8E8" />
-            </svg>
-            <svg
-              className="absolute inset-0 m-auto h-[26px] w-[26px]"
-              width="26"
-              height="26"
-              viewBox="0 0 26 26"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <circle cx="13" cy="13" r="13" fill="#DD04A8" />
-            </svg>
-            <span className="relative text-[13px] text-white">{userInitial}</span>
-          </button>
+              <svg
+                className="absolute inset-0 m-auto h-[29px] w-[29px]"
+                width="29"
+                height="29"
+                viewBox="0 0 29 29"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle cx="14.5" cy="14.5" r="14.5" fill="#E8E8E8" />
+              </svg>
+              <svg
+                className="absolute inset-0 m-auto h-[26px] w-[26px]"
+                width="26"
+                height="26"
+                viewBox="0 0 26 26"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle cx="13" cy="13" r="13" fill="#DD04A8" />
+              </svg>
+              <span className="relative text-[13px] text-white">{userInitial}</span>
+            </button>
+            {showUserDropdown && (
+              <div
+                ref={userDropdownRef}
+                className={`${inter.className} airtable-dropdown-surface`}
+                style={{
+                  position: "fixed",
+                  right: 31,
+                  top: 43 + 14,
+                  width: 297,
+                  height: 129,
+                  backgroundColor: "white",
+                  borderRadius: 5,
+                  zIndex: 1000,
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 20,
+                    top: 21,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "#1D1F24",
+                  }}
+                >
+                  {userName}
+                </span>
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 20,
+                    top: 41,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "#1D1F24",
+                  }}
+                >
+                  {userEmail}
+                </span>
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 20,
+                    top: 76,
+                    width: 245,
+                    height: 1,
+                    backgroundColor: "#F2F2F2",
+                  }}
+                />
+                <button
+                  type="button"
+                  className="group/logout"
+                  onClick={handleSignOut}
+                  style={{
+                    position: "absolute",
+                    left: 13,
+                    top: 84,
+                    width: 260,
+                    height: 34,
+                    background: "transparent",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = "#F2F2F2";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                  }}
+                >
+                  <LogoutIcon
+                    className="absolute h-[15px] w-[16px] group-hover/logout:mix-blend-multiply"
+                    style={{
+                      left: 20 - 13,
+                      top: 94 - 84,
+                    }}
+                  />
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: 44 - 13,
+                      top: 93 - 84,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: "#1D1F24",
+                    }}
+                  >
+                    Logout
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -350,10 +474,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
                 className="airtable-nav-item airtable-nav-item-active"
               >
                 <span className="airtable-nav-icon-slot">
-                  <img
-                    alt=""
+                  <HomeIcon
                     className="airtable-nav-icon-img h-[19px] w-[18px] shrink-0"
-                    src={homeIcon.src}
                   />
                 </span>
                 Home
@@ -361,28 +483,22 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
               <button type="button" className="airtable-nav-item airtable-nav-item-hover">
                 <span className="flex items-center gap-[12px]">
                   <span className="airtable-nav-icon-slot">
-                    <img
-                      alt=""
+                    <StarIcon
                       className="airtable-nav-icon-img h-[20px] w-[19px] shrink-0"
-                      src={starIcon.src}
                     />
                   </span>
                   Starred
                 </span>
                 <span className="ml-auto flex items-center gap-[12px]">
-                  <img
-                    alt=""
+                  <BaseArrowIcon
                     className="h-[14px] w-[10px] shrink-0"
-                    src={baseArrowIcon.src}
                   />
                 </span>
               </button>
               <button type="button" className="airtable-nav-item airtable-nav-item-hover">
                 <span className="airtable-nav-icon-slot">
-                  <img
-                    alt=""
+                  <ShareIcon
                     className="airtable-nav-icon-img h-[18px] w-[20px] shrink-0"
-                    src={shareIcon.src}
                   />
                 </span>
                 Shared
@@ -390,24 +506,18 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
               <button type="button" className="airtable-nav-item airtable-nav-item-hover">
                 <span className="flex items-center gap-[12px]">
                   <span className="airtable-nav-icon-slot">
-                    <img
-                      alt=""
+                    <PeopleIcon
                       className="airtable-nav-icon-img h-[18px] w-[24px] shrink-0"
-                      src={peopleIcon.src}
                     />
                   </span>
                   Workspaces
                 </span>
                 <span className="ml-auto flex items-center gap-[12px]">
-                  <img
-                    alt=""
+                  <BasePlusIcon
                     className="h-[13px] w-[12px] shrink-0"
-                    src={basePlusIcon.src}
                   />
-                  <img
-                    alt=""
+                  <BaseArrowIcon
                     className="h-[14px] w-[10px] shrink-0"
-                    src={baseArrowIcon.src}
                   />
                 </span>
               </button>
@@ -420,26 +530,20 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
             </div>
             <div className="space-y-4 px-[7px] text-[12.5px]">
               <button type="button" className="flex items-center gap-[11px]">
-                <img
-                  alt=""
+                <TemplateIcon
                   className="h-[15px] w-[18px] shrink-0"
-                  src={templateIcon.src}
                 />
                 Templates and apps
               </button>
               <button type="button" className="flex items-center gap-[11px]">
-                <img
-                  alt=""
+                <MarketplaceIcon
                   className="h-[14px] w-[16px] shrink-0"
-                  src={marketplaceIcon.src}
                 />
                 Marketplace
               </button>
               <button type="button" className="flex items-center gap-[11px]">
-                <img
-                  alt=""
+                <ImportIcon
                   className="h-[14px] w-[15px] shrink-0"
-                  src={importIcon.src}
                 />
                 Import
               </button>
@@ -460,16 +564,12 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
 
         <main className="relative flex-1 px-6 pb-10 pt-[33px] lg:px-[48px]">
           {/* Always visible decorative SVGs - positioned relative to main area */}
-          <img
-            alt=""
+          <BaseThreeIcon
             className="absolute h-[18px] w-[22px]"
-            src={baseThreeIcon.src}
             style={{ top: '300px', right: '80px' }}
           />
-          <img
-            alt=""
+          <BaseDoorIcon
             className="absolute h-[34px] w-[34px]"
-            src={baseDoorIcon.src}
             style={{ top: '292px', right: '46px' }}
           />
 
@@ -499,10 +599,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
           <div className="mt-4 flex flex-wrap gap-[13px]">
             <div className="airtable-outline airtable-selection-hover relative h-[94px] w-full rounded-[5px] bg-white sm:w-[348px]">
               <div className="absolute left-[15px] top-[17px]">
-                <img
-                  alt=""
+                <PerformanceIcon
                   className="h-[17px] w-[19px]"
-                  src={performanceIcon.src}
                 />
               </div>
               <p className="absolute left-[45px] right-[12px] top-[17px] text-[15px] font-semibold text-[#1D1F24]">
@@ -514,10 +612,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
             </div>
             <div className="airtable-outline airtable-selection-hover relative h-[94px] w-full rounded-[5px] bg-white sm:w-[351px]">
               <div className="absolute left-[18px] top-[16px]">
-                <img
-                  alt=""
+                <CalendarIcon
                   className="h-[20px] w-[17px]"
-                  src={calendarIcon.src}
                 />
               </div>
               <p className="absolute left-[45px] right-[12px] top-[17px] text-[15px] font-semibold text-[#1D1F24]">
@@ -529,10 +625,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
             </div>
             <div className="airtable-outline airtable-selection-hover relative h-[94px] w-full rounded-[5px] bg-white sm:w-[349px]">
               <div className="absolute left-[18px] top-[17px]">
-                <img
-                  alt=""
+                <CampaignIcon
                   className="h-[16.92px] w-[18px]"
-                  src={campaignIcon.src}
                 />
               </div>
               <p className="absolute left-[45px] right-[12px] top-[17px] text-[15px] font-semibold text-[#1D1F24]">
@@ -546,17 +640,17 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
 
           <div className="absolute left-[48px] top-[300px] flex items-center gap-2 text-[15px] font-normal text-[#54555A]">
             Opened anytime
-            <img
-              alt=""
+            <DownBaseArrowIcon
               className="h-[14px] w-[15px]"
-              src={downBaseArrowIcon.src}
             />
           </div>
 
           <section className="absolute top-[374px] left-0 right-0 px-6 lg:px-[48px]">
-            {showInitialBaseListLoading ? (
-              <div className="airtable-outline rounded-[6px] bg-white px-4 py-6 text-[13px] text-black/70">
-                Loading bases...
+            {showInitialBaseListLoading && skeletonCount > 0 ? (
+              <div className="flex flex-wrap gap-3">
+                {Array.from({ length: skeletonCount }).map((_, i) => (
+                  <div key={i} className="airtable-skeleton-base sm:w-[345px]" />
+                ))}
               </div>
             ) : bases.length === 0 ? (
               <></>
@@ -633,10 +727,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
                             : "opacity-0 group-hover:opacity-100"
                         )}
                       >
-                        <img
-                          alt=""
+                        <DataIcon
                           className="airtable-open-data-icon scale-[1.17]"
-                          src={dataIcon.src}
                         />
                       </div>
                       <p
@@ -661,10 +753,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
                             : "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100"
                         )}
                       >
-                        <img
-                          alt=""
+                        <StarIcon
                           className="h-[17px] w-[16px]"
-                          src={starIcon.src}
                         />
                       </button>
                       <button
@@ -693,10 +783,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
                               handleStartRename(event, baseItem.id, baseItem.name)
                             }
                           >
-                            <img
-                              alt=""
+                            <RenameIcon
                               className="absolute left-[16px] top-1/2 h-[14px] w-[14px] -translate-y-1/2 scale-[1.3] mix-blend-multiply"
-                              src={renameIcon.src}
                             />
                             <span className="absolute left-[44px] top-1/2 -translate-y-1/2">
                               Rename
@@ -707,10 +795,8 @@ export function BasesWorkspace({ userName }: BasesWorkspaceProps) {
                             className="absolute left-[12px] top-[45px] h-[33px] w-[216px] rounded-[3px] text-left text-[13px] font-normal text-[#1D1F24] hover:bg-[#F2F2F2] isolate"
                             onClick={(event) => handleDeleteBase(event, baseItem.id)}
                           >
-                            <img
-                              alt=""
+                            <DeleteIcon
                               className="absolute left-[16px] top-1/2 h-[14px] w-[14px] -translate-y-1/2 scale-[1.3] mix-blend-multiply"
-                              src={deleteIcon.src}
                             />
                             <span className="absolute left-[44px] top-1/2 -translate-y-1/2">
                               Delete

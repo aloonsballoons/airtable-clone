@@ -13,7 +13,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 // ---------------------------------------------------------------------------
 
 export const ROW_HEIGHT = 33;
-const ROW_VIRTUAL_OVERSCAN = 30;
+const ROW_VIRTUAL_OVERSCAN = 100;
 const ROW_SCROLLING_RESET_DELAY_MS = 150;
 const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
@@ -93,7 +93,6 @@ export function useTableScroll({
   // Refs
   // -------------------------------------------------------------------------
   const parentRef = useRef<HTMLDivElement>(null);
-  const headerScrollRef = useRef<HTMLDivElement>(null);
   const skeletonOverlayRef = useRef<HTMLDivElement>(null);
   const scrollbarDragRef = useRef(false);
   const prefetchingRowsRef = useRef(false);
@@ -121,6 +120,10 @@ export function useTableScroll({
     getScrollElement: () => parentRef.current,
     estimateSize: estimateRowSize,
     overscan: ROW_VIRTUAL_OVERSCAN,
+    // Account for the sticky header that sits above the row canvas inside
+    // the same scroll container.  This tells the virtualizer that rows
+    // start ROW_HEIGHT px below the scroll container's top edge.
+    scrollMargin: ROW_HEIGHT,
     getItemKey: (index) =>
       sortedTableData[index]?.id ??
       sparseRows.get(index)?.id ??
@@ -179,10 +182,12 @@ export function useTableScroll({
   // Canvas height & virtual ranges
   // -------------------------------------------------------------------------
   const allRowsFiltered = showRowsEmpty && hasActiveFilters;
+  // getTotalSize() includes the scrollMargin, but the canvas sits below the
+  // sticky header so we subtract it to avoid a phantom empty-row gap at top.
   const rowCanvasHeight = allRowsFiltered
     ? 0
     : Math.max(
-        rowVirtualizer.getTotalSize(),
+        rowVirtualizer.getTotalSize() - ROW_HEIGHT,
         showRowsInitialLoading || showRowsError || showRowsEmpty
           ? ROW_HEIGHT * 5
           : 0,
@@ -335,10 +340,6 @@ export function useTableScroll({
   // -------------------------------------------------------------------------
   const handleScroll = useCallback(
     (el: HTMLDivElement) => {
-      // Sync horizontal scroll with header
-      if (headerScrollRef.current) {
-        headerScrollRef.current.scrollLeft = el.scrollLeft;
-      }
       // Expose scroll position as CSS variable for clip-path on selected cells
       el.style.setProperty("--scroll-left", `${el.scrollLeft}px`);
 
@@ -423,7 +424,6 @@ export function useTableScroll({
   return {
     // Refs (to be attached to DOM elements)
     parentRef,
-    headerScrollRef,
     skeletonOverlayRef,
 
     // State

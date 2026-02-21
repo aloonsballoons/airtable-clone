@@ -1,17 +1,16 @@
 "use client";
 
 import clsx from "clsx";
-import Image from "next/image";
 import { Inter } from "next/font/google";
 import { useMemo, useState } from "react";
 
 import { authClient } from "~/server/better-auth/client";
 
-import airtableLogin from "~/assets/airtable-login.svg";
-import appleIcon from "~/assets/apple.svg";
-import googleIcon from "~/assets/google.svg";
-import logo from "~/assets/logo.svg";
-import signInMessage from "~/assets/signin message.svg";
+import AirtableLogin from "~/assets/airtable-login.svg";
+import AppleIcon from "~/assets/apple.svg";
+import GoogleIcon from "~/assets/google.svg";
+import Logo from "~/assets/logo.svg";
+import SignInMessage from "~/assets/signin message.svg";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -62,29 +61,14 @@ export function LoginPage() {
         className="absolute left-1/2 top-[calc(50%-2px)] h-[1678px] w-[2940px] origin-top-left bg-white"
         style={{ transform: "scale(0.503685) translate(-50%, -50%)" }}
       >
-        <Image
-          src={airtableLogin}
-          alt="Airtable login illustration"
-          width={790}
-          height={1158}
+        <AirtableLogin
           className="absolute left-[1815px] top-[320px] h-[1158px] w-[790px] origin-center transition-transform duration-200 hover:scale-[1.025]"
-          priority
         />
-        <Image
-          src={logo}
-          alt="Airtable logo"
-          width={84}
-          height={73}
-          className="absolute left-[232px] top-[199px]"
-          priority
+        <Logo
+          className="absolute left-[232px] top-[199px] h-[73px] w-[84px]"
         />
-        <Image
-          src={signInMessage}
-          alt="Sign in to Airtable"
-          width={493}
-          height={65}
-          className="absolute left-[232px] top-[382px]"
-          priority
+        <SignInMessage
+          className="absolute left-[232px] top-[382px] h-[65px] w-[493px]"
         />
         <label
           className={labelClass}
@@ -123,7 +107,7 @@ export function LoginPage() {
           className={clsx(buttonOutline, "top-[1056px] pl-[321px]")}
           onClick={handleGoogleSignIn}
         >
-          <Image src={googleIcon} alt="" width={33} height={33} className="mr-[20px]" />
+          <GoogleIcon className="mr-[20px] h-[33px] w-[33px]" />
           <span>Continue with</span>
           <span className="w-[6px]" />
           <span className="font-bold">Google</span>
@@ -132,7 +116,7 @@ export function LoginPage() {
           type="button"
           className={clsx(buttonOutline, "top-[1165px] h-[81px] pl-[311px] text-black")}
         >
-          <Image src={appleIcon} alt="" width={40} height={48} className="mr-[14px]" />
+          <AppleIcon className="mr-[14px] h-[48px] w-[40px]" />
           <span>Continue with</span>
           <span className="w-[6px]" />
           <span className="font-bold">Apple ID</span>

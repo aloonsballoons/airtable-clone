@@ -22,6 +22,7 @@ export default async function BasePage({ params }: BasePageProps) {
   }
 
   const userName = session.user.name ?? session.user.email ?? "";
+  const userEmail = session.user.email ?? "";
 
-  return <TableWorkspace baseId={baseId} userName={userName} />;
+  return <TableWorkspace baseId={baseId} userName={userName} userEmail={userEmail} />;
 }

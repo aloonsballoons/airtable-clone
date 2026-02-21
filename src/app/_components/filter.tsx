@@ -2,7 +2,6 @@
 
 import React from "react";
 import clsx from "clsx";
-import { useId } from "react";
 import type {
   Dispatch,
   SetStateAction,
@@ -11,18 +10,18 @@ import type {
 } from "react";
 import { useLayoutEffect, useRef, useState } from "react";
 
-import arrowIcon from "~/assets/arrow.svg";
-import assigneeIcon from "~/assets/assignee.svg";
-import attachmentsIcon from "~/assets/attachments.svg";
-import deleteIcon from "~/assets/delete.svg";
-import lightArrowIcon from "~/assets/light-arrow.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import numberIcon from "~/assets/number.svg";
-import pinkIcon from "~/assets/pink.svg";
-import plusIcon from "~/assets/plus.svg";
-import reorderIcon from "~/assets/reorder.svg";
-import statusIcon from "~/assets/status.svg";
+import ArrowIcon from "~/assets/arrow.svg";
+import AssigneeIcon from "~/assets/assignee.svg";
+import AttachmentsIcon from "~/assets/attachments.svg";
+import DeleteIcon from "~/assets/delete.svg";
+import LightArrowIcon from "~/assets/light-arrow.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import NumberIcon from "~/assets/number.svg";
+import PinkIcon from "~/assets/pink.svg";
+import PlusIcon from "~/assets/plus.svg";
+import ReorderIcon from "~/assets/reorder.svg";
+import StatusIcon from "~/assets/status.svg";
 
 // ---------------------------------------------------------------------------
 // Type definitions
@@ -158,28 +157,28 @@ const coerceColumnType = (value?: string | null): ColumnFieldType =>
 
 const sortAddMenuIconSpecByName: Record<
   string,
-  { src: string; width: number; height: number; left: number }
+  { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; width: number; height: number; left: number }
 > = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
+  Assignee: { icon: AssigneeIcon, width: 15, height: 16, left: 10 },
   Status: {
-    src: statusIcon.src,
+    icon: StatusIcon,
     width: STATUS_MENU_ICON_SIZE,
     height: STATUS_MENU_ICON_SIZE,
     left: 10,
   },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
-  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+  Attachments: { icon: AttachmentsIcon, width: 14, height: 16, left: 11 },
+  Name: { icon: NameIcon, width: 12.01, height: 12, left: 12 },
+  Notes: { icon: NotesIcon, width: 15.5, height: 13.9, left: 11 },
+  Number: { icon: NumberIcon, width: 13, height: 13, left: 12.5 },
 };
 
 const sortAddMenuIconSpecByType: Record<
   ColumnFieldType,
-  { src: string; width: number; height: number; left: number }
+  { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; width: number; height: number; left: number }
 > = {
-  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+  single_line_text: { icon: NameIcon, width: 12.01, height: 12, left: 12 },
+  long_text: { icon: NotesIcon, width: 15.5, height: 13.9, left: 11 },
+  number: { icon: NumberIcon, width: 13, height: 13, left: 12.5 },
 };
 
 const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
@@ -524,8 +523,6 @@ export function FilterDropdown({
   filterFieldVirtualItems,
   filterFieldVirtualizerSize,
 }: FilterDropdownProps) {
-  const fieldArrowMaskId = useId();
-  const operatorArrowMaskId = useId();
   const prevTopsRef = useRef(new Map<string, number>());
   const [flipDeltas, setFlipDeltas] = useState<Record<string, number>>({});
   const groupPlusDropdownRef = useRef<HTMLDivElement>(null);
@@ -627,10 +624,8 @@ export function FilterDropdown({
             gap: 7,
           }}
         >
-          <img
-            alt=""
+          <PinkIcon
             className="h-[21px] w-[21px]"
-            src={pinkIcon.src}
           />
           <span>Describe what you want to see</span>
         </div>
@@ -730,54 +725,17 @@ export function FilterDropdown({
                             data-filter-connector-trigger={group.connectorKey}
                           >
                             <span>{connectorLabel}</span>
-                            {isConnectorHighlighted ? (
-                              <svg
-                                width={10}
-                                height={6}
-                                viewBox="0 0 50.25 30.000001"
-                                className="absolute"
-                                style={{
-                                  right: 7,
-                                  top: "50%",
-                                  transform: "translateY(-50%)",
-                                }}
-                                aria-hidden="true"
-                              >
-                                <defs>
-                                  <filter id={`connector-arrow-${group.connectorKey}-invert`}>
-                                    <feColorMatrix
-                                      type="matrix"
-                                      values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
-                                    />
-                                  </filter>
-                                  <mask id={`connector-arrow-${group.connectorKey}-mask`}>
-                                    <image
-                                      href={arrowIcon.src}
-                                      width="50.25"
-                                      height="30.000001"
-                                      filter={`url(#connector-arrow-${group.connectorKey}-invert)`}
-                                    />
-                                  </mask>
-                                </defs>
-                                <rect
-                                  width="50.25"
-                                  height="30.000001"
-                                  fill="#156FE2"
-                                  mask={`url(#connector-arrow-${group.connectorKey}-mask)`}
-                                />
-                              </svg>
-                            ) : (
-                              <img
-                                alt=""
-                                className="absolute"
-                                style={{
-                                  width: 10,
-                                  height: 6,
-                                  right: 7,
-                                }}
-                                src={arrowIcon.src}
-                              />
-                            )}
+                            <ArrowIcon
+                              className="absolute"
+                              style={{
+                                width: 10,
+                                height: 6,
+                                right: 7,
+                                top: "50%",
+                                transform: "translateY(-50%)",
+                                color: isConnectorHighlighted ? "#156FE2" : undefined,
+                              }}
+                            />
                           </button>
                         ) : (
                           <span
@@ -908,11 +866,8 @@ export function FilterDropdown({
                       }
                       aria-label="Add to group"
                     >
-                      <img
-                        alt=""
-                        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-                        style={{ width: 12, height: 12 }}
-                        src={plusIcon.src}
+                      <PlusIcon
+                        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[12px] w-[12px]"
                       />
                     </button>
 
@@ -929,11 +884,8 @@ export function FilterDropdown({
                       onClick={() => deleteFilterGroup(group.group.id, group.parentGroupId)}
                       aria-label="Delete group"
                     >
-                      <img
-                        alt=""
-                        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-                        style={{ width: 14, height: 16 }}
-                        src={deleteIcon.src}
+                      <DeleteIcon
+                        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[16px] w-[14px]"
                       />
                     </button>
 
@@ -949,11 +901,8 @@ export function FilterDropdown({
                       }}
                       aria-label="Reorder group"
                     >
-                      <img
-                        alt=""
-                        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-                        style={{ width: 10.23, height: 13.3 }}
-                        src={reorderIcon.src}
+                      <ReorderIcon
+                        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-[13.3px] w-[10.23px]"
                       />
                     </button>
                   </div>
@@ -1158,54 +1107,17 @@ export function FilterDropdown({
                         data-filter-connector-trigger={connectorKey}
                       >
                         <span>{connectorLabel}</span>
-                        {isConnectorHighlighted ? (
-                          <svg
-                            width={10}
-                            height={6}
-                            viewBox="0 0 50.25 30.000001"
-                            className="absolute"
-                            style={{
-                              right: 7,
-                              top: "50%",
-                              transform: "translateY(-50%)",
-                            }}
-                            aria-hidden="true"
-                          >
-                            <defs>
-                              <filter id={`connector-arrow-${connectorKey}-invert`}>
-                                <feColorMatrix
-                                  type="matrix"
-                                  values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
-                                />
-                              </filter>
-                              <mask id={`connector-arrow-${connectorKey}-mask`}>
-                                <image
-                                  href={arrowIcon.src}
-                                  width="50.25"
-                                  height="30.000001"
-                                  filter={`url(#connector-arrow-${connectorKey}-invert)`}
-                                />
-                              </mask>
-                            </defs>
-                            <rect
-                              width="50.25"
-                              height="30.000001"
-                              fill="#156FE2"
-                              mask={`url(#connector-arrow-${connectorKey}-mask)`}
-                            />
-                          </svg>
-                        ) : (
-                          <img
-                            alt=""
-                            className="absolute"
-                            style={{
-                              width: 10,
-                              height: 6,
-                              right: 7,
-                            }}
-                            src={arrowIcon.src}
-                          />
-                        )}
+                        <ArrowIcon
+                          className="absolute"
+                          style={{
+                            width: 10,
+                            height: 6,
+                            right: 7,
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                            color: isConnectorHighlighted ? "#156FE2" : undefined,
+                          }}
+                        />
                       </button>
                     ) : (
                       <span
@@ -1326,56 +1238,17 @@ export function FilterDropdown({
                     >
                       {column?.name ?? "Name"}
                     </span>
-                    {isFieldHighlighted ? (
-                      <svg
-                        width={10}
-                        height={6}
-                        viewBox="0 0 50.25 30.000001"
-                        className="absolute"
-                        style={{
-                          left: filterFieldSeparatorFieldLeft - 11 - 10,
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                        }}
-                        aria-hidden="true"
-                      >
-                        <defs>
-                          <filter id={`${fieldArrowMaskId}-invert`}>
-                            <feColorMatrix
-                              type="matrix"
-                              values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
-                            />
-                          </filter>
-                          <mask id={`${fieldArrowMaskId}-mask`}>
-                            <image
-                              href={arrowIcon.src}
-                              width="50.25"
-                              height="30.000001"
-                              filter={`url(#${fieldArrowMaskId}-invert)`}
-                            />
-                          </mask>
-                        </defs>
-                        <rect
-                          width="50.25"
-                          height="30.000001"
-                          fill="#156FE2"
-                          mask={`url(#${fieldArrowMaskId}-mask)`}
-                        />
-                      </svg>
-                    ) : (
-                      <img
-                        alt=""
-                        className="absolute"
-                        style={{
-                          width: 10,
-                          height: 6,
-                          left: filterFieldSeparatorFieldLeft - 11 - 10,
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                        }}
-                        src={arrowIcon.src}
-                      />
-                    )}
+                    <ArrowIcon
+                      className="absolute"
+                      style={{
+                        width: 10,
+                        height: 6,
+                        left: filterFieldSeparatorFieldLeft - 11 - 10,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        color: isFieldHighlighted ? "#156FE2" : undefined,
+                      }}
+                    />
                   </button>
                   {isFieldMenuOpen && (
                     <div
@@ -1455,7 +1328,7 @@ export function FilterDropdown({
                                     height: iconSpec.height,
                                   }}
                                 >
-                                  <img alt="" src={iconSpec.src} style={{ width: '100%', height: '100%' }} />
+                                  <iconSpec.icon style={{ width: '100%', height: '100%' }} />
                                 </span>
                                 <span
                                   style={{
@@ -1506,64 +1379,21 @@ export function FilterDropdown({
                     >
                       {operatorLabel}
                     </span>
-                    {isOperatorHighlighted ? (
-                      <svg
-                        width={10}
-                        height={6}
-                        viewBox="0 0 50.25 30.000001"
-                        className="absolute"
-                        style={{
-                          left:
-                            filterFieldSeparatorOperatorLeft -
-                            filterFieldSeparatorFieldLeft -
-                            11 -
-                            10,
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                        }}
-                        aria-hidden="true"
-                      >
-                        <defs>
-                          <filter id={`${operatorArrowMaskId}-invert`}>
-                            <feColorMatrix
-                              type="matrix"
-                              values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0"
-                            />
-                          </filter>
-                          <mask id={`${operatorArrowMaskId}-mask`}>
-                            <image
-                              href={arrowIcon.src}
-                              width="50.25"
-                              height="30.000001"
-                              filter={`url(#${operatorArrowMaskId}-invert)`}
-                            />
-                          </mask>
-                        </defs>
-                        <rect
-                          width="50.25"
-                          height="30.000001"
-                          fill="#156FE2"
-                          mask={`url(#${operatorArrowMaskId}-mask)`}
-                        />
-                      </svg>
-                    ) : (
-                      <img
-                        alt=""
-                        className="absolute"
-                        style={{
-                          width: 10,
-                          height: 6,
-                          left:
-                            filterFieldSeparatorOperatorLeft -
-                            filterFieldSeparatorFieldLeft -
-                            11 -
-                            10,
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                        }}
-                        src={arrowIcon.src}
-                      />
-                    )}
+                    <ArrowIcon
+                      className="absolute"
+                      style={{
+                        width: 10,
+                        height: 6,
+                        left:
+                          filterFieldSeparatorOperatorLeft -
+                          filterFieldSeparatorFieldLeft -
+                          11 -
+                          10,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        color: isOperatorHighlighted ? "#156FE2" : undefined,
+                      }}
+                    />
                   </button>
                   {isOperatorMenuOpen && (
                       <div
@@ -1746,13 +1576,8 @@ export function FilterDropdown({
                     }}
                     aria-label="Delete condition"
                   >
-                    <img
-                      alt=""
-                      style={{
-                        width: 13.15,
-                        height: 15.45,
-                      }}
-                      src={deleteIcon.src}
+                    <DeleteIcon
+                      className="h-[15.45px] w-[13.15px]"
                     />
                   </button>
                   <button
@@ -1774,13 +1599,8 @@ export function FilterDropdown({
                     }
                     aria-label="Reorder condition"
                   >
-                    <img
-                      alt=""
-                      style={{
-                        width: 10.23,
-                        height: 13.3,
-                      }}
-                      src={reorderIcon.src}
+                    <ReorderIcon
+                      className="h-[13.3px] w-[10.23px]"
                     />
                   </button>
                 </div>
@@ -1900,10 +1720,9 @@ export function FilterDropdown({
                 justifyContent: "center",
               }}
             >
-              <img
-                alt=""
-                style={{ width: 13.15, height: 15.45, opacity: 0.9 }}
-                src={deleteIcon.src}
+              <DeleteIcon
+                className="h-[15.45px] w-[13.15px]"
+                style={{ opacity: 0.9 }}
               />
             </span>
             <span
@@ -1918,10 +1737,8 @@ export function FilterDropdown({
                 justifyContent: "center",
               }}
             >
-              <img
-                alt=""
-                style={{ width: 10.23, height: 13.3 }}
-                src={reorderIcon.src}
+              <ReorderIcon
+                className="h-[13.3px] w-[10.23px]"
               />
             </span>
           </div>

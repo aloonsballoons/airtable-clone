@@ -12,15 +12,15 @@
 		"db:migrate": "drizzle-kit migrate",
 		"db:push": "drizzle-kit push",
 		"db:studio": "drizzle-kit studio",
-		"dev": "next dev --turbo",
+		"dev": "next dev",
 		"preview": "next build && next start",
 		"seed:test2-table1": "node scripts/seed-test2-table1.mjs",
 		"start": "next start",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@faker-js/faker": "^8.4.1",
 		"@auth/drizzle-adapter": "^1.7.2",
+		"@faker-js/faker": "^8.4.1",
 		"@t3-oss/env-nextjs": "^0.12.0",
 		"@tanstack/react-query": "^5.69.0",
 		"@tanstack/react-table": "^8.21.3",
@@ -41,6 +41,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.5",
+		"@svgr/webpack": "^8.1.0",
 		"@tailwindcss/postcss": "^4.0.15",
 		"@types/node": "^20.14.10",
 		"@types/react": "^19.0.0",

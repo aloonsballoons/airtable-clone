@@ -1,17 +1,16 @@
 "use client";
 
 import { Inter } from "next/font/google";
-import Image from "next/image";
 import { useId, useRef, useState } from "react";
 
-import greySearchIcon from "~/assets/grey-search.svg";
-import gridViewIcon from "~/assets/grid-view.svg";
-import greyGridViewIcon from "~/assets/grey-grid-view.svg";
-import greyStarIcon from "~/assets/grey-star.svg";
-import horizontalDotsIcon from "~/assets/horizontal-dots.svg";
-import greyDotsIcon from "~/assets/grey-dots.svg";
-import plusIcon from "~/assets/plus.svg";
-import settingsIcon from "~/assets/settings.svg";
+import GreySearchIcon from "~/assets/grey-search.svg";
+import GridViewIcon from "~/assets/grid-view.svg";
+import GreyGridViewIcon from "~/assets/grey-grid-view.svg";
+import GreyStarIcon from "~/assets/grey-star.svg";
+import HorizontalDotsIcon from "~/assets/horizontal-dots.svg";
+import GreyDotsIcon from "~/assets/grey-dots.svg";
+import PlusIcon from "~/assets/plus.svg";
+import SettingsIcon from "~/assets/settings.svg";
 import { CreateViewDropdown } from "./create-view-dropdown";
 
 const inter = Inter({
@@ -33,7 +32,7 @@ export type GridViewContainerProps = {
   functionContainerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
-const DEFAULT_VIEWS: ViewItem[] = [{ id: "default", name: "Grid view" }];
+const DEFAULT_VIEWS: ViewItem[] = [];
 
 const VIEW_ROW_STRIDE = 33;
 
@@ -136,12 +135,8 @@ export function GridViewContainer({
             className="absolute flex items-center justify-center"
             style={{ left: 23 - VIEW_HOVER_LEFT, top: 21 - 11, width: 12, height: 12 }}
           >
-            <Image
-              src={plusIcon}
-              alt=""
-              width={12}
-              height={12}
-              className="flex-shrink-0"
+            <PlusIcon
+              className="h-[12px] w-[12px] flex-shrink-0"
               style={{ filter: "brightness(0) saturate(100%)" }}
             />
           </span>
@@ -154,12 +149,8 @@ export function GridViewContainer({
         </button>
 
       {/* 2. "Find a view" + icons */}
-      <Image
-        src={greySearchIcon}
-        alt=""
-        width={13}
-        height={12}
-        className="absolute flex-shrink-0"
+      <GreySearchIcon
+        className="absolute h-[12px] w-[13px] flex-shrink-0"
         style={{ left: 22, top: 57 }}
       />
       <button
@@ -178,7 +169,7 @@ export function GridViewContainer({
         style={{ left: 245, top: 55 }}
         aria-label="View settings"
       >
-        <Image src={settingsIcon} alt="" width={17} height={16} className="flex-shrink-0" />
+        <SettingsIcon className="h-[16px] w-[17px] flex-shrink-0" />
       </button>
 
         {/* 3+. Views */}
@@ -233,14 +224,17 @@ export function GridViewContainer({
                   transition: "opacity 0.15s ease",
                 }}
               >
-                <Image
-                  src={isActive ? greyGridViewIcon : gridViewIcon}
-                  alt=""
-                  width={16}
-                  height={15}
-                  className="flex-shrink-0"
-                  style={{ display: "block" }}
-                />
+                {isActive ? (
+                  <GreyGridViewIcon
+                    className="h-[15px] w-[16px] flex-shrink-0"
+                    style={{ display: "block" }}
+                  />
+                ) : (
+                  <GridViewIcon
+                    className="h-[15px] w-[16px] flex-shrink-0"
+                    style={{ display: "block" }}
+                  />
+                )}
               </span>
 
               {/* Hover icons – visible on hover */}
@@ -257,11 +251,8 @@ export function GridViewContainer({
                   transition: "opacity 0.15s ease",
                 }}
               >
-                <Image
-                  src={greyDotsIcon}
-                  alt=""
-                  width={10}
-                  height={15}
+                <GreyDotsIcon
+                  className="h-[15px] w-[10px]"
                   style={{ display: "block" }}
                 />
               </span>
@@ -279,11 +270,8 @@ export function GridViewContainer({
                   transition: "opacity 0.15s ease",
                 }}
               >
-                <Image
-                  src={greyStarIcon}
-                  alt=""
-                  width={20.79}
-                  height={19.55}
+                <GreyStarIcon
+                  className="h-[19.55px] w-[20.79px]"
                   style={{ display: "block" }}
                 />
               </span>
@@ -301,11 +289,8 @@ export function GridViewContainer({
                   transition: "opacity 0.15s ease",
                 }}
               >
-                <Image
-                  src={horizontalDotsIcon}
-                  alt=""
-                  width={14.99}
-                  height={10.71}
+                <HorizontalDotsIcon
+                  className="h-[10.71px] w-[14.99px]"
                   style={{ display: "block" }}
                 />
               </span>

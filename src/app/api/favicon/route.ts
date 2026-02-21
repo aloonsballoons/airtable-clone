@@ -13,9 +13,9 @@ export async function GET(request: Request) {
       <rect width="32" height="32" rx="7" fill="none" stroke="#743663" stroke-width="1"/>
       <text
         x="16"
-        y="17"
+        y="20"
         font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-        font-size="16"
+        font-size="21"
         font-weight="500"
         fill="#ffffff"
         text-anchor="middle"

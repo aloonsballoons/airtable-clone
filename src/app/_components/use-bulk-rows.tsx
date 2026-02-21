@@ -35,7 +35,9 @@ export function useBulkRows({
       if (isSingleRow && ids && ids.length === 1) {
         const previous = utils.base.getRows.getInfiniteData(queryKey);
 
-        // Add optimistic row to the END of the first page
+        // Add optimistic row to the END of the last page so it appears at the
+        // bottom of the table.  Also bump totalCount on every page so
+        // activeRowCount (derived from page[0].totalCount) stays in sync.
         utils.base.getRows.setInfiniteData(queryKey, (data) => {
           if (!data) return data;
 
@@ -44,17 +46,22 @@ export function useBulkRows({
             data: {},
           };
 
+          const lastIndex = data.pages.length - 1;
           return {
             ...data,
             pages: data.pages.map((page, index) => {
-              // Add to the first page
-              if (index === 0) {
+              const bumpedCount =
+                typeof page.totalCount === "number"
+                  ? page.totalCount + 1
+                  : page.totalCount;
+              if (index === lastIndex) {
                 return {
                   ...page,
+                  totalCount: bumpedCount,
                   rows: [...page.rows, newRow],
                 };
               }
-              return page;
+              return { ...page, totalCount: bumpedCount };
             }),
           };
         });

@@ -10,38 +10,40 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { skipToken } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import arrowIcon from "~/assets/arrow.svg";
-import assigneeIcon from "~/assets/assignee.svg";
-import attachmentsIcon from "~/assets/attachments.svg";
-import bellIcon from "~/assets/bell.svg";
-import blueSearchIcon from "~/assets/blue-search.svg";
-import colourIcon from "~/assets/colour.svg";
-import filterIcon from "~/assets/filter.svg";
-import gridViewIcon from "~/assets/grid-view.svg";
-import groupIcon from "~/assets/group.svg";
-import helpIcon from "~/assets/help.svg";
-import hideFieldsIcon from "~/assets/hide fields.svg";
+import AddIcon from "~/assets/add.svg";
+import ArrowIcon from "~/assets/arrow.svg";
+import AssigneeIcon from "~/assets/assignee.svg";
+import AttachmentsIcon from "~/assets/attachments.svg";
+import BellIcon from "~/assets/bell.svg";
+import BlueSearchIcon from "~/assets/blue-search.svg";
+import ColourIcon from "~/assets/colour.svg";
+import FilterIcon from "~/assets/filter.svg";
+import GridViewIcon from "~/assets/grid-view.svg";
+import GroupIcon from "~/assets/group.svg";
+import HelpIcon from "~/assets/help.svg";
+import HideFieldsIcon from "~/assets/hide fields.svg";
 import { HeaderComponent } from "./header-component";
 import { FunctionBar } from "./function-component";
-import lightArrowIcon from "~/assets/light-arrow.svg";
-import lightMailIcon from "~/assets/light-mail.svg";
-import logoIcon from "~/assets/logo.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import numberIcon from "~/assets/number.svg";
-import omniIcon from "~/assets/omni.svg";
-import pinkIcon from "~/assets/pink.svg";
-import plusIcon from "~/assets/plus.svg";
-import reorderIcon from "~/assets/reorder.svg";
-import rowHeightIcon from "~/assets/row-height.svg";
-import searchIcon from "~/assets/search.svg";
-import shareSyncIcon from "~/assets/share-and-sync.svg";
-import sortIcon from "~/assets/sort.svg";
-import statusIcon from "~/assets/status.svg";
-import threeLineIcon from "~/assets/three-line.svg";
-import toggleIcon from "~/assets/toggle.svg";
-import xIcon from "~/assets/x.svg";
-import { authClient } from "~/server/better-auth/client";
+import LightArrowIcon from "~/assets/light-arrow.svg";
+import LightMailIcon from "~/assets/light-mail.svg";
+import LogoIcon from "~/assets/logo.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import NumberIcon from "~/assets/number.svg";
+import OmniIcon from "~/assets/omni.svg";
+import PinkIcon from "~/assets/pink.svg";
+import PlusIcon from "~/assets/plus.svg";
+import ReorderIcon from "~/assets/reorder.svg";
+import RowHeightIcon from "~/assets/row-height.svg";
+import SearchIcon from "~/assets/search.svg";
+import ShareSyncIcon from "~/assets/share-and-sync.svg";
+import SortIcon from "~/assets/sort.svg";
+import StatusIcon from "~/assets/status.svg";
+import ThreeLineIcon from "~/assets/three-line.svg";
+import ToggleIcon from "~/assets/toggle.svg";
+import XIcon from "~/assets/x.svg";
+import LogoutIcon from "~/assets/logout.svg";
+import { handleLogout } from "./handle-logout";
 import { api, type RouterInputs } from "~/trpc/react";
 import { GridViewContainer } from "./grid-view-component";
 import { TableView } from "./table-view";
@@ -150,6 +152,7 @@ type TableRow = Record<string, string> & { id: string };
 type TableWorkspaceProps = {
   baseId: string;
   userName: string;
+  userEmail: string;
 };
 
 
@@ -186,10 +189,12 @@ const isValidUUID = (id: string | null): id is string =>
 
 const getLastViewedTableKey = (baseId: string) =>
   `airtable:last-viewed-table:${baseId}`;
+const getLastViewedViewKey = (tableId: string) =>
+  `airtable:last-viewed-view:${tableId}`;
 const getTableFilterStateKey = (baseId: string, tableId: string) =>
   `airtable:table-filters:${baseId}:${tableId}`;
 
-export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
+export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspaceProps) {
   const router = useRouter();
   const utils = api.useUtils();
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
@@ -264,7 +269,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const hasLoadedTableMetaRef = useRef(false);
   const hydratedFilterTableIdRef = useRef<string | null>(null);
   const functionContainerRef = useRef<HTMLDivElement>(null);
-  const [activeViewId, setActiveViewId] = useState<string | null>("default");
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [isViewSwitching, setIsViewSwitching] = useState(false);
   // Tracks whether hooks have had a render cycle to absorb new view config.
   // When view data first becomes ready, the filter/search/sort hooks haven't
@@ -288,6 +293,38 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     return table?.views ?? [];
   }, [activeTableId, baseDetailsQuery.data]);
 
+  // Ensure existing tables have at least one view (migration for pre-view tables)
+  const ensureDefaultViewMutation = api.base.ensureDefaultView.useMutation({
+    onSuccess: async (result) => {
+      if (result.created) {
+        await utils.base.get.invalidate({ baseId });
+      }
+      // Select the (possibly newly created) default view
+      if (!activeViewId || activeViewId === "pending-view") {
+        setActiveViewId(result.id);
+      }
+    },
+  });
+  const ensureDefaultViewCalledRef = useRef<string | null>(null);
+
+  // Validate / fall back: if no view is selected or it doesn't belong to the
+  // current table, pick the first available view. localStorage restore is
+  // handled by the reset-on-table-switch effect so we only need a fallback here.
+  useEffect(() => {
+    if (!activeTableId) return;
+    if (activeTableViews.length > 0) {
+      if (activeViewId === null || (!activeTableViews.some((v) => v.id === activeViewId) && activeViewId !== "pending-view")) {
+        setActiveViewId(activeTableViews[0]!.id);
+      }
+    } else if (baseDetailsQuery.data && isValidTableId(activeTableId)) {
+      // Table has no views — call ensureDefaultView to create one (migration)
+      if (ensureDefaultViewCalledRef.current !== activeTableId) {
+        ensureDefaultViewCalledRef.current = activeTableId;
+        ensureDefaultViewMutation.mutate({ tableId: activeTableId });
+      }
+    }
+  }, [activeTableId, activeTableViews, activeViewId, baseDetailsQuery.data]);
+
   const createViewMutation = api.base.createView.useMutation({
     onMutate: ({ name }) => {
       // Show loading state and display the new view name immediately
@@ -306,17 +343,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     onError: () => {
       setIsViewSwitching(false);
       setPendingViewName(null);
-      // Revert to the default view since the new view failed to create
-      setActiveViewId("default");
+      // Revert to the first available view
+      setActiveViewId(activeTableViews[0]?.id ?? null);
     },
   });
 
-  // Query for the active custom view's state
-  const isCustomView = activeViewId !== null && activeViewId !== "default";
-  const isRealCustomView = isCustomView && isValidUUID(activeViewId);
+  // Query for the active view's state (all views are now persisted in DB)
+  const hasActiveView = activeViewId !== null && isValidUUID(activeViewId);
   const activeViewQuery = api.base.getView.useQuery(
     { viewId: activeViewId! },
-    { enabled: isRealCustomView, staleTime: 30_000 }
+    { enabled: hasActiveView, staleTime: 30_000 }
   );
 
   // Mutation to update view state
@@ -420,24 +456,16 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     }
   }, [tableMetaQuery.data]);
 
-  // Use view's state if viewing a custom view, otherwise use table's state
-  const effectiveHiddenColumnIds = isRealCustomView
-    ? (activeViewQuery.data?.hiddenColumnIds ?? [])
-    : (tableMetaQuery.data?.hiddenColumnIds ?? []);
-  const effectiveSearchQuery = isRealCustomView
-    ? (activeViewQuery.data?.searchQuery ?? "")
-    : (tableMetaQuery.data?.searchQuery ?? "");
+  // All views are now persisted — always read config from the active view query
+  const effectiveHiddenColumnIds = activeViewQuery.data?.hiddenColumnIds ?? [];
+  const effectiveSearchQuery = activeViewQuery.data?.searchQuery ?? "";
   const effectiveSortConfig = useMemo(
-    () => isRealCustomView
-      ? (activeViewQuery.data?.sortConfig ?? [])
-      : (tableMetaQuery.data?.sort ?? []),
-    [isRealCustomView, activeViewQuery.data?.sortConfig, tableMetaQuery.data?.sort]
+    () => activeViewQuery.data?.sortConfig ?? [],
+    [activeViewQuery.data?.sortConfig]
   );
   const effectiveFilterConfig = useMemo(
-    () => (isRealCustomView
-      ? (activeViewQuery.data?.filterConfig ?? null)
-      : (tableMetaQuery.data?.filterConfig ?? null)) as { connector: FilterConnector; items: FilterItem[]; } | null,
-    [isRealCustomView, activeViewQuery.data?.filterConfig, tableMetaQuery.data?.filterConfig]
+    () => (activeViewQuery.data?.filterConfig ?? null) as { connector: FilterConnector; items: FilterItem[]; } | null,
+    [activeViewQuery.data?.filterConfig]
   );
 
   const hiddenColumnIds = effectiveHiddenColumnIds;
@@ -512,13 +540,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Memoize onFilterChange to prevent infinite re-render loops
   const handleFilterChange = useCallback(
     (filterConfig: { connector: FilterConnector; items: FilterItem[] } | null) => {
-      if (isRealCustomView && activeViewId) {
+      if (hasActiveView && activeViewId) {
         updateViewMutation.mutate({ viewId: activeViewId, filterConfig });
-      } else if (activeTableId) {
-        setTableFilter.mutate({ tableId: activeTableId, filterConfig });
       }
     },
-    [isRealCustomView, activeViewId, activeTableId, updateViewMutation, setTableFilter]
+    [hasActiveView, activeViewId, updateViewMutation]
   );
 
   // Initialize filter hook
@@ -526,7 +552,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     tableId: activeTableId,
     columns: activeColumns,
     hiddenColumnIdSet,
-    viewId: isRealCustomView ? activeViewId : null,
+    viewId: activeViewId,
     effectiveFilterConfig,
     onFilterChange: handleFilterChange,
   });
@@ -545,21 +571,21 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   // Memoize onSortChange to avoid unnecessary re-renders
   const handleSortChange = useCallback(
     (sortConfig: SortConfig[] | null) => {
-      if (isRealCustomView && activeViewId) {
+      if (hasActiveView && activeViewId) {
         updateViewMutation.mutate({
           viewId: activeViewId,
           sortConfig: sortConfig ?? [],
         });
       }
     },
-    [isRealCustomView, activeViewId, updateViewMutation]
+    [hasActiveView, activeViewId, updateViewMutation]
   );
 
   // Initialize table sort hook
   const tableSortHook = useTableSort({
     tableId: activeTableId,
     viewId: activeViewId,
-    isCustomView: isRealCustomView,
+    isCustomView: hasActiveView,
     columns: orderedColumns,
     visibleColumnIdSet,
     tableMetaQuery: {
@@ -577,13 +603,11 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     hiddenColumnIdSet,
     activeTableId,
     setHiddenColumns: (params) => {
-      if (isRealCustomView && activeViewId) {
+      if (hasActiveView && activeViewId) {
         updateViewMutation.mutate({
           viewId: activeViewId,
           hiddenColumnIds: params.hiddenColumnIds,
         });
-      } else {
-        setHiddenColumns.mutate(params);
       }
     },
   });
@@ -698,6 +722,110 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     });
   }, [activeTableId, createViewMutation]);
 
+  const renameViewMutation = api.base.renameView.useMutation({
+    onMutate: async ({ viewId: renamedViewId, name: newName }) => {
+      await utils.base.get.cancel({ baseId });
+      const previousData = utils.base.get.getData({ baseId });
+      // Optimistically update the view name in cache
+      utils.base.get.setData({ baseId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tables: old.tables.map((table) =>
+            table.id === activeTableId
+              ? { ...table, views: table.views.map((v) => v.id === renamedViewId ? { ...v, name: newName } : v) }
+              : table
+          ),
+        };
+      });
+      // Also optimistically update the getView cache
+      if (isValidUUID(renamedViewId)) {
+        await utils.base.getView.cancel({ viewId: renamedViewId });
+        utils.base.getView.setData({ viewId: renamedViewId }, (old) => {
+          if (!old) return old;
+          return { ...old, name: newName };
+        });
+      }
+      return { previousData };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousData) {
+        utils.base.get.setData({ baseId }, context.previousData);
+      }
+    },
+    onSettled: async (_data, _error, variables) => {
+      await utils.base.get.invalidate({ baseId });
+      if (isValidUUID(variables.viewId)) {
+        await utils.base.getView.invalidate({ viewId: variables.viewId });
+      }
+    },
+  });
+
+  const deleteViewMutation = api.base.deleteView.useMutation({
+    onMutate: async ({ viewId: deletedViewId }) => {
+      await utils.base.get.cancel({ baseId });
+      const previousData = utils.base.get.getData({ baseId });
+      // Optimistically remove the view from cache
+      utils.base.get.setData({ baseId }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tables: old.tables.map((table) =>
+            table.id === activeTableId
+              ? { ...table, views: table.views.filter((v) => v.id !== deletedViewId) }
+              : table
+          ),
+        };
+      });
+      // Switch to the first remaining view
+      const remainingViews = activeTableViews.filter((v) => v.id !== deletedViewId);
+      setActiveViewId(remainingViews[0]?.id ?? null);
+      return { previousData };
+    },
+    onSuccess: async () => {
+      await utils.base.get.invalidate({ baseId });
+    },
+    onError: (_err, _vars, context) => {
+      // Revert optimistic update
+      if (context?.previousData) {
+        utils.base.get.setData({ baseId }, context.previousData);
+      }
+      setActiveViewId(activeTableViews[0]?.id ?? null);
+    },
+  });
+
+  const duplicateViewMutation = api.base.duplicateView.useMutation({
+    onMutate: ({ name }) => {
+      setIsViewSwitching(true);
+      if (name) setPendingViewName(name);
+      setActiveViewId("pending-view");
+    },
+    onSuccess: async (newView) => {
+      await utils.base.get.invalidate({ baseId });
+      setActiveViewId(newView.id);
+      setPendingViewName(null);
+      setIsViewSwitching(false);
+    },
+    onError: () => {
+      setIsViewSwitching(false);
+      setPendingViewName(null);
+      setActiveViewId(activeTableViews[0]?.id ?? null);
+    },
+  });
+
+  const handleRenameView = useCallback((viewId: string, newName: string) => {
+    if (!isValidUUID(viewId)) return;
+    renameViewMutation.mutate({ viewId, name: newName });
+  }, [renameViewMutation]);
+
+  const handleDeleteView = useCallback((viewId: string) => {
+    deleteViewMutation.mutate({ viewId });
+  }, [deleteViewMutation]);
+
+  const handleDuplicateView = useCallback((viewId: string, name: string) => {
+    duplicateViewMutation.mutate({ viewId, name });
+  }, [duplicateViewMutation]);
+
   // Ref for flushing pending search save on view switch (assigned after setTableSearch is defined)
   const flushPendingSearchRef = useRef<() => void>(() => {});
   // Ref for flushing pending filter save on view switch
@@ -740,7 +868,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (activeViewId == "pending-view") return;
 
     // Check if view data is ready (for real custom views, wait for query to finish)
-    const viewDataReady = !isRealCustomView ||
+    const viewDataReady = !hasActiveView ||
       (activeViewQuery.data !== undefined && !activeViewQuery.isFetching) ||
       activeViewQuery.isError;
 
@@ -772,7 +900,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     }
   }, [
     isViewSwitching,
-    isRealCustomView,
+    hasActiveView,
     createViewMutation.isPending,
     activeViewQuery.data,
     activeViewQuery.isFetching,
@@ -816,18 +944,31 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     return () => clearInterval(interval);
   }, [isViewSwitching]);
 
-  // Reset to default view when switching tables
+  // Reset view selection when switching tables — read last-viewed from localStorage
+  // so the correct view is set immediately without an intermediate null cycle.
   useEffect(() => {
-    setActiveViewId("default");
+    if (!activeTableId) {
+      setActiveViewId(null);
+      return;
+    }
+    // Try to restore the last-viewed view for this table
+    let restoredViewId: string | null = null;
+    try {
+      const storedViewId = window.localStorage.getItem(getLastViewedViewKey(activeTableId));
+      if (storedViewId && isValidUUID(storedViewId)) {
+        restoredViewId = storedViewId;
+      }
+    } catch { /* ignore */ }
+    // Set to the stored view (will be validated by auto-select if it no longer exists)
+    // or null to let auto-select pick the first view.
+    setActiveViewId(restoredViewId);
   }, [activeTableId]);
 
-  // Always include the default "Grid view" as the first view, followed by any saved views
-  const savedViews = activeTableViews;
+  // Views come directly from DB — no more hardcoded default
   const views = [
-    { id: "default", name: "Grid view" },
-    ...savedViews,
+    ...activeTableViews,
     // Show the pending view in the sidebar immediately during creation
-    ...(pendingViewName && !savedViews.some((v) => v.name === pendingViewName)
+    ...(pendingViewName && !activeTableViews.some((v) => v.name === pendingViewName)
       ? [{ id: "pending-view", name: pendingViewName }]
       : []),
   ];
@@ -866,14 +1007,14 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     onSuccess: async (data, _variables, context) => {
       if (!context) return;
 
-      // Replace optimistic ID with real ID
+      // Replace optimistic ID with real ID (preserve any views that may have loaded)
       utils.base.get.setData({ baseId }, (old) => {
         if (!old) return old;
         return {
           ...old,
           tables: old.tables.map((table) =>
             table.id === context.optimisticId
-              ? { id: data.id, name: data.name, views: [] }
+              ? { id: data.id, name: data.name, views: table.views }
               : table
           ),
         };
@@ -1004,10 +1145,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     if (!activeTableId) return;
     const currentSearch = searchValue.trim();
     if (currentSearch === effectiveSearchRef.current) return;
-    if (isRealCustomView && activeViewId) {
+    if (hasActiveView && activeViewId) {
       updateViewMutation.mutate({ viewId: activeViewId, searchQuery: currentSearch });
-    } else {
-      setTableSearch.mutate({ tableId: activeTableId, search: currentSearch });
     }
   };
 
@@ -1025,10 +1164,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
     const currentSerialized = JSON.stringify(currentConfig);
     const effectiveSerialized = JSON.stringify(effectiveFilterRef.current);
     if (currentSerialized === effectiveSerialized) return;
-    if (isRealCustomView && activeViewId) {
+    if (hasActiveView && activeViewId) {
       updateViewMutation.mutate({ viewId: activeViewId, filterConfig: currentConfig });
-    } else {
-      setTableFilter.mutate({ tableId: activeTableId, filterConfig: currentConfig });
     }
   };
 
@@ -1192,6 +1329,19 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       // Ignore storage failures (private mode, blocked storage, etc).
     }
   }, [activeTableId, baseId, preferredTableBaseId]);
+
+  // Persist the last-viewed view per table to localStorage
+  useEffect(() => {
+    if (!isValidTableId(activeTableId) || !isValidUUID(activeViewId)) return;
+    try {
+      window.localStorage.setItem(
+        getLastViewedViewKey(activeTableId),
+        activeViewId
+      );
+    } catch {
+      // Ignore storage failures
+    }
+  }, [activeViewId, activeTableId]);
 
   useEffect(() => {
     setCellEdits({});
@@ -2664,10 +2814,17 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   const sortAddVirtualizerSize = tableSortHook.sortAddVirtualizerSize;
 
   // --- Sort/Filter loading synchronization ---
-  // Display column IDs are updated only when data finishes loading,
-  // so column highlighting is in sync with the actual data.
-  const [displaySortedColumnIds, setDisplaySortedColumnIds] = useState<Set<string>>(new Set());
-  const [displayFilteredColumnIds, setDisplayFilteredColumnIds] = useState<Set<string>>(new Set());
+  // Compute display column IDs synchronously so colour highlights render in
+  // the same frame as the table data — no extra useEffect render cycle.
+  const displaySortedColumnIds = useMemo(
+    () => (isViewSwitching ? EMPTY_STRING_SET : sortedColumnIds),
+    [isViewSwitching, sortedColumnIds]
+  );
+  const displayFilteredColumnIds = useMemo(
+    () => (isViewSwitching ? EMPTY_STRING_SET : filteredColumnIds),
+    [isViewSwitching, filteredColumnIds]
+  );
+
   const [isFunctionTriggered, setIsFunctionTriggered] = useState(false);
   const fetchStartedAfterTriggerRef = useRef(false);
 
@@ -2692,49 +2849,6 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
       setIsFunctionTriggered(true);
     }
   }, [filterInputJson]);
-
-  // Stable serializations of column ID sets to avoid infinite re-render loops
-  // (Set objects create new references on every render)
-  const sortedColumnIdsKey = useMemo(
-    () => Array.from(sortedColumnIds).sort().join(","),
-    [sortedColumnIds]
-  );
-  const filteredColumnIdsKey = useMemo(
-    () => Array.from(filteredColumnIds).sort().join(","),
-    [filteredColumnIds]
-  );
-  const prevDisplaySortKeyRef = useRef("");
-  const prevDisplayFilterKeyRef = useRef("");
-  const prevDisplayViewIdRef = useRef(activeViewId);
-
-  // Update display column IDs only when not refetching.
-  // On view switch, clear highlights immediately and skip the normal update
-  // so stale highlights from the previous view don't leak into the new view.
-  useEffect(() => {
-    if (activeViewId !== prevDisplayViewIdRef.current) {
-      prevDisplayViewIdRef.current = activeViewId;
-      setDisplayFilteredColumnIds(new Set());
-      setDisplaySortedColumnIds(new Set());
-      prevDisplayFilterKeyRef.current = "";
-      prevDisplaySortKeyRef.current = "";
-      return;
-    }
-    // While view is switching, don't re-populate display sets from potentially
-    // stale hook values (e.g. base table config leaking through "pending-view"
-    // phase when isRealCustomView is false).
-    if (isViewSwitching) return;
-    const isRefetching = rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
-    if (!isRefetching) {
-      if (sortedColumnIdsKey !== prevDisplaySortKeyRef.current) {
-        prevDisplaySortKeyRef.current = sortedColumnIdsKey;
-        setDisplaySortedColumnIds(sortedColumnIds);
-      }
-      if (filteredColumnIdsKey !== prevDisplayFilterKeyRef.current) {
-        prevDisplayFilterKeyRef.current = filteredColumnIdsKey;
-        setDisplayFilteredColumnIds(filteredColumnIds);
-      }
-    }
-  }, [activeViewId, isViewSwitching, rowsQuery.isFetching, rowsQuery.isFetchingNextPage, sortedColumnIdsKey, filteredColumnIdsKey, sortedColumnIds, filteredColumnIds]);
 
   // Clear function triggered state after fetch cycle completes
   useEffect(() => {
@@ -2822,9 +2936,28 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
   };
 
   const handleSignOut = async () => {
-    await authClient.signOut();
-    router.refresh();
+    await handleLogout(() => router.refresh());
   };
+
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
+  const userIconRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!showUserDropdown) return;
+    const handleClickOutside = (event: globalThis.MouseEvent) => {
+      if (
+        userDropdownRef.current &&
+        !userDropdownRef.current.contains(event.target as Node) &&
+        userIconRef.current &&
+        !userIconRef.current.contains(event.target as Node)
+      ) {
+        setShowUserDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showUserDropdown]);
 
   const handleFilterDragStart = (
     event: ReactMouseEvent,
@@ -3000,26 +3133,23 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             className="cursor-pointer"
             aria-label="Back to bases"
           >
-            <img
-              alt="Airtable"
+            <LogoIcon
               className="h-[19.74px] w-[22.68px]"
-              src={logoIcon.src}
               style={{ filter: "brightness(0) saturate(100%)" }}
             />
           </button>
-          <img
-            alt=""
+          <OmniIcon
             className="mt-[25px] h-[28.31px] w-[28.33px]"
-            src={omniIcon.src}
           />
           <div className="absolute bottom-4 left-0 right-0 flex flex-col items-center gap-4">
-            <img alt="" className="h-[15px] w-[15px]" src={helpIcon.src} />
-            <img alt="" className="h-[16px] w-[16px]" src={bellIcon.src} />
+            <HelpIcon className="h-[15px] w-[15px]" />
+            <BellIcon className="h-[16px] w-[16px]" />
             <button
+              ref={userIconRef}
               type="button"
-              onClick={handleSignOut}
-              className="airtable-circle relative overflow-hidden"
-              aria-label="Sign out"
+              onClick={() => setShowUserDropdown((prev) => !prev)}
+              className="airtable-circle relative cursor-pointer overflow-hidden"
+              aria-label="User menu"
             >
               <svg
                 className="absolute inset-0 m-auto h-[29px] w-[29px]"
@@ -3044,6 +3174,105 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               <span className="relative text-[13px] text-white">{userInitial}</span>
             </button>
           </div>
+
+          {/* User dropdown */}
+          {showUserDropdown && (
+            <div
+              ref={userDropdownRef}
+              className={`${inter.className} airtable-dropdown-surface`}
+              style={{
+                position: "fixed",
+                left: 56 + 7,
+                bottom: 16,
+                width: 297,
+                height: 129,
+                backgroundColor: "white",
+                borderRadius: 5,
+                zIndex: 1000,
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  left: 20,
+                  top: 21,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#1D1F24",
+                }}
+              >
+                {userName}
+              </span>
+              <span
+                style={{
+                  position: "absolute",
+                  left: 20,
+                  top: 41,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: "#1D1F24",
+                }}
+              >
+                {userEmail}
+              </span>
+              <div
+                style={{
+                  position: "absolute",
+                  left: 20,
+                  top: 76,
+                  width: 245,
+                  height: 1,
+                  backgroundColor: "#F2F2F2",
+                }}
+              />
+              <button
+                type="button"
+                className="group/logout"
+                onClick={handleSignOut}
+                style={{
+                  position: "absolute",
+                  left: 13,
+                  top: 84,
+                  width: 260,
+                  height: 34,
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = "#F2F2F2";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = "transparent";
+                }}
+              >
+                <LogoutIcon
+                  className="absolute group-hover/logout:mix-blend-multiply"
+                  style={{
+                    left: 20 - 13,
+                    top: 94 - 84,
+                    width: 16,
+                    height: 15,
+                    display: "block",
+                  }}
+                />
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 44 - 13,
+                    top: 93 - 84,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "#1D1F24",
+                  }}
+                >
+                  Logout
+                </span>
+              </button>
+            </div>
+          )}
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -3128,10 +3357,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                               {tableItem.name}
                             </span>
                             {isActive && (
-                              <img
-                                alt=""
+                              <LightArrowIcon
                                 className="relative z-[1] ml-[6px] mt-[5px] h-[5.8px] w-[10.02px] mix-blend-multiply"
-                                src={lightArrowIcon.src}
                               />
                             )}
                           </button>
@@ -3147,10 +3374,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       )}
                       aria-hidden="true"
                     />
-                    <img
-                      alt=""
+                    <LightArrowIcon
                       className="ml-[15px] mt-[13px] h-[5.8px] w-[10.02px] flex-shrink-0 mix-blend-multiply"
-                      src={lightArrowIcon.src}
                     />
                     <button
                       ref={addTableButtonRef}
@@ -3163,7 +3388,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       )}
                       aria-label="Add table"
                     >
-                      <img alt="" className="h-[12px] w-[12px]" src={plusIcon.src} />
+                      <PlusIcon className="h-[12px] w-[12px]" />
                     </button>
                     {addTableDropdownStage === "add-options" && dropdownPosition && (
                       <div
@@ -3300,11 +3525,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                             Add record
                           </span>
                           {/* light-mail.svg 15x12 */}
-                          <img
-                            alt=""
+                          <LightMailIcon
                             className="absolute"
                             style={{ left: 174, top: 142, width: 15, height: 12 }}
-                            src={lightMailIcon.src}
                           />
                           <span
                             className={clsx(inter.className, "absolute text-[11px] font-normal leading-[11px] text-[#55565D]")}
@@ -3349,10 +3572,8 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                   >
                     Tools
                   </button>
-                  <img
-                    alt=""
+                  <LightArrowIcon
                     className="ml-[7px] mt-[13px] h-[5.8px] w-[10.02px] mix-blend-multiply"
-                    src={lightArrowIcon.src}
                   />
                 </div>
               </div>
@@ -3361,6 +3582,12 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             <div ref={functionContainerRef}>
               <FunctionBar
                 viewName={activeViewName}
+                activeViewId={activeViewId}
+                viewCount={views.length}
+                allViewNames={views.map((v) => v.name)}
+                onRenameView={handleRenameView}
+                onDeleteView={handleDeleteView}
+                onDuplicateView={handleDuplicateView}
                 bulkRowsDisabled={bulkRowsDisabled}
                 handleAddBulkRows={handleAddBulkRows}
                 hideFieldsButtonRef={hideFieldsHook.hideFieldsButtonRef}
@@ -3497,6 +3724,9 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               sortedColumnIds={(pendingViewName || isViewSwitching) ? EMPTY_STRING_SET : sortedColumnIds}
               draggingSortId={tableSortHook.draggingSortId}
               draggingSortTop={tableSortHook.draggingSortTop}
+              sortPhantomRef={tableSortHook.sortPhantomRef}
+              phantomSortX={tableSortHook.phantomSortX}
+              phantomSortY={tableSortHook.phantomSortY}
               applySorts={handleApplySorts}
               handleSortDragStart={tableSortHook.handleSortDragStart}
               getSortDirectionLabels={tableSortHook.getSortDirectionLabels}
@@ -3517,7 +3747,7 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
             </div>
           </section>
 
-          <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
             <section className="min-w-[280px] w-[280px] flex-shrink-0 border-r border-[#DDE1E3]">
               <GridViewContainer
                 views={views}
@@ -3528,7 +3758,100 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
               />
             </section>
 
-            <section className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
+            {/* Add row + extensions pill – fixed to bottom of viewport area */}
+            {activeTable && !isViewSwitching && !isTableLoading && (
+            <div
+              className="absolute z-[60]"
+              style={{
+                left: 288,       /* 280 (sidebar) + 8px gap */
+                bottom: 29,
+                width: 134,
+                height: 36,
+                borderRadius: 18,
+                border: "1px solid #E4E4E4",
+                overflow: "hidden",
+                backgroundColor: "white",
+              }}
+            >
+              {/* Left zone – plus / add-row button (CSS-only hover for instant response) */}
+              <button
+                type="button"
+                className="absolute cursor-pointer border-none bg-white p-0 outline-none hover:!bg-[#E4E8F1]"
+                style={{
+                  left: 0,
+                  top: 0,
+                  width: 46,
+                  height: 36,
+                  borderRadius: "18px 0 0 18px",
+                }}
+                onClick={() => {
+                  if (!activeTableId) return;
+                  addRowsMutate({
+                    tableId: activeTableId,
+                    count: 1,
+                    ids: [crypto.randomUUID()],
+                  });
+                }}
+              >
+                {/* 12×12 plus icon at (19,12) with #1D1F24 color */}
+                <svg
+                  width={12}
+                  height={12}
+                  viewBox="0 0 13 13"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="absolute pointer-events-none"
+                  style={{ left: 19, top: 12 }}
+                >
+                  <rect x="0" y="6" width="13" height="1" rx="0.5" fill="#1D1F24" />
+                  <rect x="6" y="0" width="1" height="13" rx="0.5" fill="#1D1F24" />
+                </svg>
+              </button>
+              {/* Vertical divider */}
+              <span
+                className="absolute pointer-events-none"
+                style={{
+                  left: 45,
+                  top: 0,
+                  width: 1,
+                  height: 35,
+                  backgroundColor: "#E4E4E4",
+                }}
+              />
+              {/* Right zone – "Add..." */}
+              <button
+                type="button"
+                className="absolute cursor-pointer border-none bg-transparent p-0 outline-none"
+                style={{
+                  left: 46,
+                  top: 0,
+                  width: 88,
+                  height: 36,
+                  borderRadius: "0 18px 18px 0",
+                }}
+              >
+                {/* 16×16 add.svg at (59,10) relative to pill → 59-46=13 within this zone */}
+                <AddIcon
+                  className="absolute pointer-events-none"
+                  style={{ left: 13, top: 10, width: 16, height: 16 }}
+                />
+                {/* "Add..." label at (82,10) relative to pill → 82-46=36 */}
+                <span
+                  className="absolute pointer-events-none text-[13px] font-normal text-[#1D1F24]"
+                  style={{
+                    left: 36,
+                    top: 10,
+                    fontFamily: "Inter, sans-serif",
+                    lineHeight: "16px",
+                  }}
+                >
+                  Add...
+                </span>
+              </button>
+            </div>
+            )}
+
+            <section className="isolate relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#F7F8FC]">
               {baseDetailsQuery.isError && (
                 <div className="rounded-[6px] border border-[#FECACA] bg-[#FEF2F2] px-4 py-6 text-[12px] text-[#991b1b]">
                   We couldn't load this base. It may have been deleted or you may not have access.
@@ -3576,24 +3899,13 @@ export function TableWorkspace({ baseId, userName }: TableWorkspaceProps) {
                       />
                     </svg>
                   </span>
-                  <span
-                    className={inter.className}
-                    style={{
-                      fontSize: 16,
-                      fontWeight: 400,
-                      color: "#989AA1",
-                      lineHeight: "16px",
-                    }}
-                  >
-                    Loading table...
-                  </span>
                 </div>
               )}
 
               {activeTable && !isViewSwitching && (
                 <div
                   className="h-full"
-                  key={activeViewId ?? "default"}
+                  key={activeViewId ?? "no-view"}
                   style={{
                     visibility: isTableLoading ? "hidden" : "visible",
                   }}

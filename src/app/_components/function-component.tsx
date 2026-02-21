@@ -1,7 +1,8 @@
 "use client";
 
 import clsx from "clsx";
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type {
   Dispatch,
   MouseEvent as ReactMouseEvent,
@@ -33,31 +34,35 @@ import {
   type HideFieldsRow,
 } from "./use-hide-fields";
 
-import arrowIcon from "~/assets/arrow.svg";
-import assigneeIcon from "~/assets/assignee.svg";
-import attachmentsIcon from "~/assets/attachments.svg";
-import blueSearchIcon from "~/assets/blue-search.svg";
-import colourIcon from "~/assets/colour.svg";
-import filterIcon from "~/assets/filter.svg";
-import filterActiveIcon from "~/assets/filter-active.svg";
-import gridViewIcon from "~/assets/grid-view.svg";
-import groupIcon from "~/assets/group.svg";
-import hideFieldsIcon from "~/assets/hide-fields.svg";
-import hideFieldsActiveIcon from "~/assets/hide-fields-active.svg";
-import lightArrowIcon from "~/assets/light-arrow.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import numberIcon from "~/assets/number.svg";
-import reorderIcon from "~/assets/reorder.svg";
-import threeDotIcon from "~/assets/three-dot.svg";
-import rowHeightIcon from "~/assets/row-height.svg";
-import shareSyncIcon from "~/assets/share-and-sync.svg";
-import sortIcon from "~/assets/sort.svg";
-import sortActiveIcon from "~/assets/sort-active.svg";
-import statusIcon from "~/assets/status.svg";
-import threeLineIcon from "~/assets/three-line.svg";
-import toggleIcon from "~/assets/toggle.svg";
-import xIcon from "~/assets/x.svg";
+import ArrowIcon from "~/assets/arrow.svg";
+import AssigneeIcon from "~/assets/assignee.svg";
+import DeleteIcon from "~/assets/delete.svg";
+import DuplicateIcon from "~/assets/duplicate.svg";
+import GreyGridViewIcon from "~/assets/grey-grid-view.svg";
+import RenameIcon from "~/assets/rename.svg";
+import AttachmentsIcon from "~/assets/attachments.svg";
+import BlueSearchIcon from "~/assets/blue-search.svg";
+import ColourIcon from "~/assets/colour.svg";
+import FilterIcon from "~/assets/filter.svg";
+import FilterActiveIcon from "~/assets/filter-active.svg";
+import GridViewIcon from "~/assets/grid-view.svg";
+import GroupIcon from "~/assets/group.svg";
+import HideFieldsIcon from "~/assets/hide-fields.svg";
+import HideFieldsActiveIcon from "~/assets/hide-fields-active.svg";
+import LightArrowIcon from "~/assets/light-arrow.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import NumberIcon from "~/assets/number.svg";
+import ReorderIcon from "~/assets/reorder.svg";
+import ThreeDotIcon from "~/assets/three-dot.svg";
+import RowHeightIcon from "~/assets/row-height.svg";
+import ShareSyncIcon from "~/assets/share-and-sync.svg";
+import SortIcon from "~/assets/sort.svg";
+import SortActiveIcon from "~/assets/sort-active.svg";
+import StatusIcon from "~/assets/status.svg";
+import ThreeLineIcon from "~/assets/three-line.svg";
+import ToggleIcon from "~/assets/toggle.svg";
+import XIcon from "~/assets/x.svg";
 
 // ---------------------------------------------------------------------------
 // Type definitions
@@ -121,32 +126,34 @@ type FilterLayoutRow = {
 const STATUS_ICON_SCALE = 1.1;
 const STATUS_MENU_ICON_SIZE = 15 * STATUS_ICON_SCALE;
 
-// Suppress unused‑import warning – lightArrowIcon is kept for API surface parity.
-void lightArrowIcon;
+// Suppress unused‑import warning – LightArrowIcon is kept for API surface parity.
+void LightArrowIcon;
 
 // ---------------------------------------------------------------------------
 // Column‑icon helpers
 // ---------------------------------------------------------------------------
 
-const columnIconMap: Record<string, string> = {
-  Name: nameIcon.src,
-  Notes: notesIcon.src,
-  Assignee: assigneeIcon.src,
-  Status: statusIcon.src,
-  Attachments: attachmentsIcon.src,
-  Number: numberIcon.src,
+type SvgComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
+
+const columnIconMap: Record<string, SvgComponent> = {
+  Name: NameIcon,
+  Notes: NotesIcon,
+  Assignee: AssigneeIcon,
+  Status: StatusIcon,
+  Attachments: AttachmentsIcon,
+  Number: NumberIcon,
 };
 
-const columnTypeIconMap: Record<ColumnFieldType, string> = {
-  single_line_text: nameIcon.src,
-  long_text: notesIcon.src,
-  number: numberIcon.src,
+const columnTypeIconMap: Record<ColumnFieldType, SvgComponent> = {
+  single_line_text: NameIcon,
+  long_text: NotesIcon,
+  number: NumberIcon,
 };
 
 const coerceColumnType = (value?: string | null): ColumnFieldType =>
   value === "long_text" || value === "number" ? value : "single_line_text";
 
-const getColumnIconSrc = (name: string, type?: string | null) => {
+const getColumnIcon = (name: string, type?: string | null): SvgComponent | undefined => {
   const resolvedType = coerceColumnType(type);
   return columnIconMap[name] ?? columnTypeIconMap[resolvedType];
 };
@@ -158,6 +165,12 @@ const getColumnIconSrc = (name: string, type?: string | null) => {
 export type FunctionBarProps = FilterDropdownProps & {
   // View name
   viewName?: string;
+  activeViewId?: string | null;
+  viewCount?: number;
+  allViewNames?: string[];
+  onRenameView?: (viewId: string, newName: string) => void;
+  onDeleteView?: (viewId: string) => void;
+  onDuplicateView?: (viewId: string, name: string) => void;
 
   // Bulk rows
   bulkRowsDisabled: boolean;
@@ -204,6 +217,9 @@ export type FunctionBarProps = FilterDropdownProps & {
   sortedColumnIds: Set<string>;
   draggingSortId: string | null;
   draggingSortTop: number | null;
+  sortPhantomRef: RefObject<HTMLDivElement | null>;
+  phantomSortX: number | null;
+  phantomSortY: number | null;
   applySorts: (sorts: SortConfig[] | null) => void;
   handleSortDragStart: (event: ReactMouseEvent, columnId: string) => void;
   getSortDirectionLabels: (columnId: string) => { asc: string; desc: string };
@@ -231,6 +247,12 @@ export type FunctionBarProps = FilterDropdownProps & {
 export function FunctionBar({
   // View name
   viewName = "Grid view",
+  activeViewId = null,
+  viewCount = 1,
+  allViewNames = [],
+  onRenameView,
+  onDeleteView,
+  onDuplicateView,
 
   // Bulk rows
   bulkRowsDisabled,
@@ -379,6 +401,9 @@ export function FunctionBar({
   sortedColumnIds,
   draggingSortId,
   draggingSortTop,
+  sortPhantomRef,
+  phantomSortX,
+  phantomSortY,
   applySorts,
   handleSortDragStart,
   getSortDirectionLabels,
@@ -401,7 +426,6 @@ export function FunctionBar({
   // Static IDs avoid useId() hydration mismatches in SVG clipPath/mask elements.
   // Safe because only one FunctionBar is rendered at a time.
   const searchMaskId = "fn-search-svg";
-  const closeMaskId = "fn-close-svg";
 
   // Dynamic hide fields button width
   const hideFieldsTextRef = useRef<HTMLSpanElement>(null);
@@ -490,6 +514,13 @@ export function FunctionBar({
   // Position Filter button from its right edge so it expands leftward (after sortExpansion is defined)
   const filterButtonLeft = FILTER_BUTTON_RIGHT_EDGE - filterButtonWidth - sortExpansion;
 
+  // View dropdown state
+  const [isViewDropdownOpen, setIsViewDropdownOpen] = useState(false);
+  const [isViewButtonHovered, setIsViewButtonHovered] = useState(false);
+  // editMode: null | "rename" | "duplicate"
+  const [editMode, setEditMode] = useState<"rename" | "duplicate" | null>(null);
+  const [editValue, setEditValue] = useState("");
+
   // Grid view name width for arrow and Add 100k rows positioning
   const gridViewNameRef = useRef<HTMLSpanElement>(null);
   const [arrowLeft, setArrowLeft] = useState(37);
@@ -498,45 +529,326 @@ export function FunctionBar({
   useEffect(() => {
     if (gridViewNameRef.current) {
       const textWidth = gridViewNameRef.current.scrollWidth;
-      const viewSelectorRight = 54 + 27 + textWidth + 10 + 10; // button left + text left + text + gap + arrow
-      setArrowLeft(27 + textWidth + 10);
+      const textRight = 27 + textWidth;
+      const arrowPos = textRight + 10; // 10px gap between text right edge and arrow left edge
+      const arrowWidth = 10;
+      const viewSelectorRight = 54 + arrowPos + arrowWidth;
+      setArrowLeft(arrowPos);
       setAddButtonLeft(viewSelectorRight + VIEW_SELECTOR_PADDING);
     }
-  }, [viewName]);
+  }, [viewName, editMode]);
+  const viewButtonRef = useRef<HTMLButtonElement>(null);
+  const viewDropdownRef = useRef<HTMLDivElement>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  // Compute hover rectangle width dynamically based on content
+  const viewButtonWidth = arrowLeft + 10 + 8; // arrow left + arrow width + right padding
+
+  const isCustomViewId = activeViewId !== null && activeViewId !== "pending-view";
+  const canDelete = viewCount > 1;
+
+  const handleViewButtonClick = useCallback(() => {
+    setIsViewDropdownOpen((prev) => !prev);
+  }, []);
+
+  // Track which view the edit is targeting (so rename after duplicate targets the new view)
+  const editTargetViewIdRef = useRef<string | null>(null);
+  const editSubmittedRef = useRef(false);
+  // Track the initial name when entering edit mode (for duplicate: the default copy name)
+  const editInitialNameRef = useRef<string>("");
+
+  const handleRenameStart = useCallback(() => {
+    editTargetViewIdRef.current = activeViewId;
+    editSubmittedRef.current = false;
+    editInitialNameRef.current = viewName;
+    setEditValue(viewName);
+    setEditMode("rename");
+    setIsViewDropdownOpen(false);
+    setTimeout(() => {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    }, 0);
+  }, [viewName, activeViewId]);
+
+  const handleDuplicateStart = useCallback(() => {
+    // Generate a unique copy name by checking existing view names
+    const baseCopyName = `${viewName} copy`;
+    let defaultName = baseCopyName;
+    if (allViewNames.includes(defaultName)) {
+      let copyNum = 2;
+      while (allViewNames.includes(`${baseCopyName} ${copyNum}`)) {
+        copyNum++;
+      }
+      defaultName = `${baseCopyName} ${copyNum}`;
+    }
+    // Create the duplicate immediately
+    if (activeViewId) {
+      onDuplicateView?.(activeViewId, defaultName);
+    }
+    // Show rename input so user can change the name
+    editTargetViewIdRef.current = null; // will be set once the new view id arrives via activeViewId
+    editSubmittedRef.current = false;
+    editInitialNameRef.current = defaultName;
+    setEditValue(defaultName);
+    setEditMode("duplicate");
+    setIsViewDropdownOpen(false);
+    setTimeout(() => {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    }, 0);
+  }, [viewName, activeViewId, onDuplicateView, allViewNames]);
+
+  // Track activeViewId changes during edit mode so the rename targets the correct view.
+  // For rename: if activeViewId was null when rename started (e.g. first view still loading),
+  // capture it once it arrives.
+  // For duplicate: capture the new view id once it resolves from "pending-view" to a real UUID.
+  useEffect(() => {
+    if (editMode === "rename" && activeViewId && activeViewId !== "pending-view" && !editTargetViewIdRef.current) {
+      editTargetViewIdRef.current = activeViewId;
+    }
+    if (editMode === "duplicate" && activeViewId && activeViewId !== "pending-view") {
+      editTargetViewIdRef.current = activeViewId;
+    }
+  }, [editMode, activeViewId]);
+
+  const handleEditSubmit = useCallback(() => {
+    // Guard against double submission (blur fires after Enter unmounts input)
+    if (editSubmittedRef.current) return;
+    editSubmittedRef.current = true;
+
+    // Read directly from the input DOM node to avoid stale closure issues
+    const currentValue = editInputRef.current?.value ?? editValue;
+    const trimmed = currentValue.trim();
+    if (!trimmed) {
+      setEditMode(null);
+      return;
+    }
+    if (editMode === "rename") {
+      const targetId = editTargetViewIdRef.current;
+      // Compare against the initial name stored in the ref (avoids stale closure)
+      if (targetId && trimmed !== editInitialNameRef.current) {
+        onRenameView?.(targetId, trimmed);
+      }
+    } else if (editMode === "duplicate") {
+      // Duplicate was already created — rename it if user changed the name
+      const targetId = editTargetViewIdRef.current;
+      if (targetId && trimmed !== editInitialNameRef.current) {
+        onRenameView?.(targetId, trimmed);
+      }
+    }
+    setEditMode(null);
+  }, [editValue, editMode, onRenameView]);
+
+  const handleDeleteView = useCallback(() => {
+    if (activeViewId && canDelete) {
+      onDeleteView?.(activeViewId);
+    }
+    setIsViewDropdownOpen(false);
+  }, [activeViewId, canDelete, onDeleteView]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!isViewDropdownOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        viewDropdownRef.current &&
+        !viewDropdownRef.current.contains(event.target as Node) &&
+        viewButtonRef.current &&
+        !viewButtonRef.current.contains(event.target as Node)
+      ) {
+        setIsViewDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isViewDropdownOpen]);
 
   return (
     <div className="relative h-[46px] bg-white">
       <div className="relative h-full min-w-[940px] airtable-secondary-font-regular">
-        <img
-          alt=""
+        <ThreeLineIcon
           className="absolute left-[20px] top-[17px] h-[15px] w-[16px]"
-          src={threeLineIcon.src}
         />
-        <button type="button" className="absolute left-[54px] top-0 h-full min-w-[108px]">
-          <img
-            alt=""
-            className="absolute left-[3px] top-[16px] h-[15px] w-[16px]"
-            src={gridViewIcon.src}
+        {editMode !== null ? (
+          /* 189x30 edit rectangle: stroke BFBFBF, stroke-width 2, radius 3,
+             bottom edge 8.5px above container bottom → top = 46 - 8.5 - 30 = 7.5,
+             x same as hover rect left (54 - 4 = 50) */
+          <input
+            ref={editInputRef}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={handleEditSubmit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); handleEditSubmit(); }
+              if (e.key === "Escape") setEditMode(null);
+            }}
+            className="absolute rounded-[3px] bg-white outline-none"
+            style={{
+              left: 50,
+              top: 7.5,
+              width: 189,
+              height: 30,
+              border: "2px solid #BFBFBF",
+              fontFamily: "Inter, sans-serif",
+              fontWeight: 600,
+              fontSize: 14,
+              color: "#1D1F24",
+              paddingLeft: 8,
+              paddingRight: 8,
+              boxSizing: "border-box",
+              zIndex: 10,
+            }}
           />
-          <span
-            ref={gridViewNameRef}
-            className="absolute left-[27px] top-[18px] block max-w-[120px] truncate text-[13px] font-medium leading-[13px] text-[#1D1F24]"
-            style={{ fontFamily: "Inter, sans-serif" }}
+        ) : (
+          <button
+            ref={viewButtonRef}
+            type="button"
+            className="absolute left-[54px] top-0 h-full cursor-pointer border-none bg-transparent p-0 outline-none"
+            style={{ minWidth: 108 }}
+            onMouseEnter={() => setIsViewButtonHovered(true)}
+            onMouseLeave={() => setIsViewButtonHovered(false)}
+            onClick={handleViewButtonClick}
           >
-            {viewName}
-          </span>
-          <img
-            alt=""
-            className="absolute top-[22px] h-[6px] w-[10px]"
-            style={{ left: arrowLeft }}
-            src={arrowIcon.src}
-          />
-        </button>
+            {/* Hover background rectangle — extended 4px to the left */}
+            <span
+              className="absolute rounded-[3px] transition-colors"
+              style={{
+                left: -4,
+                top: 10,
+                width: viewButtonWidth + 4,
+                height: 26,
+                backgroundColor: isViewButtonHovered || isViewDropdownOpen ? "#F2F2F2" : "transparent",
+                pointerEvents: "none",
+              }}
+            />
+            {/* Grid view icon — swap to grey on hover */}
+            <GridViewIcon
+              className="absolute left-[3px] top-[16px] h-[15px] w-[16px]"
+              style={{
+                opacity: isViewButtonHovered || isViewDropdownOpen ? 0 : 1,
+                transition: "opacity 0.1s ease",
+              }}
+            />
+            <GreyGridViewIcon
+              className="absolute left-[3px] top-[16px] h-[15px] w-[16px]"
+              style={{
+                opacity: isViewButtonHovered || isViewDropdownOpen ? 1 : 0,
+                transition: "opacity 0.1s ease",
+              }}
+            />
+            <span
+              ref={gridViewNameRef}
+              className="absolute left-[27px] top-[18px] block whitespace-nowrap text-[13px] font-medium leading-[13px] text-[#1D1F24]"
+              style={{ fontFamily: "Inter, sans-serif" }}
+            >
+              {viewName}
+            </span>
+            {/* Arrow icon — mix-blend-mode: multiply turns white parts into hover bg color */}
+            <ArrowIcon
+              className="absolute h-[6px] w-[10px]"
+              style={{
+                left: arrowLeft,
+                top: 22,
+                mixBlendMode: isViewButtonHovered || isViewDropdownOpen ? "multiply" : "normal",
+              }}
+            />
+          </button>
+        )}
+        {/* View dropdown */}
+        {isViewDropdownOpen && (
+          <div
+            ref={viewDropdownRef}
+            className="airtable-dropdown-surface absolute z-[200] rounded-[6px]"
+            style={{
+              left: 50, // aligned with hover rect left (button 54 - 4)
+              top: 44, // button bottom (10 + 26) + 8px gap
+              width: 352,
+              height: 132,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative h-full w-full">
+              {/* Rename view */}
+              <button
+                type="button"
+                className="group/rename absolute cursor-pointer border-none bg-transparent p-0 outline-none"
+                style={{ left: 12, top: 12, width: 328, height: 35 }}
+                onClick={handleRenameStart}
+              >
+                <span
+                  className="absolute rounded-[4px] transition-colors group-hover/rename:bg-[#F2F2F2]"
+                  style={{ left: 0, top: 0, width: 328, height: 35, pointerEvents: "none" }}
+                />
+                <RenameIcon
+                  className="absolute group-hover/rename:[mix-blend-mode:multiply]"
+                  style={{ left: 19 - 12, top: 23 - 12, width: 16.5, height: 14.35 }}
+                />
+                <span
+                  className="absolute text-[13px] font-normal text-[#1D1F24]"
+                  style={{ left: 44 - 12, top: 21 - 12, fontFamily: "Inter, sans-serif" }}
+                >
+                  Rename view
+                </span>
+              </button>
+
+              {/* Duplicate view */}
+              <button
+                type="button"
+                className="group/dup absolute cursor-pointer border-none bg-transparent p-0 outline-none"
+                style={{ left: 12, top: 46, width: 328, height: 35 }}
+                onClick={handleDuplicateStart}
+              >
+                <span
+                  className="absolute rounded-[4px] transition-colors group-hover/dup:bg-[#F2F2F2]"
+                  style={{ left: 0, top: 0, width: 328, height: 35, pointerEvents: "none" }}
+                />
+                <DuplicateIcon
+                  className="absolute group-hover/dup:[mix-blend-mode:multiply]"
+                  style={{ left: 21 - 12, top: 56 - 46, width: 15, height: 15 }}
+                />
+                <span
+                  className="absolute text-[13px] font-normal text-[#1D1F24]"
+                  style={{ left: 44 - 12, top: 55 - 46, fontFamily: "Inter, sans-serif" }}
+                >
+                  Duplicate view
+                </span>
+              </button>
+
+              {/* Delete view — disabled & 50% opacity when only 1 view */}
+              <button
+                type="button"
+                className={clsx(
+                  "group/del absolute border-none bg-transparent p-0 outline-none",
+                  canDelete ? "cursor-pointer" : "cursor-default"
+                )}
+                style={{ left: 12, top: 80, width: 328, height: 35 }}
+                onClick={canDelete ? handleDeleteView : undefined}
+              >
+                {canDelete && (
+                  <span
+                    className="absolute rounded-[4px] transition-colors group-hover/del:bg-[#F2F2F2]"
+                    style={{ left: 0, top: 0, width: 328, height: 35, pointerEvents: "none" }}
+                  />
+                )}
+                <DeleteIcon
+                  className={clsx("absolute", canDelete && "group-hover/del:[mix-blend-mode:multiply]")}
+                  style={{ left: 21 - 12, top: 88 - 80 + 2, width: 14, height: 16, opacity: canDelete ? 1 : 0.5 }}
+                />
+                <span
+                  className="absolute text-[13px] font-normal"
+                  style={{ left: 44 - 12, top: 89 - 80, fontFamily: "Inter, sans-serif", color: "#B01041", opacity: canDelete ? 1 : 0.5 }}
+                >
+                  Delete view
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
         <button
           type="button"
           onClick={handleAddBulkRows}
           disabled={bulkRowsDisabled}
-          style={{ left: addButtonLeft }}
+          style={{ left: editMode !== null ? 50 + 189 + 10 : addButtonLeft }}
           className={clsx(
             "absolute top-[10px] flex h-[26px] items-center justify-center rounded-[6px] px-3 text-[13px] leading-[13px]",
             bulkRowsDisabled
@@ -569,17 +881,13 @@ export function FunctionBar({
                 aria-haspopup="menu"
                 aria-expanded={isHideFieldsMenuOpen}
               >
-                <img
-                  alt=""
+                <HideFieldsActiveIcon
                   className="absolute"
                   style={{ left: 4, top: 4, width: 18, height: 16, opacity: hiddenFieldCount > 0 ? 1 : 0, transition: "opacity 0.2s ease" }}
-                  src={hideFieldsActiveIcon.src}
                 />
-                <img
-                  alt=""
+                <HideFieldsIcon
                   className="absolute left-[4px] top-[5px] h-[16px] w-[19px]"
                   style={{ opacity: hiddenFieldCount > 0 ? 0 : 1, transition: "opacity 0.2s ease" }}
-                  src={hideFieldsIcon.src}
                 />
                 <span
                   ref={hideFieldsTextRef}
@@ -681,8 +989,7 @@ export function FunctionBar({
                               }}
                             />
                           </svg>
-                          <img
-                            alt=""
+                          <row.iconSpec.Icon
                             className="airtable-hide-fields-icon absolute"
                             style={{
                               left: row.iconLeftOffset,
@@ -690,7 +997,6 @@ export function FunctionBar({
                               width: row.iconSpec.width,
                               height: row.iconSpec.height,
                             }}
-                            src={row.iconSpec.src}
                           />
                           <span
                             className="airtable-hide-fields-label absolute"
@@ -701,8 +1007,7 @@ export function FunctionBar({
                           >
                             {row.column.name}
                           </span>
-                          <img
-                            alt=""
+                          <ThreeDotIcon
                             className="airtable-hide-fields-reorder absolute"
                             style={{
                               left: HIDE_FIELDS_REORDER_LEFT - HIDE_FIELDS_HOVER_LEFT,
@@ -710,7 +1015,6 @@ export function FunctionBar({
                               width: HIDE_FIELDS_REORDER_WIDTH,
                               height: HIDE_FIELDS_REORDER_HEIGHT,
                             }}
-                            src={threeDotIcon.src}
                             aria-hidden="true"
                           />
                         </button>
@@ -775,17 +1079,13 @@ export function FunctionBar({
                 aria-haspopup="menu"
                 aria-expanded={isFilterMenuOpen}
               >
-                <img
-                  alt=""
+                <FilterActiveIcon
                   className="absolute"
                   style={{ left: FILTER_ICON_LEFT, top: 7, width: 13.5, height: 9, opacity: hasActiveFilters ? 1 : 0, transition: "opacity 0.2s ease" }}
-                  src={filterActiveIcon.src}
                 />
-                <img
-                  alt=""
+                <FilterIcon
                   className="absolute top-[6px] h-[12px] w-[18px]"
                   style={{ left: `${FILTER_ICON_LEFT}px`, opacity: hasActiveFilters ? 0 : 1, transition: "opacity 0.2s ease" }}
-                  src={filterIcon.src}
                 />
                 <span
                   ref={filterTextRef}
@@ -915,7 +1215,7 @@ export function FunctionBar({
                 className="absolute top-[10px] h-[26px] w-[60px] text-left"
                 style={{ left: 256 - sortExpansion, transition: "left 0.2s ease" }}
               >
-                <img alt="" className="absolute left-0 top-[6px] h-[14px] w-[16px]" src={groupIcon.src} />
+                <GroupIcon className="absolute left-0 top-[6px] h-[14px] w-[16px]" />
                 <span className="absolute left-[20px] top-[5px] block h-[16px] w-[40px] text-[13px] leading-[16px]">
                   Group
                 </span>
@@ -953,17 +1253,13 @@ export function FunctionBar({
                 aria-haspopup="menu"
                 aria-expanded={isSortMenuOpen}
               >
-                <img
-                  alt=""
+                <SortActiveIcon
                   className="absolute"
                   style={{ left: 6, top: 6, width: 12, height: 13, opacity: hasSort ? 1 : 0, transition: "opacity 0.2s ease" }}
-                  src={sortActiveIcon.src}
                 />
                 <span className="absolute left-[4px] top-[6px] inline-flex h-[14px] w-[13px]" style={{ opacity: hasSort ? 0 : 1, transition: "opacity 0.2s ease" }}>
-                  <img
-                    alt=""
+                  <SortIcon
                     className="h-[14px] w-[13px]"
-                    src={sortIcon.src}
                   />
                   <span
                     className="airtable-sort-white-overlay airtable-sort-white-overlay--hover"
@@ -1027,7 +1323,7 @@ export function FunctionBar({
                           const isDirectionMenuOpen =
                             openSortDirectionId === sortItem.columnId;
                           const shouldElevateRow =
-                            isDragging || isFieldMenuOpen || isDirectionMenuOpen;
+                            isFieldMenuOpen || isDirectionMenuOpen;
                           const columnLabel =
                             columnById.get(sortItem.columnId)?.name ?? "Select field";
                           return (
@@ -1038,7 +1334,8 @@ export function FunctionBar({
                                 top: displayTop,
                                 height: sortLayout.sortFieldHeight,
                                 zIndex: shouldElevateRow ? 30 : 0,
-                                transition: isDragging ? "none" : "top 0.15s ease",
+                                transition: "top 0.12s ease-out, opacity 0.12s ease-out",
+                                opacity: isDragging ? 0.5 : 1,
                               }}
                             >
                               <button
@@ -1079,7 +1376,7 @@ export function FunctionBar({
                                       sortLayout.sortFieldMenuFirstRowTop +
                                       itemIndex *
                                         (sortLayout.sortFieldMenuRowHeight + sortLayout.sortFieldMenuGap);
-                                    const iconSrc = getColumnIconSrc(
+                                    const ColumnIcon = getColumnIcon(
                                       column.name,
                                       column.type
                                     );
@@ -1114,9 +1411,8 @@ export function FunctionBar({
                                           setOpenSortFieldId(null);
                                         }}
                                       >
-                                        {iconSrc ? (
-                                          <img
-                                            alt=""
+                                        {ColumnIcon ? (
+                                          <ColumnIcon
                                             className="airtable-sort-field-menu-icon"
                                             style={
                                               isStatusColumn
@@ -1126,7 +1422,6 @@ export function FunctionBar({
                                                   }
                                                 : undefined
                                             }
-                                            src={iconSrc}
                                           />
                                         ) : (
                                           <span
@@ -1221,7 +1516,7 @@ export function FunctionBar({
                                 }}
                                 aria-label="Remove sort"
                               >
-                                <img alt="" className="h-[12px] w-[12px]" src={xIcon.src} />
+                                <XIcon className="h-[12px] w-[12px]" />
                               </button>
                               {sortRows.length > 1 && (
                                 <button
@@ -1233,10 +1528,8 @@ export function FunctionBar({
                                   }
                                   aria-label="Reorder sort"
                                 >
-                                  <img
-                                    alt=""
+                                  <ThreeDotIcon
                                     style={{ width: sortLayout.sortReorderWidth, height: 13 }}
-                                    src={threeDotIcon.src}
                                   />
                                 </button>
                               )}
@@ -1316,15 +1609,13 @@ export function FunctionBar({
                                           setIsAddSortMenuOpen(false);
                                         }}
                                       >
-                                        <img
-                                          alt=""
+                                        <iconSpec.Icon
                                           className="airtable-sort-add-menu-icon absolute top-1/2 -translate-y-1/2"
                                           style={{
                                             left: iconSpec.left,
                                             width: iconSpec.width,
                                             height: iconSpec.height,
                                           }}
-                                          src={iconSpec.src}
                                         />
                                         <span
                                           className="airtable-sort-add-menu-label absolute top-1/2 -translate-y-1/2"
@@ -1354,10 +1645,8 @@ export function FunctionBar({
                           }}
                         >
                           <div className="flex h-full items-center gap-[7px]">
-                            <img
-                              alt=""
+                            <ToggleIcon
                               className="h-[16px] w-[22px]"
-                              src={toggleIcon.src}
                             />
                             <span className="text-[13px] font-normal text-[#1d1f24]">
                               Automatically sort records
@@ -1367,17 +1656,15 @@ export function FunctionBar({
                       </>
                     ) : (
                       <>
-                        <img
-                          alt=""
+                        <BlueSearchIcon
                           className="absolute left-[21px] top-[58px] h-[16px] w-[16px]"
-                          src={blueSearchIcon.src}
                         />
                         <div className="absolute left-[48px] top-[57px] text-[13px] font-normal text-[#989AA1]">
                           Find a field
                         </div>
                         {orderedColumns.map((column, index) => {
                           const top = 57 + 32 * (index + 1);
-                          const iconSrc = getColumnIconSrc(
+                          const ColumnIcon = getColumnIcon(
                             column.name,
                             column.type
                           );
@@ -1397,9 +1684,8 @@ export function FunctionBar({
                                 setIsAddSortMenuOpen(false);
                               }}
                             >
-                              {iconSrc ? (
-                                <img
-                                  alt=""
+                              {ColumnIcon ? (
+                                <ColumnIcon
                                   className="airtable-sort-option-icon"
                                   style={
                                     isStatusColumn
@@ -1409,7 +1695,6 @@ export function FunctionBar({
                                         }
                                       : undefined
                                   }
-                                  src={iconSrc}
                                 />
                               ) : (
                                 <span
@@ -1426,6 +1711,64 @@ export function FunctionBar({
                   </div>
                 </div>
               )}
+              {/* Sort drag phantom — rendered via portal to escape stacking contexts */}
+              {draggingSortId && phantomSortX !== null && phantomSortY !== null && (() => {
+                const phantomItem = sortRows.find(s => s.columnId === draggingSortId);
+                if (!phantomItem) return null;
+                const phantomLabel = columnById.get(phantomItem.columnId)?.name ?? "Select field";
+                const phantomDirLabels = getSortDirectionLabels(phantomItem.columnId);
+                const phantomDirText = phantomItem.direction === "asc" ? phantomDirLabels.asc : phantomDirLabels.desc;
+                const phantomRemoveTop = (sortLayout.sortFieldHeight - sortLayout.sortRemoveSize) / 2;
+                return createPortal(
+                  <div
+                    ref={sortPhantomRef}
+                    className="airtable-sort-phantom"
+                    style={{
+                      position: "fixed",
+                      left: phantomSortX,
+                      top: phantomSortY,
+                      width: sortLayout.sortConfiguredWidth,
+                      height: sortLayout.sortFieldHeight,
+                      zIndex: 10000,
+                      pointerEvents: "none",
+                      willChange: "transform",
+                    }}
+                  >
+                    <div
+                      className="airtable-sort-field absolute"
+                      style={{ left: sortLayout.sortFieldLeft, width: sortLayout.sortFieldWidth }}
+                    >
+                      <span>{phantomLabel}</span>
+                      <span className="ml-auto airtable-nav-chevron rotate-90" />
+                    </div>
+                    <div
+                      className="airtable-sort-direction absolute"
+                      style={{
+                        left: sortLayout.sortDirectionLeft,
+                        width: sortLayout.sortDirectionWidth,
+                      }}
+                    >
+                      <span>{phantomDirText}</span>
+                      <span className="ml-auto airtable-nav-chevron rotate-90" />
+                    </div>
+                    <div
+                      className="airtable-sort-remove absolute"
+                      style={{ left: sortLayout.sortRemoveLeft, top: phantomRemoveTop }}
+                    >
+                      <XIcon className="h-[12px] w-[12px]" />
+                    </div>
+                    <div
+                      className="airtable-sort-reorder absolute"
+                      style={{ left: sortLayout.sortReorderLeft, top: 7.5 }}
+                    >
+                      <ThreeDotIcon
+                        style={{ width: sortLayout.sortReorderWidth, height: 13 }}
+                      />
+                    </div>
+                  </div>,
+                  document.body
+                );
+              })()}
               </div>
             )}
 
@@ -1436,10 +1779,8 @@ export function FunctionBar({
                 className="absolute top-[10px] h-[26px] w-[68px] text-left"
                 style={{ left: 410 }}
               >
-                <img
-                  alt=""
+                <ColourIcon
                   className="absolute left-0 top-[3px] h-[19px] w-[20px]"
-                  src={colourIcon.src}
                 />
                 <span className="absolute left-[20px] top-[5px] block h-[16px] w-[48px] text-[13px] leading-[16px]">
                   Color
@@ -1455,10 +1796,8 @@ export function FunctionBar({
                 style={{ left: 485 }}
                 aria-label="Row height"
               >
-                <img
-                  alt=""
+                <RowHeightIcon
                   className="absolute left-0 top-[16px] h-[15px] w-[19px]"
-                  src={rowHeightIcon.src}
                 />
               </button>
             )}
@@ -1470,10 +1809,8 @@ export function FunctionBar({
                 className="absolute top-[10px] h-[26px] w-[114px] text-left"
                 style={{ left: 528 }}
               >
-                <img
-                  alt=""
+                <ShareSyncIcon
                   className="absolute left-0 top-[6px] h-[15px] w-[15px]"
-                  src={shareSyncIcon.src}
                 />
                 <span className="absolute left-[19px] top-[5px] block h-[16px] w-[95px] whitespace-nowrap text-[13px] leading-[16px]">
                   Share and sync
@@ -1613,45 +1950,10 @@ export function FunctionBar({
               onClick={() => setIsSearchMenuOpen(false)}
               aria-label="Close search"
             >
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 10 10"
-                className="block"
+              <XIcon
+                className="block h-[10px] w-[10px] text-[#1D1F24]"
                 aria-hidden="true"
-              >
-                <defs>
-                  <filter id={`${closeMaskId}-invert`}>
-                    <feColorMatrix
-                      type="matrix"
-                      values="-1 0 0 0 1 0 -1 0 0 1 0 0 -1 0 1 0 0 0 1 0"
-                    />
-                  </filter>
-                  <mask
-                    id={`${closeMaskId}-mask`}
-                    maskUnits="userSpaceOnUse"
-                    x="0"
-                    y="0"
-                    width="10"
-                    height="10"
-                    maskContentUnits="userSpaceOnUse"
-                  >
-                    <image
-                      href={xIcon.src}
-                      width="10"
-                      height="10"
-                      filter={`url(#${closeMaskId}-invert)`}
-                      preserveAspectRatio="xMidYMid meet"
-                    />
-                  </mask>
-                </defs>
-                <rect
-                  width="10"
-                  height="10"
-                  fill="#1D1F24"
-                  mask={`url(#${closeMaskId}-mask)`}
-                />
-              </svg>
+              />
             </button>
           </div>
         </div>

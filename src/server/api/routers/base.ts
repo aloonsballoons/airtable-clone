@@ -526,6 +526,17 @@ export const baseRouter = createTRPCRouter({
 				await ctx.db.insert(tableRow).values(rows);
 			}
 
+			// Create a default "Grid view" for the new table
+			await ctx.db.insert(tableView).values({
+				id: createId(),
+				tableId: newTable.id,
+				name: "Grid view",
+				sortConfig: [],
+				hiddenColumnIds: [],
+				searchQuery: null,
+				filterConfig: null,
+			});
+
 			return {
 				base: newBase,
 				table: newTable,
@@ -642,6 +653,17 @@ export const baseRouter = createTRPCRouter({
 				data: {},
 			}));
 			await ctx.db.insert(tableRow).values(rows);
+
+			// Create a default "Grid view" for the new table
+			await ctx.db.insert(tableView).values({
+				id: createId(),
+				tableId: newTable.id,
+				name: "Grid view",
+				sortConfig: [],
+				hiddenColumnIds: [],
+				searchQuery: null,
+				filterConfig: null,
+			});
 
 			return newTable;
 		}),
@@ -1942,6 +1964,47 @@ export const baseRouter = createTRPCRouter({
 			}));
 		}),
 
+	ensureDefaultView: protectedProcedure
+		.input(z.object({ tableId: z.string().uuid() }))
+		.mutation(async ({ ctx, input }) => {
+			const tableRecord = await ctx.db.query.baseTable.findFirst({
+				where: eq(baseTable.id, input.tableId),
+				with: {
+					base: true,
+					views: true,
+				},
+			});
+
+			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			// If the table already has views, return the first one
+			if (tableRecord.views.length > 0) {
+				return { id: tableRecord.views[0]!.id, name: tableRecord.views[0]!.name, created: false };
+			}
+
+			// Migrate config from baseTable to a new default view
+			const [newView] = await ctx.db
+				.insert(tableView)
+				.values({
+					id: createId(),
+					tableId: input.tableId,
+					name: "Grid view",
+					sortConfig: Array.isArray(tableRecord.sortConfig) ? tableRecord.sortConfig : [],
+					hiddenColumnIds: Array.isArray(tableRecord.hiddenColumnIds) ? tableRecord.hiddenColumnIds : [],
+					searchQuery: tableRecord.searchQuery ?? null,
+					filterConfig: tableRecord.filterConfig ?? null,
+				})
+				.returning({ id: tableView.id, name: tableView.name });
+
+			if (!newView) {
+				throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+			}
+
+			return { ...newView, created: true };
+		}),
+
 	createView: protectedProcedure
 		.input(
 			z.object({
@@ -2063,5 +2126,97 @@ export const baseRouter = createTRPCRouter({
 				.where(eq(tableView.id, input.viewId));
 
 			return { success: true };
+		}),
+
+	renameView: protectedProcedure
+		.input(
+			z.object({
+				viewId: z.string().uuid(),
+				name: z.string().min(1).max(120),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const viewRecord = await ctx.db.query.tableView.findFirst({
+				where: eq(tableView.id, input.viewId),
+				with: {
+					table: {
+						with: {
+							base: true,
+						},
+					},
+				},
+			});
+
+			if (!viewRecord || viewRecord.table.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			await ctx.db
+				.update(tableView)
+				.set({ name: input.name, updatedAt: new Date() })
+				.where(eq(tableView.id, input.viewId));
+
+			return { success: true };
+		}),
+
+	deleteView: protectedProcedure
+		.input(z.object({ viewId: z.string().uuid() }))
+		.mutation(async ({ ctx, input }) => {
+			const viewRecord = await ctx.db.query.tableView.findFirst({
+				where: eq(tableView.id, input.viewId),
+				with: {
+					table: {
+						with: {
+							base: true,
+						},
+					},
+				},
+			});
+
+			if (!viewRecord || viewRecord.table.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			await ctx.db.delete(tableView).where(eq(tableView.id, input.viewId));
+
+			return { success: true };
+		}),
+
+	duplicateView: protectedProcedure
+		.input(z.object({ viewId: z.string().uuid(), name: z.string().min(1).max(120).optional() }))
+		.mutation(async ({ ctx, input }) => {
+			const viewRecord = await ctx.db.query.tableView.findFirst({
+				where: eq(tableView.id, input.viewId),
+				with: {
+					table: {
+						with: {
+							base: true,
+						},
+					},
+				},
+			});
+
+			if (!viewRecord || viewRecord.table.base.ownerId !== ctx.session.user.id) {
+				throw new TRPCError({ code: "NOT_FOUND" });
+			}
+
+			const [newView] = await ctx.db
+				.insert(tableView)
+				.values({
+					id: createId(),
+					tableId: viewRecord.tableId,
+					name: input.name ?? `${viewRecord.name} copy`,
+					sortConfig: viewRecord.sortConfig ?? [],
+					hiddenColumnIds: viewRecord.hiddenColumnIds ?? [],
+					searchQuery: viewRecord.searchQuery,
+					filterConfig: viewRecord.filterConfig,
+				})
+				.returning({ id: tableView.id, name: tableView.name });
+
+			if (!newView) {
+				throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+			}
+
+			return newView;
 		}),
 });

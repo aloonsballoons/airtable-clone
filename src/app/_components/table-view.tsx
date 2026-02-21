@@ -2,9 +2,11 @@
 
 import type {
   Dispatch,
+  FC,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
+  SVGProps,
   SetStateAction,
 } from "react";
 import {
@@ -22,14 +24,14 @@ import clsx from "clsx";
 import { useTableScroll, ROW_HEIGHT } from "./use-table-scroll";
 
 import { AddColumnMenu } from "./add-column-menu";
-import expandIcon from "~/assets/expand.svg";
-import longLineSelectionIcon from "~/assets/long-line-selection.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import assigneeIcon from "~/assets/assignee.svg";
-import statusIcon from "~/assets/status.svg";
-import attachmentsIcon from "~/assets/attachments.svg";
-import numberIcon from "~/assets/number.svg";
+import ExpandIcon from "~/assets/expand.svg";
+import LongLineSelectionIcon from "~/assets/long-line-selection.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import AssigneeIcon from "~/assets/assignee.svg";
+import StatusIcon from "~/assets/status.svg";
+import AttachmentsIcon from "~/assets/attachments.svg";
+import NumberIcon from "~/assets/number.svg";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,25 +65,27 @@ const STATUS_HEADER_ICON_SIZE = 13 * STATUS_ICON_SCALE;
 // Helpers
 // ---------------------------------------------------------------------------
 
-const columnIconMap: Record<string, string> = {
-  Name: nameIcon.src,
-  Notes: notesIcon.src,
-  Assignee: assigneeIcon.src,
-  Status: statusIcon.src,
-  Attachments: attachmentsIcon.src,
-  Number: numberIcon.src,
+type SvgComponent = FC<SVGProps<SVGSVGElement>>;
+
+const columnIconMap: Record<string, SvgComponent> = {
+  Name: NameIcon,
+  Notes: NotesIcon,
+  Assignee: AssigneeIcon,
+  Status: StatusIcon,
+  Attachments: AttachmentsIcon,
+  Number: NumberIcon,
 };
 
-const columnTypeIconMap: Record<ColumnFieldType, string> = {
-  single_line_text: nameIcon.src,
-  long_text: notesIcon.src,
-  number: numberIcon.src,
+const columnTypeIconMap: Record<ColumnFieldType, SvgComponent> = {
+  single_line_text: NameIcon,
+  long_text: NotesIcon,
+  number: NumberIcon,
 };
 
 const coerceColumnType = (value?: string | null): ColumnFieldType =>
   value === "long_text" || value === "number" ? value : "single_line_text";
 
-const getColumnIconSrc = (name: string, type?: string | null) => {
+const getColumnIcon = (name: string, type?: string | null): SvgComponent | undefined => {
   const resolvedType = coerceColumnType(type);
   return columnIconMap[name] ?? columnTypeIconMap[resolvedType];
 };
@@ -139,6 +143,32 @@ const renderSearchHighlight = (value: string, query: string) => {
     parts.push(value.slice(startIndex));
   }
   return parts;
+};
+
+// Canvas context for measuring text pixel-width without triggering DOM layout.
+let _measureCtx: CanvasRenderingContext2D | null = null;
+
+const getTextWidth = (text: string): number => {
+  if (typeof document === "undefined") return text.length * 7;
+  if (!_measureCtx) {
+    const canvas = document.createElement("canvas");
+    _measureCtx = canvas.getContext("2d");
+    if (_measureCtx) {
+      _measureCtx.font = "400 13px Inter, system-ui, -apple-system, sans-serif";
+    }
+  }
+  return _measureCtx?.measureText(text).width ?? text.length * 7;
+};
+
+/**
+ * Returns true when the text overflows the cell's available width, meaning
+ * the cell would show a CSS text-overflow ellipsis.  Used to decide whether
+ * to render a highlighted custom "…" for search-match cells.
+ */
+const isTextTruncated = (value: string, cellWidth: number): boolean => {
+  if (!value) return false;
+  const availableWidth = cellWidth - 16; // 8px padding each side (px-2)
+  return getTextWidth(value) > availableWidth;
 };
 
 // ---------------------------------------------------------------------------
@@ -391,7 +421,6 @@ export function TableView({
   // -------------------------------------------------------------------------
   const {
     parentRef,
-    headerScrollRef,
     skeletonOverlayRef,
     scrollbarDragging,
     rowVirtualizer,
@@ -864,14 +893,23 @@ export function TableView({
   return (
     <div className="relative h-full flex flex-col">
       <div className="relative flex-1 w-full flex flex-col" style={{ minHeight: 0 }}>
-        {/* Header section - outside scrollable area so scrollbar doesn't extend into it */}
+        {/* Single scroll container for both header and body */}
         <div
-          ref={headerScrollRef}
-          className="airtable-header-scroll relative shrink-0 w-full overflow-x-auto overflow-y-visible"
+          ref={parentRef}
+          className="relative flex-1 w-full overflow-auto"
           style={{
+            backgroundColor: "#F7F8FC",
+            minHeight: 0,
+          }}
+          onScroll={(e) => handleScroll(e.currentTarget)}
+        >
+        {/* Header section - sticky so it stays pinned vertically but scrolls horizontally with zero latency */}
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 200,
             backgroundColor: "#ffffff",
-            scrollbarWidth: "none",
-            msOverflowStyle: "none",
           }}
         >
           <div
@@ -923,32 +961,32 @@ export function TableView({
                   transform: "translateZ(0)",
                 }}
               >
-                {nameColumn.type === "data" &&
-                  getColumnIconSrc(nameColumn.name, nameColumn.fieldType) && (
-                  <img
-                    alt=""
-                    className={clsx(
-                      "airtable-header-icon h-[13px] w-[13px]",
-                      (sortedColumnIds.has(nameColumn.id) ||
-                        filteredColumnIds.has(nameColumn.id)) &&
-                        "airtable-column-icon--sorted",
-                      columnsWithSearchMatches.has(nameColumn.id) &&
-                        "airtable-column-icon--search-match"
-                    )}
-                    style={
-                      nameColumn.name === "Status"
-                        ? {
-                            width: STATUS_HEADER_ICON_SIZE,
-                            height: STATUS_HEADER_ICON_SIZE,
-                          }
-                        : undefined
-                    }
-                    src={getColumnIconSrc(
-                      nameColumn.name,
-                      nameColumn.fieldType
-                    )}
-                  />
-                )}
+                {(() => {
+                  const ColumnIcon = nameColumn.type === "data"
+                    ? getColumnIcon(nameColumn.name, nameColumn.fieldType)
+                    : undefined;
+                  if (!ColumnIcon) return null;
+                  return (
+                    <ColumnIcon
+                      className={clsx(
+                        "airtable-header-icon h-[13px] w-[13px]",
+                        (sortedColumnIds.has(nameColumn.id) ||
+                          filteredColumnIds.has(nameColumn.id)) &&
+                          "airtable-column-icon--sorted",
+                        columnsWithSearchMatches.has(nameColumn.id) &&
+                          "airtable-column-icon--search-match"
+                      )}
+                      style={
+                        nameColumn.name === "Status"
+                          ? {
+                              width: STATUS_HEADER_ICON_SIZE,
+                              height: STATUS_HEADER_ICON_SIZE,
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })()}
                 <span>{nameColumn.name}</span>
                 <div
                   role="separator"
@@ -1048,31 +1086,31 @@ export function TableView({
                     ["--header-base-bg" as string]: baseBackgroundColor,
                   }}
                 >
-                  {column.type === "data" &&
-                    getColumnIconSrc(column.name, column.fieldType) && (
-                    <img
-                      alt=""
-                      className={clsx(
-                        "airtable-header-icon h-[13px] w-[13px]",
-                        (isSortedColumn || isFilteredColumn) &&
-                          "airtable-column-icon--sorted",
-                        hasSearchMatch &&
-                          "airtable-column-icon--search-match"
-                      )}
-                      style={
-                        column.name === "Status"
-                          ? {
-                              width: STATUS_HEADER_ICON_SIZE,
-                              height: STATUS_HEADER_ICON_SIZE,
-                            }
-                          : undefined
-                      }
-                      src={getColumnIconSrc(
-                        column.name,
-                        column.fieldType
-                      )}
-                    />
-                  )}
+                  {(() => {
+                    const ColIcon = column.type === "data"
+                      ? getColumnIcon(column.name, column.fieldType)
+                      : undefined;
+                    if (!ColIcon) return null;
+                    return (
+                      <ColIcon
+                        className={clsx(
+                          "airtable-header-icon h-[13px] w-[13px]",
+                          (isSortedColumn || isFilteredColumn) &&
+                            "airtable-column-icon--sorted",
+                          hasSearchMatch &&
+                            "airtable-column-icon--search-match"
+                        )}
+                        style={
+                          column.name === "Status"
+                            ? {
+                                width: STATUS_HEADER_ICON_SIZE,
+                                height: STATUS_HEADER_ICON_SIZE,
+                              }
+                            : undefined
+                        }
+                      />
+                    );
+                  })()}
                   <span>{column.name}</span>
                   <div
                     role="separator"
@@ -1095,16 +1133,6 @@ export function TableView({
           </div>
         </div>
 
-        {/* Scrollable rows container */}
-        <div
-          ref={parentRef}
-          className="relative flex-1 w-full overflow-auto"
-          style={{
-            backgroundColor: "#F7F8FC",
-            minHeight: 0,
-          }}
-          onScroll={(e) => handleScroll(e.currentTarget)}
-        >
           <div
             className="airtable-row-canvas relative"
             style={{
@@ -1229,11 +1257,6 @@ export function TableView({
                 left: 0,
                 width: "100%",
                 zIndex: 1,
-                // Single wrapper offset: translate to the first virtual item's
-                // start position.  Rows inside render in normal document flow
-                // (no per-row absolute positioning) so the browser can composite
-                // scroll updates in one pass instead of repositioning N rows.
-                transform: `translateY(${rowVirtualItems[0]?.start ?? 0}px)`,
                 // Hide real rows during scrollbar drag — the skeleton overlay
                 // covers the viewport and we avoid expensive row rendering.
                 display: scrollbarDragging ? "none" : undefined,
@@ -1254,6 +1277,9 @@ export function TableView({
                     key={virtualRow.key}
                     className="airtable-skeleton-row left-0 flex pointer-events-none"
                     style={{
+                      position: "absolute",
+                      top: virtualRow.start - ROW_HEIGHT,
+                      left: 0,
                       height: ROW_HEIGHT,
                       width: totalColumnsWidth - addColumnWidth,
                     }}
@@ -1344,7 +1370,9 @@ export function TableView({
               <div
                 className={clsx("airtable-row left-0 flex text-[13px] text-[#1d1f24]", rowHasSelection && "airtable-row--has-selection")}
                 style={{
-                  position: "relative",
+                  position: "absolute",
+                  top: virtualRow.start - ROW_HEIGHT,
+                  left: 0,
                   height: `${virtualRow.size}px`,
                   width: totalColumnsWidth - addColumnWidth,
                   zIndex: rowHasSelection ? 5 : 1,
@@ -1378,10 +1406,8 @@ export function TableView({
                       <div className="airtable-row-hover-show absolute inset-0 flex items-center">
                         <div className="airtable-outline h-[17px] w-[17px] rounded-[4px] bg-white" />
                         <div className="airtable-outline ml-auto flex h-[25px] w-[25px] items-center justify-center rounded-[4px] bg-white">
-                          <img
-                            alt=""
+                          <ExpandIcon
                             className="h-[13px] w-[12px]"
-                            src={expandIcon.src}
                           />
                         </div>
                       </div>
@@ -1413,7 +1439,11 @@ export function TableView({
                       selectedCell?.rowId === row.id &&
                       selectedCell?.columnId === nameColumn.id;
                     const nameBaseBackground = nameHasSearchMatch
-                      ? "#FFF3D3"
+                      ? filteredColumnIds.has(nameColumn.id)
+                        ? "#EAE5A6"
+                        : sortedColumnIds.has(nameColumn.id)
+                        ? "#FFDEA4"
+                        : "#FFF3D3"
                       : filteredColumnIds.has(nameColumn.id)
                       ? "#E2F1E3"
                       : sortedColumnIds.has(nameColumn.id)
@@ -1424,7 +1454,11 @@ export function TableView({
                       ? "var(--airtable-cell-hover-bg)"
                       : "#ffffff";
                     const nameHoverBackground = nameHasSearchMatch
-                      ? "#FFF3D3"
+                      ? filteredColumnIds.has(nameColumn.id)
+                        ? "#EAE5A6"
+                        : sortedColumnIds.has(nameColumn.id)
+                        ? "#FFDEA4"
+                        : "#FFF3D3"
                       : filteredColumnIds.has(nameColumn.id)
                       ? "#E5F4E6"
                       : sortedColumnIds.has(nameColumn.id)
@@ -1435,6 +1469,7 @@ export function TableView({
 
                     // Lightweight path for non-selected, non-editing Name cells
                     if (!nameIsSelected && !nameIsEditing) {
+                      const nameMatchHidden = showNameSearchOverlay && isTextTruncated(nameEditedValue, nameColumnWidth);
                       return (
                         <div
                           className="airtable-sticky-column airtable-cell relative flex overflow-visible px-2"
@@ -1455,14 +1490,26 @@ export function TableView({
                           }}
                           onClick={() => focusCell(row.id, nameColumn.id)}
                         >
-                          <div
-                            className="h-full w-full truncate text-[13px] text-[#1d1f24] leading-[33px]"
-                            style={{ textAlign: nameIsNumber ? "right" : "left" }}
-                          >
-                            {showNameSearchOverlay
-                              ? renderSearchHighlight(nameEditedValue, searchQuery)
-                              : nameEditedValue}
-                          </div>
+                          {nameMatchHidden ? (
+                            <div className="flex h-full w-full items-center text-[13px] text-[#1d1f24]">
+                              <div
+                                className="min-w-0 flex-1 overflow-hidden whitespace-nowrap pr-px leading-[33px]"
+                                style={{ textAlign: nameIsNumber ? "right" : "left" }}
+                              >
+                                {renderSearchHighlight(nameEditedValue, searchQuery)}
+                              </div>
+                              <span className="shrink-0">&hellip;</span><mark className="airtable-search-highlight shrink-0 inline-block w-2">&nbsp;</mark>
+                            </div>
+                          ) : (
+                            <div
+                              className="h-full w-full truncate text-[13px] text-[#1d1f24] leading-[33px]"
+                              style={{ textAlign: nameIsNumber ? "right" : "left" }}
+                            >
+                              {showNameSearchOverlay
+                                ? renderSearchHighlight(nameEditedValue, searchQuery)
+                                : nameEditedValue}
+                            </div>
+                          )}
                         </div>
                       );
                     }
@@ -1556,10 +1603,19 @@ export function TableView({
                                   readOnly={!nameIsEditing}
                                   aria-label={`${nameColumn.name} cell`}
                                 />
-                                <div className="airtable-long-text-display">
-                                  {renderSearchHighlight(
-                                    nameEditedValue,
-                                    searchQuery
+                                <div
+                                  className="airtable-long-text-display"
+                                  style={showNameSearchOverlay && isTextTruncated(nameEditedValue, nameColumnWidth) ? { textOverflow: "clip", display: "flex", alignItems: "center" } : undefined}
+                                >
+                                  {showNameSearchOverlay && isTextTruncated(nameEditedValue, nameColumnWidth) ? (
+                                    <>
+                                      <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+                                        {renderSearchHighlight(nameEditedValue, searchQuery)}
+                                      </span>
+                                      <span className="shrink-0">&hellip;</span><mark className="airtable-search-highlight shrink-0 inline-block w-2">&nbsp;</mark>
+                                    </>
+                                  ) : (
+                                    renderSearchHighlight(nameEditedValue, searchQuery)
                                   )}
                                 </div>
                               </>
@@ -1627,10 +1683,8 @@ export function TableView({
                                     )}
                                   </div>
                                 )}
-                                <img
-                                  alt=""
+                                <LongLineSelectionIcon
                                   className="airtable-long-text-selection"
-                                  src={longLineSelectionIcon.src}
                                 />
                               </>
                             )}
@@ -1742,7 +1796,11 @@ export function TableView({
                   const cellHasSearchMatch =
                     hasSearchQuery && rowSearchMatches?.has(column.id);
                   const cellBaseBackground = cellHasSearchMatch
-                    ? "#FFF3D3"
+                    ? isFilteredColumn
+                      ? "#EAE5A6"
+                      : isSortedColumn
+                      ? "#FFDEA4"
+                      : "#FFF3D3"
                     : isFilteredColumn
                     ? "#E2F1E3"
                     : isSortedColumn
@@ -1753,7 +1811,11 @@ export function TableView({
                     ? "var(--airtable-cell-hover-bg)"
                     : "#ffffff";
                   const cellHoverBackground = cellHasSearchMatch
-                    ? "#FFF3D3"
+                    ? isFilteredColumn
+                      ? "#EAE5A6"
+                      : isSortedColumn
+                      ? "#FFDEA4"
+                      : "#FFF3D3"
                     : isFilteredColumn
                     ? "#E5F4E6"
                     : isSortedColumn
@@ -1776,6 +1838,7 @@ export function TableView({
                   // Lightweight path: non-selected, non-editing cells render a
                   // plain div instead of an <input> to reduce DOM weight.
                   if (!isSelected && !isEditing) {
+                    const matchHidden = showSearchOverlay && isTextTruncated(editedValue, virtualColumn.size);
                     return (
                       <div
                         key={`${row.id}-${column.id}`}
@@ -1791,14 +1854,26 @@ export function TableView({
                         }}
                         onClick={() => focusCell(row.id, column.id)}
                       >
-                        <div
-                          className="h-full w-full truncate text-[13px] text-[#1d1f24] leading-[33px]"
-                          style={{ textAlign: isNumber ? "right" : "left" }}
-                        >
-                          {showSearchOverlay
-                            ? renderSearchHighlight(editedValue, searchQuery)
-                            : editedValue}
-                        </div>
+                        {matchHidden ? (
+                          <div className="flex h-full w-full items-center text-[13px] text-[#1d1f24]">
+                            <div
+                              className="min-w-0 flex-1 overflow-hidden whitespace-nowrap pr-px leading-[33px]"
+                              style={{ textAlign: isNumber ? "right" : "left" }}
+                            >
+                              {renderSearchHighlight(editedValue, searchQuery)}
+                            </div>
+                            <span className="shrink-0">&hellip;</span><mark className="airtable-search-highlight shrink-0 inline-block w-2">&nbsp;</mark>
+                          </div>
+                        ) : (
+                          <div
+                            className="h-full w-full truncate text-[13px] text-[#1d1f24] leading-[33px]"
+                            style={{ textAlign: isNumber ? "right" : "left" }}
+                          >
+                            {showSearchOverlay
+                              ? renderSearchHighlight(editedValue, searchQuery)
+                              : editedValue}
+                          </div>
+                        )}
                       </div>
                     );
                   }
@@ -1891,10 +1966,19 @@ export function TableView({
                                     readOnly={!isEditing}
                                     aria-label={`${column.name} cell`}
                                   />
-                                  <div className="airtable-long-text-display">
-                                    {renderSearchHighlight(
-                                      editedValue,
-                                      searchQuery
+                                  <div
+                                    className="airtable-long-text-display"
+                                    style={showSearchOverlay && isTextTruncated(editedValue, virtualColumn.size) ? { textOverflow: "clip", display: "flex", alignItems: "center" } : undefined}
+                                  >
+                                    {showSearchOverlay && isTextTruncated(editedValue, virtualColumn.size) ? (
+                                      <>
+                                        <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+                                          {renderSearchHighlight(editedValue, searchQuery)}
+                                        </span>
+                                        <span className="shrink-0">&hellip;</span><mark className="airtable-search-highlight shrink-0 inline-block w-2">&nbsp;</mark>
+                                      </>
+                                    ) : (
+                                      renderSearchHighlight(editedValue, searchQuery)
                                     )}
                                   </div>
                                 </>
@@ -1962,10 +2046,8 @@ export function TableView({
                                       )}
                                     </div>
                                   )}
-                                  <img
-                                    alt=""
+                                  <LongLineSelectionIcon
                                     className="airtable-long-text-selection"
-                                    src={longLineSelectionIcon.src}
                                   />
                                 </>
                               )}

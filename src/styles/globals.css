@@ -865,6 +865,7 @@ body {
   top: 9px;
   pointer-events: none;
   z-index: 2;
+  mix-blend-mode: multiply;
 }
 
 .airtable-sort-icon--active {
@@ -946,7 +947,7 @@ body {
 }
 
 .airtable-sort-row {
-  transition: top 0.15s ease;
+  transition: top 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .airtable-sort-remove {
@@ -966,7 +967,8 @@ body {
   background: var(--airtable-hover-bg);
 }
 
-.airtable-sort-remove:hover img {
+.airtable-sort-remove:hover img,
+.airtable-sort-remove:hover svg {
   mix-blend-mode: multiply;
 }
 
@@ -1269,6 +1271,22 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   pointer-events: none !important;
 }
 
+body.airtable-sort-dragging {
+  cursor: grabbing !important;
+}
+
+body.airtable-sort-dragging * {
+  cursor: grabbing !important;
+}
+
+.airtable-sort-phantom {
+  cursor: grabbing;
+}
+
+.airtable-sort-phantom img {
+  mix-blend-mode: multiply;
+}
+
 .airtable-create-button {
   background-color: #176EE1;
   color: white;
@@ -1324,10 +1342,6 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   }
 }
 
-/* Hide scrollbar for header scroll container */
-.airtable-header-scroll::-webkit-scrollbar {
-  display: none;
-}
 
 /* Row canvas — transparent bg lets the scroll-container's grid pattern
    and #F7F8FC show through for the add-column area. */
@@ -1336,9 +1350,9 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
   contain: layout style;
 }
 
-/* Wrapper for all virtual rows.  Uses a single translateY offset so
-   rows render in normal document flow instead of per-row absolute
-   positioning — eliminates scroll gaps during fast trackpad scrolling. */
+/* Wrapper for all virtual rows.  Each row is absolutely positioned at
+   its own top offset so existing rows stay painted in place during
+   scroll — the browser compositor reveals pre-painted tiles instantly. */
 .airtable-virtual-row-wrapper {
   contain: layout style;
 }
@@ -1377,6 +1391,30 @@ body.airtable-dragging *:not(.airtable-filter-phantom) {
 @keyframes skeletonShimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* Skeleton base card shown while loading the bases list. */
+.airtable-skeleton-base {
+  position: relative;
+  height: 92px;
+  width: 100%;
+  max-width: 345px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.airtable-skeleton-base::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.015) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s ease-in-out infinite;
 }
 
 /* Full-viewport skeleton overlay shown during scrollbar drag.

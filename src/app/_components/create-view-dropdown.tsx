@@ -1,12 +1,11 @@
 "use client";
 
 import { Inter } from "next/font/google";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 
-import peopleIcon from "~/assets/people.svg";
-import assigneeIcon from "~/assets/assignee.svg";
-import lockIcon from "~/assets/lock.svg";
+import PeopleIcon from "~/assets/people.svg";
+import AssigneeIcon from "~/assets/assignee.svg";
+import LockIcon from "~/assets/lock.svg";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -80,7 +79,7 @@ export function CreateViewDropdown({
       ref={dropdownRef}
       className={`${inter.className} airtable-dropdown-surface`}
       style={{
-        position: "absolute",
+        position: "fixed",
         left: dropdownPosition.left,
         top: dropdownPosition.top,
         width: 400,
@@ -175,11 +174,8 @@ export function CreateViewDropdown({
               />
             )}
           </div>
-          <Image
-            src={peopleIcon}
-            alt=""
-            width={18}
-            height={14}
+          <PeopleIcon
+            className="h-[14px] w-[18px]"
             style={{ marginLeft: 3 }}
           />
           <span
@@ -237,11 +233,8 @@ export function CreateViewDropdown({
               />
             )}
           </div>
-          <Image
-            src={assigneeIcon}
-            alt=""
-            width={15}
-            height={16}
+          <AssigneeIcon
+            className="h-[16px] w-[15px]"
             style={{ marginLeft: 4 }}
           />
           <span
@@ -299,11 +292,8 @@ export function CreateViewDropdown({
               />
             )}
           </div>
-          <Image
-            src={lockIcon}
-            alt=""
-            width={13.68}
-            height={14.66}
+          <LockIcon
+            className="h-[14.66px] w-[13.68px]"
             style={{ marginLeft: 5 }}
           />
           <span

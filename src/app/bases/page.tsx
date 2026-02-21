@@ -15,6 +15,7 @@ export default async function BasesPage() {
   }
 
   const userName = session.user.name ?? session.user.email ?? "";
+  const userEmail = session.user.email ?? "";
 
-  return <BasesWorkspace userName={userName} />;
+  return <BasesWorkspace userName={userName} userEmail={userEmail} />;
 }

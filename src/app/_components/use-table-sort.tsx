@@ -4,12 +4,13 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "~/trpc/react";
 
 // Icon imports
-import assigneeIcon from "~/assets/assignee.svg";
-import attachmentsIcon from "~/assets/attachments.svg";
-import nameIcon from "~/assets/name.svg";
-import notesIcon from "~/assets/notes.svg";
-import numberIcon from "~/assets/number.svg";
-import statusIcon from "~/assets/status.svg";
+import type { FC, SVGProps } from "react";
+import AssigneeIcon from "~/assets/assignee.svg";
+import AttachmentsIcon from "~/assets/attachments.svg";
+import NameIcon from "~/assets/name.svg";
+import NotesIcon from "~/assets/notes.svg";
+import NumberIcon from "~/assets/number.svg";
+import StatusIcon from "~/assets/status.svg";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,6 +108,9 @@ export type UseTableSortReturn = {
   sortedColumnIds: Set<string>;
   draggingSortId: string | null;
   draggingSortTop: number | null;
+  sortPhantomRef: RefObject<HTMLDivElement | null>;
+  phantomSortX: number | null;
+  phantomSortY: number | null;
   sortParam: SortConfig[];
   shouldIncludeSortInQuery: boolean;
 
@@ -146,28 +150,28 @@ const coerceColumnType = (value?: string | null): ColumnFieldType =>
 
 const sortAddMenuIconSpecByName: Record<
   string,
-  { src: string; width: number; height: number; left: number }
+  { Icon: FC<SVGProps<SVGSVGElement>>; width: number; height: number; left: number }
 > = {
-  Assignee: { src: assigneeIcon.src, width: 15, height: 16, left: 10 },
+  Assignee: { Icon: AssigneeIcon, width: 15, height: 16, left: 10 },
   Status: {
-    src: statusIcon.src,
+    Icon: StatusIcon,
     width: STATUS_MENU_ICON_SIZE,
     height: STATUS_MENU_ICON_SIZE,
     left: 10,
   },
-  Attachments: { src: attachmentsIcon.src, width: 14, height: 16, left: 11 },
-  Name: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  Notes: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  Number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+  Attachments: { Icon: AttachmentsIcon, width: 14, height: 16, left: 11 },
+  Name: { Icon: NameIcon, width: 12.01, height: 12, left: 12 },
+  Notes: { Icon: NotesIcon, width: 15.5, height: 13.9, left: 11 },
+  Number: { Icon: NumberIcon, width: 13, height: 13, left: 12.5 },
 };
 
 const sortAddMenuIconSpecByType: Record<
   ColumnFieldType,
-  { src: string; width: number; height: number; left: number }
+  { Icon: FC<SVGProps<SVGSVGElement>>; width: number; height: number; left: number }
 > = {
-  single_line_text: { src: nameIcon.src, width: 12.01, height: 12, left: 12 },
-  long_text: { src: notesIcon.src, width: 15.5, height: 13.9, left: 11 },
-  number: { src: numberIcon.src, width: 13, height: 13, left: 12.5 },
+  single_line_text: { Icon: NameIcon, width: 12.01, height: 12, left: 12 },
+  long_text: { Icon: NotesIcon, width: 15.5, height: 13.9, left: 11 },
+  number: { Icon: NumberIcon, width: 13, height: 13, left: 12.5 },
 };
 
 export const getSortAddMenuIconSpec = (name: string, type?: string | null) => {
@@ -328,6 +332,11 @@ export function useTableSort({
   const sortAddMenuListRef = useRef<HTMLDivElement>(null);
   const sortRowsRef = useRef<SortConfig[]>([]);
   const prevSortConfigListRef = useRef<SortConfig[]>([]);
+  const sortPhantomRef = useRef<HTMLDivElement>(null);
+  const reorderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragDropdownRectRef = useRef<DOMRect | null>(null);
+  const phantomYRef = useRef<number | null>(null);
+  const dragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // UI State
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
@@ -346,6 +355,8 @@ export function useTableSort({
   // Drag state
   const [draggingSortId, setDraggingSortId] = useState<string | null>(null);
   const [draggingSortTop, setDraggingSortTop] = useState<number | null>(null);
+  const [phantomSortX, setPhantomSortX] = useState<number | null>(null);
+  const [phantomSortY, setPhantomSortY] = useState<number | null>(null);
 
   // Parse sort config from table metadata (memoized to prevent unnecessary
   // re-renders and effect re-triggers when the underlying data hasn't changed)
@@ -484,72 +495,157 @@ export function useTableSort({
     [columns]
   );
 
-  // Handle sort drag start
+  // Handle sort drag start — phantom-based reorder
   const handleSortDragStart = useCallback(
     (event: ReactMouseEvent, columnId: string) => {
       event.preventDefault();
       const containerRect = sortMenuRef.current?.getBoundingClientRect();
       if (!containerRect) return;
+
       const currentOrder = sortRowsRef.current;
       const startIndex = currentOrder.findIndex(
         (sort) => sort.columnId === columnId
       );
       if (startIndex === -1) return;
+
       const sortRowStride = SORT_FIELD_HEIGHT + SORT_ROW_GAP;
-      const startTop = SORT_FIELD_TOP + startIndex * sortRowStride;
-      const startY = event.clientY;
+      const rowTop = SORT_FIELD_TOP + startIndex * sortRowStride;
+
+      // Compute sort row viewport position
+      const rowViewportLeft = containerRect.left;
+      const rowViewportTop = containerRect.top + rowTop;
+
+      // Offset from cursor to phantom top-left (so phantom doesn't jump)
+      dragOffsetRef.current = {
+        x: event.clientX - rowViewportLeft,
+        y: event.clientY - rowViewportTop,
+      };
+      dragDropdownRectRef.current = containerRect;
 
       setSortOrderOverride(currentOrder);
       setDraggingSortId(columnId);
-      setDraggingSortTop(startTop);
+      setPhantomSortX(rowViewportLeft);
+      setPhantomSortY(rowViewportTop);
+      phantomYRef.current = rowViewportTop;
       setOpenSortDirectionId(null);
       setOpenSortFieldId(null);
       setIsAddSortMenuOpen(false);
 
+      document.body.classList.add("airtable-sort-dragging");
+
       const handleMouseMove = (moveEvent: MouseEvent) => {
-        const deltaY = moveEvent.clientY - startY;
-        const order = sortRowsRef.current;
-        const maxTop = SORT_FIELD_TOP + sortRowStride * (order.length - 1);
+        const newPhantomX = moveEvent.clientX - dragOffsetRef.current.x;
+        const newPhantomY = moveEvent.clientY - dragOffsetRef.current.y;
 
-        const nextTop = Math.max(
-          SORT_FIELD_TOP,
-          Math.min(maxTop, startTop + deltaY)
+        // Clamp to viewport
+        const clampedX = Math.max(
+          0,
+          Math.min(window.innerWidth - containerRect.width, newPhantomX)
         );
-        setDraggingSortTop(nextTop);
+        const clampedY = Math.max(
+          0,
+          Math.min(window.innerHeight - SORT_FIELD_HEIGHT, newPhantomY)
+        );
 
+        // Direct DOM update — bypasses React re-render for 60fps drag
+        if (sortPhantomRef.current) {
+          sortPhantomRef.current.style.transform = `translate(${clampedX - rowViewportLeft}px, ${clampedY - rowViewportTop}px)`;
+        }
+        phantomYRef.current = clampedY;
+
+        // Compute target index from phantom Y relative to dropdown
+        const relativeY = clampedY - containerRect.top;
+        const centerY = relativeY + SORT_FIELD_HEIGHT / 2;
+        const order = sortRowsRef.current;
+        const maxIndex = order.length - 1;
         const targetIndex = Math.max(
           0,
           Math.min(
-            order.length - 1,
-            Math.floor((nextTop - SORT_FIELD_TOP + SORT_FIELD_HEIGHT / 2) / sortRowStride)
+            maxIndex,
+            Math.floor((centerY - SORT_FIELD_TOP) / sortRowStride)
           )
         );
 
         const currentIndex = order.findIndex(
           (sort) => sort.columnId === columnId
         );
-        if (currentIndex === -1 || currentIndex === targetIndex) return;
 
-        const nextOrder = [...order];
-        const [removed] = nextOrder.splice(currentIndex, 1);
-        if (removed) {
-          nextOrder.splice(targetIndex, 0, removed);
+        // Clear any pending reorder timeout
+        if (reorderTimeoutRef.current) {
+          clearTimeout(reorderTimeoutRef.current);
+          reorderTimeoutRef.current = null;
         }
-        sortRowsRef.current = nextOrder;
 
-        setSortOrderOverride(nextOrder);
+        if (currentIndex !== -1 && currentIndex !== targetIndex) {
+          reorderTimeoutRef.current = setTimeout(() => {
+            const latestOrder = [...sortRowsRef.current];
+            const curIdx = latestOrder.findIndex(
+              (sort) => sort.columnId === columnId
+            );
+            if (curIdx !== -1 && curIdx !== targetIndex) {
+              const [removed] = latestOrder.splice(curIdx, 1);
+              if (removed) {
+                latestOrder.splice(targetIndex, 0, removed);
+              }
+              sortRowsRef.current = latestOrder;
+              setSortOrderOverride(latestOrder);
+            }
+            reorderTimeoutRef.current = null;
+          }, 100);
+        }
       };
 
       const handleMouseUp = () => {
         document.removeEventListener("mousemove", handleMouseMove);
         document.removeEventListener("mouseup", handleMouseUp);
+        document.body.classList.remove("airtable-sort-dragging");
+
+        // Clear pending timeout
+        if (reorderTimeoutRef.current) {
+          clearTimeout(reorderTimeoutRef.current);
+          reorderTimeoutRef.current = null;
+        }
+
+        // Compute final target index from last phantom Y position
+        const lastPhantomY = phantomYRef.current;
+        const ddRect = dragDropdownRectRef.current;
+        if (lastPhantomY !== null && ddRect) {
+          const relativeY = lastPhantomY - ddRect.top;
+          const centerY = relativeY + SORT_FIELD_HEIGHT / 2;
+          const order = sortRowsRef.current;
+          const maxIndex = order.length - 1;
+          const finalTargetIndex = Math.max(
+            0,
+            Math.min(
+              maxIndex,
+              Math.floor((centerY - SORT_FIELD_TOP) / sortRowStride)
+            )
+          );
+
+          const curIdx = order.findIndex(
+            (sort) => sort.columnId === columnId
+          );
+          if (curIdx !== -1 && curIdx !== finalTargetIndex) {
+            const nextOrder = [...order];
+            const [removed] = nextOrder.splice(curIdx, 1);
+            if (removed) {
+              nextOrder.splice(finalTargetIndex, 0, removed);
+            }
+            sortRowsRef.current = nextOrder;
+          }
+        }
 
         const finalOrder = sortRowsRef.current;
         if (!areSortsEqual(finalOrder, sortConfigList)) {
           applySorts(finalOrder.length ? finalOrder : null);
         }
+
         setDraggingSortId(null);
         setDraggingSortTop(null);
+        setPhantomSortX(null);
+        setPhantomSortY(null);
+        phantomYRef.current = null;
+        dragDropdownRectRef.current = null;
         setSortOrderOverride(null);
       };
 
@@ -680,6 +776,9 @@ export function useTableSort({
     sortedColumnIds,
     draggingSortId,
     draggingSortTop,
+    sortPhantomRef,
+    phantomSortX,
+    phantomSortY,
     sortParam,
     shouldIncludeSortInQuery,
 

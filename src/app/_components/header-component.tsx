@@ -4,10 +4,10 @@ import { Inter } from "next/font/google";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import arrowIcon from "~/assets/arrow.svg";
-import launchIcon from "~/assets/launch.svg";
-import logoIcon from "~/assets/logo.svg";
-import timeIcon from "~/assets/time.svg";
+import ArrowIcon from "~/assets/arrow.svg";
+import LaunchIcon from "~/assets/launch.svg";
+import LogoIcon from "~/assets/logo.svg";
+import TimeIcon from "~/assets/time.svg";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -86,10 +86,8 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
         {/* Left: base icon + name, shifted 13px left (8 + 5 for base name) */}
         <div className="flex items-center gap-3" style={{ marginLeft: -13 }}>
           <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[6px] bg-[#8c3f78]">
-            <img
-              alt=""
+            <LogoIcon
               className="h-[19.74px] w-[22.68px]"
-              src={logoIcon.src}
               style={{ filter: "brightness(0) saturate(100%) invert(1)" }}
             />
           </div>
@@ -103,16 +101,12 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
         </div>
         {/* arrow.svg: 11×6, y=24, 8px right of base name — positioned relative to header */}
         {arrowLeft !== null && (
-          <img
-            alt=""
-            src={arrowIcon.src}
-            className="pointer-events-none"
+          <ArrowIcon
+            className="pointer-events-none h-[6px] w-[11px]"
             style={{
               position: "absolute",
               left: arrowLeft,
               top: 24,
-              width: 11,
-              height: 6,
             }}
           />
         )}
@@ -148,12 +142,9 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
           </span>
 
           {/* time.svg: 16×15, 6px left of Launch, shifted 9px left */}
-          <img
-            alt=""
-            src={timeIcon.src}
+          <TimeIcon
+            className="h-[15px] w-[16px]"
             style={{
-              width: 16,
-              height: 15,
               marginRight: 6,
               marginLeft: -9,
             }}
@@ -164,7 +155,7 @@ export function HeaderComponent({ baseName, isLoading }: HeaderComponentProps) {
             className="airtable-outline flex items-center justify-center gap-2 rounded-[6px] bg-white text-[13px] text-[#1d1f24]"
             style={{ width: 80, height: 29, marginRight: 8 }}
           >
-            <img alt="" className="h-[14px] w-[14px]" src={launchIcon.src} />
+            <LaunchIcon className="h-[14px] w-[14px]" />
             Launch
           </button>
           <button
