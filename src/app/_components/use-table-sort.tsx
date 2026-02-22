@@ -379,9 +379,20 @@ export function useTableSort({
   );
 
   // Determine active sort parameter (memoized to stabilize query keys
-  // and prevent unnecessary refetches when the sort hasn't actually changed)
+  // and prevent unnecessary refetches when the sort hasn't actually changed).
+  // Uses a ref to preserve reference identity when the value is structurally
+  // equal — prevents downstream useMemo recomputations when sortOverride
+  // is cleared and sortConfigList takes over with the same values.
   const sortParamSource = sortOverride ?? sortConfigList;
-  const sortParam = useMemo(() => filterActiveSorts(sortParamSource), [filterActiveSorts, sortParamSource]);
+  const prevSortParamRef = useRef<SortConfig[]>([]);
+  const sortParam = useMemo(() => {
+    const next = filterActiveSorts(sortParamSource);
+    if (areSortsEqual(next, prevSortParamRef.current)) {
+      return prevSortParamRef.current;
+    }
+    prevSortParamRef.current = next;
+    return next;
+  }, [filterActiveSorts, sortParamSource]);
   const hasSort = sortParam.length > 0;
   const shouldIncludeSortInQuery =
     sortOverride !== null || hasLoadedTableMetaRef.current;
@@ -457,10 +468,14 @@ export function useTableSort({
       }
       setSortOverride(context?.previousSort ?? null);
     },
-    onSettled: async (_data, _error, variables) => {
-      // Only invalidate meta to sync with server — no getRows invalidation
-      // needed since sortOverride already drives the query key.
-      await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+    onSettled: async (_data, error, variables) => {
+      // Only refetch meta on error to reconcile with server state.
+      // On success the optimistic update from onMutate is already accurate,
+      // and skipping the invalidation avoids an unnecessary network request
+      // plus the re-render cascade that clears sortOverride.
+      if (error) {
+        await utils.base.getTableMeta.invalidate({ tableId: variables.tableId });
+      }
     },
   });
 
