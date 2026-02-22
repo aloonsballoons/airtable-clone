@@ -14,6 +14,16 @@ const MAX_BULK_ROWS = 100_000;
 const BULK_INSERT_BATCH_SIZE = 5_000;
 const MAX_ROWS_QUERY_LIMIT = 2_000;
 
+// Drizzle's sql`` template expands JS arrays into individual bind parameters
+// ($1, $2, …).  PostgreSQL limits ROW/ARRAY expressions to 1664 entries,
+// so passing 2000 UUIDs via ${pageIds} causes:
+//   "ROW expressions can have at most 1664 entries"
+// Instead, build a literal ARRAY['uuid1','uuid2',…]::uuid[] string that
+// PostgreSQL parses as a single value.  UUIDs are validated upstream
+// (z.string().uuid()) so injection is not a concern.
+const sqlUuidArray = (ids: string[]) =>
+	sql.raw(`ARRAY[${ids.map((id) => `'${id}'`).join(",")}]::uuid[]`);
+
 // Module-level state for tracking async GIN index rebuilds.
 // When a bulk insert drops + rebuilds GIN indexes via after(),
 // the CREATE INDEX holds a SHARE lock that blocks all writes.
@@ -2223,7 +2233,7 @@ export const baseRouter = createTRPCRouter({
 					fastRows = [];
 				} else {
 					const rawResult = await ctx.db.execute(
-						sql`SELECT id, data FROM table_row WHERE id = ANY(${pageIds}::uuid[])`
+						sql`SELECT id, data FROM table_row WHERE id = ANY(${sqlUuidArray(pageIds)})`
 					);
 					// Re-order to match the cached sort order
 					const byId = new Map(
@@ -2284,7 +2294,7 @@ export const baseRouter = createTRPCRouter({
 							pageRows = [];
 						} else {
 							const rawResult = await ctx.db.execute(
-								sql`SELECT id, data FROM table_row WHERE id = ANY(${pageIds}::uuid[])`
+								sql`SELECT id, data FROM table_row WHERE id = ANY(${sqlUuidArray(pageIds)})`
 							);
 							const byId = new Map(
 								([...rawResult] as Array<{ id: string; data: Record<string, string> | null }>)
@@ -2342,7 +2352,7 @@ export const baseRouter = createTRPCRouter({
 					pageRows = [];
 				} else {
 					const rawResult = await ctx.db.execute(
-						sql`SELECT id, data FROM table_row WHERE id = ANY(${pageIds}::uuid[])`
+						sql`SELECT id, data FROM table_row WHERE id = ANY(${sqlUuidArray(pageIds)})`
 					);
 					const byId = new Map(
 						([...rawResult] as Array<{ id: string; data: Record<string, string> | null }>)
