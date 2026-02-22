@@ -2430,9 +2430,7 @@ function TableViewInner({
           className="text-[11px] text-[#1D1F24]"
           style={{ fontFamily: "Inter", fontWeight: 400 }}
         >
-          {activeRowCount >= 10_001
-            ? `${(10_000).toLocaleString()}+ records`
-            : `${activeRowCount.toLocaleString()} ${activeRowCount === 1 ? "record" : "records"}`}
+          {`${activeRowCount.toLocaleString()} ${activeRowCount === 1 ? "record" : "records"}`}
         </span>
       </div>
 

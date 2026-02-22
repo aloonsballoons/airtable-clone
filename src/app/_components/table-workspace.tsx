@@ -3237,9 +3237,9 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       // viewport fetch completes first, and smaller batch sizes to
       // avoid saturating the DB with concurrent sort queries.
       const hasSortOrFilter = sortParam.length > 0 || !!filterInput || !!hasSearchQuery;
-      const INITIAL_DELAY = hasSortOrFilter ? 500 : 50;
-      const BATCH_SIZE = hasSortOrFilter ? 2 : 5;
-      const BATCH_PAUSE = hasSortOrFilter ? 100 : 10;
+      const INITIAL_DELAY = hasSortOrFilter ? 1500 : 50;
+      const BATCH_SIZE = hasSortOrFilter ? 3 : 5;
+      const BATCH_PAUSE = hasSortOrFilter ? 50 : 10;
 
       await new Promise((r) => setTimeout(r, INITIAL_DELAY));
       if (state.cancelled) return;

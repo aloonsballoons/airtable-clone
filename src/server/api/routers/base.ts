@@ -1455,7 +1455,7 @@ export const baseRouter = createTRPCRouter({
 			// client-side React rendering) may hit a warm cache.
 			if (filteredSort.length > 0 && tableRecord.rowCount >= SORT_CACHE_MIN_ROWS) {
 				const prewarmKey = buildSortCacheKey(input.tableId, filteredSort, "", "");
-				if (!getSortCache(prewarmKey)) {
+				if (!getSortCache(prewarmKey) && !pendingSortCachePopulation.has(prewarmKey)) {
 					const sortColumnsMap = new Map(
 						columnRecords
 							.filter((c) => c.tableId === input.tableId)
@@ -2206,7 +2206,7 @@ export const baseRouter = createTRPCRouter({
 			// filters/search are active (filtered count differs from total).
 			const isFirstPage = offset === 0;
 			const hasFiltersOrSearch = !!filterExpression || !!input.search;
-			const MAX_FILTERED_COUNT = 10_001;
+			const MAX_FILTERED_COUNT = 2_000_001;
 
 			// -----------------------------------------------------------------
 			// Sort cache: for sorted queries on large tables, cache the sorted
@@ -2262,36 +2262,92 @@ export const baseRouter = createTRPCRouter({
 			}
 
 			// -----------------------------------------------------------------
-			// Single-pass optimization for first-page sorted queries on large
-			// tables: fetch ALL sorted IDs in one lightweight query (just the
-			// id column — no JSONB data), cache them synchronously, then fetch
-			// full row data for the first page by primary-key lookup.
+			// First-page optimization for sorted queries on large tables.
 			//
-			// Previous approach ran TWO sort queries: one for the first page
-			// (top-N heapsort) and one async for cache population (full sort).
-			// Both scanned the same 100k+ rows and extracted JSONB sort keys.
-			// Now: one sort query + one fast PK lookup.  The cache is warm
-			// synchronously (guaranteed ready for the next page scroll).
+			// Strategy: use PostgreSQL's top-N heapsort (LIMIT with offset 0)
+			// for the first page — this is O(n) with a small constant
+			// (~50-100ms for 100k rows) vs O(n log n) for a full sort
+			// (~300-500ms).  Then fire a deferred cache population in the
+			// background so subsequent page fetches skip the sort entirely
+			// via PK lookup from the cached ID list.
 			// -----------------------------------------------------------------
-			const useSinglePassCache = sortCacheKey && needsSortWorkMem
+			const useFirstPageFastPath = sortCacheKey && needsSortWorkMem
 				&& isFirstPage && tableRecord.rowCount >= SORT_CACHE_MIN_ROWS;
 
-			if (useSinglePassCache) {
-				// Check if a pre-warm is already in progress for this cache key
-				const pendingPrewarm = pendingSortCachePopulation.get(sortCacheKey);
-				if (pendingPrewarm) {
+			if (useFirstPageFastPath) {
+				// Fast path: top-N heapsort for the first page.
+				// Run count query in parallel when filters/search are active.
+				const topNPromise = ctx.db.execute(flatSql);
+				const countPromise = hasFiltersOrSearch
+					? ctx.db.execute(sql`SELECT count(*)::int as "count" FROM (SELECT 1 FROM table_row WHERE ${rawWhereClause} LIMIT ${MAX_FILTERED_COUNT}) sub`)
+					: null;
+
+				const [topNResult, countResult] = await Promise.all([
+					topNPromise,
+					countPromise ?? Promise.resolve(null),
+				]);
+
+				// Fire deferred cache population in background for subsequent
+				// pages.  Skip if a pre-warm (from setTableSort) or another
+				// deferred is already running for this cache key.
+				if (!pendingSortCachePopulation.has(sortCacheKey)) {
+					const deferredPromise = (async () => {
+						try {
+							const result = await ctx.db.transaction(async (tx) => {
+								await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
+								return tx.execute(
+									sql`SELECT id FROM table_row WHERE ${rawWhereClause} ORDER BY ${orderByFragment}`
+								);
+							});
+							const ids = ([...result] as Array<{ id: string }>).map((r) => r.id);
+							setSortCache(sortCacheKey, ids, ids.length);
+						} finally {
+							pendingSortCachePopulation.delete(sortCacheKey);
+						}
+					})();
+					pendingSortCachePopulation.set(sortCacheKey, deferredPromise);
+				}
+
+				const fastRows = [...topNResult] as Array<{ id: string; data: Record<string, string> | null }>;
+				const nextCursor = fastRows.length === input.limit
+					? offset + fastRows.length : null;
+				let totalCount = -1;
+				if (countResult) {
+					const countRows = [...countResult] as Array<{ count: number }>;
+					totalCount = Number(countRows[0]?.count ?? 0);
+				}
+
+				return {
+					rows: fastRows.map((row) => ({
+						id: row.id,
+						data: row.data ?? {},
+					})),
+					nextCursor,
+					totalCount,
+				};
+			}
+
+			// -----------------------------------------------------------------
+			// For non-first sorted pages, await any in-flight cache population
+			// (from the first-page deferred or setTableSort pre-warm) before
+			// falling through to the expensive standard sorted query.  This
+			// prevents every background sparse-page fetch from running a
+			// duplicate full-table JSONB sort.
+			// -----------------------------------------------------------------
+			if (sortCacheKey && needsSortWorkMem && !isFirstPage) {
+				const pendingPopulation = pendingSortCachePopulation.get(sortCacheKey);
+				if (pendingPopulation) {
 					try {
-						await pendingPrewarm;
+						await pendingPopulation;
 					} catch {
-						// Pre-warm failed — fall through to run our own sort
+						// Cache population failed — fall through to standard query
 					}
-					const prewarmedCache = getSortCache(sortCacheKey);
-					if (prewarmedCache) {
-						// Pre-warm succeeded — use the cached result
-						const pageIds = prewarmedCache.ids.slice(0, input.limit);
-						let pageRows: Array<{ id: string; data: Record<string, string> | null }>;
+					const freshCache = getSortCache(sortCacheKey);
+					if (freshCache) {
+						const pageIds = freshCache.ids.slice(offset, offset + input.limit);
+						let cacheRows: Array<{ id: string; data: Record<string, string> | null }>;
 						if (pageIds.length === 0) {
-							pageRows = [];
+							cacheRows = [];
 						} else {
 							const rawResult = await ctx.db.execute(
 								sql`SELECT id, data FROM table_row WHERE id = ANY(${sqlUuidArray(pageIds)})`
@@ -2300,80 +2356,22 @@ export const baseRouter = createTRPCRouter({
 								([...rawResult] as Array<{ id: string; data: Record<string, string> | null }>)
 									.map((r) => [r.id, r])
 							);
-							pageRows = pageIds
+							cacheRows = pageIds
 								.map((id) => byId.get(id))
-								.filter(Boolean) as typeof pageRows;
+								.filter(Boolean) as typeof cacheRows;
 						}
-						const nextCursor = pageRows.length === input.limit
-							? offset + pageRows.length : null;
-						const totalCount = hasFiltersOrSearch
-							? Math.min(prewarmedCache.totalFiltered, MAX_FILTERED_COUNT)
-							: -1;
+						const nextCursor =
+							cacheRows.length === input.limit ? offset + cacheRows.length : null;
 						return {
-							rows: pageRows.map((row) => ({
+							rows: cacheRows.map((row) => ({
 								id: row.id,
 								data: row.data ?? {},
 							})),
 							nextCursor,
-							totalCount,
+							totalCount: -1,
 						};
 					}
 				}
-
-				// No pre-warm available — single-pass: sort all IDs, cache, PK-fetch page
-				const singlePassCountQuery = hasFiltersOrSearch
-					? ctx.db.execute(sql`SELECT count(*)::int as "count" FROM (SELECT 1 FROM table_row WHERE ${rawWhereClause} LIMIT ${MAX_FILTERED_COUNT}) sub`)
-					: null;
-
-				const [allIdsResult, singlePassCountResult] = await Promise.all([
-					ctx.db.transaction(async (tx) => {
-						await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
-						return tx.execute(
-							sql`SELECT id FROM table_row WHERE ${rawWhereClause} ORDER BY ${orderByFragment}`
-						);
-					}),
-					singlePassCountQuery,
-				]);
-
-				const allIds = ([...allIdsResult] as Array<{ id: string }>).map((r) => r.id);
-				let totalCount = -1;
-				if (singlePassCountResult) {
-					const countRows = [...singlePassCountResult] as Array<{ count: number }>;
-					totalCount = Number(countRows[0]?.count ?? 0);
-				}
-
-				// Cache sorted IDs synchronously — guaranteed warm for next page
-				setSortCache(sortCacheKey, allIds, totalCount >= 0 ? totalCount : allIds.length);
-
-				// Fetch full row data for just the first page by PK lookup
-				const pageIds = allIds.slice(0, input.limit);
-				let pageRows: Array<{ id: string; data: Record<string, string> | null }>;
-				if (pageIds.length === 0) {
-					pageRows = [];
-				} else {
-					const rawResult = await ctx.db.execute(
-						sql`SELECT id, data FROM table_row WHERE id = ANY(${sqlUuidArray(pageIds)})`
-					);
-					const byId = new Map(
-						([...rawResult] as Array<{ id: string; data: Record<string, string> | null }>)
-							.map((r) => [r.id, r])
-					);
-					pageRows = pageIds
-						.map((id) => byId.get(id))
-						.filter(Boolean) as typeof pageRows;
-				}
-
-				const nextCursor = pageRows.length === input.limit
-					? offset + pageRows.length : null;
-
-				return {
-					rows: pageRows.map((row) => ({
-						id: row.id,
-						data: row.data ?? {},
-					})),
-					nextCursor,
-					totalCount,
-				};
 			}
 
 			// Standard query path: no sort, small tables, or non-first pages
