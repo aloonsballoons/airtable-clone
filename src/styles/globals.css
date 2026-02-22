@@ -553,7 +553,8 @@ body {
   background: transparent;
 }
 
-.airtable-filter-section:hover img {
+.airtable-filter-section:hover img,
+.airtable-filter-section:hover svg {
   mix-blend-mode: multiply;
 }
 
@@ -568,7 +569,8 @@ body {
   background: #EAEBEF;
 }
 
-.airtable-filter-group-action:hover img {
+.airtable-filter-group-action:hover img,
+.airtable-filter-group-action:hover svg {
   mix-blend-mode: multiply;
 }
 
