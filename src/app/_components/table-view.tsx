@@ -1301,6 +1301,15 @@ function TableViewInner({
               // The canvas grid pattern provides the baseline grid, and
               // these skeleton divs add shimmer bars on top.
               if (!row) {
+                // DEBUG: log skeleton row info
+                // eslint-disable-next-line no-console
+                console.log("[DEBUG-SKELETON]", {
+                  virtualIndex: virtualRow.index,
+                  sortedLen: sortedTableData.length,
+                  sparseHas: sparseRows.has(virtualRow.index),
+                  activeRowCount,
+                  totalRowCount,
+                });
                 return (
                   <div
                     key={virtualRow.key}

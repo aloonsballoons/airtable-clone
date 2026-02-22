@@ -86,7 +86,12 @@ export function useBulkRows({
 
       // Update totalCount immediately from the mutation response
       // for instant visual feedback before the refetch completes.
-      if (data?.newTotalCount != null) {
+      // Skip for single-row additions — the optimistic onMutate already
+      // set the correct totalCount and row data.  Running setInfiniteData
+      // here would set nextCursor on the last page, making
+      // rowsHasNextPage flip to true and briefly creating a skeleton row
+      // slot beyond the loaded data.
+      if (data?.newTotalCount != null && !isSingleRow) {
         utils.base.getRows.setInfiniteData(queryKey, (old) => {
           if (!old) return old;
           const lastIdx = old.pages.length - 1;
@@ -152,6 +157,10 @@ export function useBulkRows({
     });
   };
 
+  // Only treat bulk inserts (count > 1) as "pending" for loading indicators.
+  // Single-row additions are handled optimistically and should not block the UI.
+  const isBulkPending = addRows.isPending && (addRows.variables?.count ?? 0) > 1;
+
   const bulkRowsDisabled =
     !activeTableId || addRows.isPending || activeRowCount + BULK_ROWS > MAX_ROWS;
 
@@ -159,6 +168,6 @@ export function useBulkRows({
     handleAddBulkRows,
     bulkRowsDisabled,
     addRowsMutate: addRows.mutate,
-    addRowsIsPending: addRows.isPending,
+    addRowsIsPending: isBulkPending,
   };
 }

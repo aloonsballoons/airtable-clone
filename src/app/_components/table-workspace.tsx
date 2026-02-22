@@ -2912,6 +2912,8 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     fingerprint: string;
     columnsKey: string;
     pageCount: number;
+    /** Row count on the last page — used to detect optimistic intra-page inserts */
+    lastPageRowCount: number;
     data: TableRow[];
     byId: Map<string, TableRow>;
     seen: Set<string>;
@@ -2941,6 +2943,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     const prev = pipelineCacheRef.current;
 
     // Incremental path: same fingerprint + same columns + pages only grew
+    const lastPageRows = pages.length > 0 ? pages[pages.length - 1]!.rows.length : 0;
     const canIncrement =
       prev !== null &&
       prev.fingerprint === pipelineFingerprint &&
@@ -2948,8 +2951,8 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       pages.length >= prev.pageCount &&
       prev.pageCount > 0;
 
-    if (canIncrement && pages.length === prev.pageCount) {
-      // No new pages — return cached result (same references)
+    if (canIncrement && pages.length === prev.pageCount && lastPageRows === prev.lastPageRowCount) {
+      // No new pages and last page unchanged — return cached result (same references)
       return {
         tableData: prev.data,
         tableDataById: prev.byId,
@@ -2971,7 +2974,12 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       byId = new Map(prev.byId);
       seen = new Set(prev.seen);
       searchMap = normalizedSearch ? new Map(prev.searchMap) : new Map();
-      startPage = prev.pageCount;
+      // If page count is the same but last page content changed (e.g.
+      // optimistic row appended), reprocess the last page so new rows
+      // get picked up.  The `seen` set prevents duplicates.
+      startPage = (pages.length === prev.pageCount && lastPageRows !== prev.lastPageRowCount)
+        ? prev.pageCount - 1
+        : prev.pageCount;
     } else {
       data = [];
       byId = new Map();
@@ -3008,6 +3016,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       fingerprint: pipelineFingerprint,
       columnsKey,
       pageCount: pages.length,
+      lastPageRowCount: pages.length > 0 ? pages[pages.length - 1]!.rows.length : 0,
       data,
       byId,
       seen,
@@ -3704,6 +3713,25 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     addColumn.isPending ||
     addRowsIsPending ||
     isFunctionTriggered;
+
+  // DEBUG: trace which loading flags are active
+  // eslint-disable-next-line no-console
+  if (headerLoading || isTableLoading) {
+    console.log("[DEBUG-LOADING]", {
+      headerLoading,
+      isTableLoading,
+      showRowsInitialLoading,
+      "rowsQuery.isLoading": rowsQuery.isLoading,
+      "rowsQuery.isFetching": rowsQuery.isFetching,
+      "rowsQuery.status": rowsQuery.status,
+      rowCount,
+      addRowsIsPending,
+      addColumnPending: addColumn.isPending,
+      isFunctionTriggered,
+      "tableMetaQuery.isLoading": tableMetaQuery.isLoading,
+      "baseDetailsQuery.isLoading": baseDetailsQuery.isLoading,
+    });
+  }
 
   return (
     <div className={clsx("h-screen overflow-hidden bg-white text-[#1d1f24]", inter.className)}>
