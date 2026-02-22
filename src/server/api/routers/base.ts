@@ -14,6 +14,26 @@ const MAX_BULK_ROWS = 100_000;
 const BULK_INSERT_BATCH_SIZE = 5_000;
 const MAX_ROWS_QUERY_LIMIT = 2_000;
 
+// Module-level state for tracking async GIN index rebuilds.
+// When a bulk insert drops + rebuilds GIN indexes via after(),
+// the CREATE INDEX holds a SHARE lock that blocks all writes.
+// Tracking this lets subsequent bulk inserts skip GIN drops and
+// use fast-update buffering instead of blocking for 30-120s.
+let ginRebuildInProgress = false;
+let ginRebuildStartedAt = 0;
+const GIN_REBUILD_STALE_MS = 5 * 60 * 1000; // 5 minutes
+
+const isGinRebuildRunning = () => {
+	if (!ginRebuildInProgress) return false;
+	// Auto-reset if stale (e.g. callback didn't reset due to crash)
+	if (Date.now() - ginRebuildStartedAt > GIN_REBUILD_STALE_MS) {
+		ginRebuildInProgress = false;
+		ginRebuildStartedAt = 0;
+		return false;
+	}
+	return true;
+};
+
 const baseNameSchema = z.string().min(1).max(120);
 const tableNameSchema = z.string().min(1).max(120);
 const columnNameSchema = z.string().min(1).max(120);
@@ -446,6 +466,10 @@ export const baseRouter = createTRPCRouter({
 					views: table.views.map((view) => ({
 						id: view.id,
 						name: view.name,
+						sortConfig: Array.isArray(view.sortConfig) ? view.sortConfig : [],
+						hiddenColumnIds: Array.isArray(view.hiddenColumnIds) ? view.hiddenColumnIds : [],
+						searchQuery: view.searchQuery ?? "",
+						filterConfig: view.filterConfig ?? null,
 					})),
 				})),
 			};
@@ -524,6 +548,7 @@ export const baseRouter = createTRPCRouter({
 					data: {},
 				}));
 				await ctx.db.insert(tableRow).values(rows);
+				await ctx.db.update(baseTable).set({ rowCount: rows.length }).where(eq(baseTable.id, newTable.id));
 			}
 
 			// Create a default "Grid view" for the new table
@@ -653,6 +678,7 @@ export const baseRouter = createTRPCRouter({
 				data: {},
 			}));
 			await ctx.db.insert(tableRow).values(rows);
+			await ctx.db.update(baseTable).set({ rowCount: rows.length }).where(eq(baseTable.id, newTable.id));
 
 			// Create a default "Grid view" for the new table
 			await ctx.db.insert(tableView).values({
@@ -764,10 +790,13 @@ export const baseRouter = createTRPCRouter({
 					});
 				}
 
+				// Fetch table record with columns in a single query (saves a
+				// DB round trip vs separate fetches for auth + columns).
 				const tableRecord = await ctx.db.query.baseTable.findFirst({
 					where: eq(baseTable.id, input.tableId),
 					with: {
 						base: true,
+						columns: true,
 					},
 				});
 
@@ -775,12 +804,10 @@ export const baseRouter = createTRPCRouter({
 					throw new TRPCError({ code: "NOT_FOUND" });
 				}
 
-				const rowCount = await ctx.db
-					.select({ count: sql<number>`count(*)::int` })
-					.from(tableRow)
-					.where(eq(tableRow.tableId, input.tableId));
-
-				const currentCount = Number(rowCount[0]?.count ?? 0);
+				// Use cached row_count column instead of expensive COUNT(*) scan.
+				// COUNT(*) over 100k-500k JSONB rows takes 0.5-5s and gets slower
+				// with each subsequent bulk insert — the #1 bottleneck for repeat use.
+				const currentCount = tableRecord.rowCount;
 				if (currentCount + input.count > MAX_ROWS) {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
@@ -790,37 +817,48 @@ export const baseRouter = createTRPCRouter({
 				markPhase("preflight");
 
 				if (input.populateWithFaker) {
-					// Optimize: defer column loading until needed
 					if (!input.ids) {
 						mode = "populate-sql";
-						// Load columns only for SQL-based population
-						const columns = await ctx.db.query.tableColumn.findMany({
-							where: eq(tableColumn.tableId, input.tableId),
-						});
-						const normalizedColumns = columns.map((column) => ({
+						const normalizedColumns = tableRecord.columns.map((column) => ({
 							id: column.id,
 							type: column.type ?? "single_line_text",
 						}));
-						markPhase("load-columns");
 
 						if (normalizedColumns.length === 0) {
 							// Insert empty rows - single batch is fastest
 							await ctx.db.execute(sql`
-								INSERT INTO table_row (id, table_id, data, search_text)
+								INSERT INTO table_row (id, table_id, data, search_text, created_at, updated_at)
 								SELECT
 									gen_random_uuid(),
 									${input.tableId}::uuid,
 									'{}'::jsonb,
-									''
+									'',
+									NOW(),
+									NOW()
 								FROM generate_series(1::int, ${sql.raw(String(input.count))}::int)
 							`);
 							markPhase("insert");
-							return { added: input.count };
+							await ctx.db.execute(sql`UPDATE base_table SET row_count = row_count + ${input.count} WHERE id = ${input.tableId}`);
+							return { added: input.count, newTotalCount: currentCount + input.count };
 						}
 
 						// Use lexicon-based data generation for UNIQUE data across all 100k rows
 						const bulkExpressions = buildBulkPopulateSqlExpressions(normalizedColumns);
-						const shouldDropIndexes = input.count >= 10_000;
+						const isBulkInsert = input.count >= 10_000;
+
+						// Only drop btree indexes when the table is small relative
+						// to the insert size. For large tables (e.g. 200k+ rows),
+						// rebuilding btree over (existing+new) rows is SLOWER than
+						// letting PostgreSQL append to the btree during INSERT
+						// (since created_at is monotonically increasing → append-only).
+						// This is the #2 bottleneck that makes each subsequent
+						// 100k insert slower.
+						const shouldDropBtreeIndexes = isBulkInsert && currentCount < input.count;
+
+						// GIN indexes are always expensive to maintain during bulk
+						// inserts (inverted index updates per term per row), so drop
+						// them unless a rebuild is already running.
+						const shouldDropGinIndexes = isBulkInsert && !isGinRebuildRunning();
 
 						// IMPORTANT: Index drop and rebuild are kept OUTSIDE the
 						// transaction. If the Vercel function times out during a
@@ -829,17 +867,21 @@ export const baseRouter = createTRPCRouter({
 						// and INSERT separately, the rows survive a timeout during
 						// the subsequent index rebuild phase.
 
-						if (shouldDropIndexes) {
-							// Drop ALL non-primary-key indexes on table_row in parallel.
-							// GIN indexes are the single biggest bottleneck during
-							// bulk INSERT — dropping + rebuilding from scratch is
-							// dramatically faster than incremental maintenance.
-							await Promise.all([
-								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`),
-								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_created_idx`),
-								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_data_gin_idx`),
-								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_search_text_trgm_idx`),
-							]);
+						if (shouldDropBtreeIndexes || shouldDropGinIndexes) {
+							const drops: Promise<unknown>[] = [];
+							if (shouldDropBtreeIndexes) {
+								drops.push(
+									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`),
+									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_created_idx`),
+								);
+							}
+							if (shouldDropGinIndexes) {
+								drops.push(
+									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_data_gin_idx`),
+									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_search_text_trgm_idx`),
+								);
+							}
+							await Promise.all(drops);
 							markPhase("drop-indexes");
 						}
 
@@ -850,14 +892,21 @@ export const baseRouter = createTRPCRouter({
 								await tx.execute(sql`SET LOCAL work_mem = '512MB'`);
 								await tx.execute(sql`SET LOCAL maintenance_work_mem = '512MB'`);
 								await tx.execute(sql`SET LOCAL synchronous_commit = 'off'`);
+								// If GIN indexes weren't dropped, use a large pending
+								// list to buffer GIN updates during insert.
+								if (!shouldDropGinIndexes) {
+									await tx.execute(sql`SET LOCAL gin_pending_list_limit = '256MB'`);
+								}
 
 								await tx.execute(sql`
-									INSERT INTO table_row (id, table_id, data, search_text)
+									INSERT INTO table_row (id, table_id, data, search_text, created_at, updated_at)
 									SELECT
 										gen_random_uuid(),
 										${input.tableId}::uuid,
 										${bulkExpressions.dataExpression},
-										${bulkExpressions.searchTextExpression}
+										${bulkExpressions.searchTextExpression},
+										NOW(),
+										NOW()
 									FROM generate_series(1::int, ${sql.raw(String(input.count))}::int) AS series(row_num)
 								`);
 								markPhase("insert");
@@ -865,65 +914,88 @@ export const baseRouter = createTRPCRouter({
 						} finally {
 							// Always rebuild indexes — even if the INSERT failed,
 							// we dropped them above and must restore them.
-							if (shouldDropIndexes) {
-								// Btree indexes in parallel (fast, needed for pagination)
-								await Promise.all([
-									ctx.db.execute(sql`
-										CREATE INDEX IF NOT EXISTS table_row_table_idx
-										ON table_row (table_id)
-									`),
-									ctx.db.execute(sql`
-										CREATE INDEX IF NOT EXISTS table_row_table_created_idx
-										ON table_row (table_id, created_at, id)
-									`),
-								]);
-								markPhase("rebuild-btree-indexes");
+							if (shouldDropBtreeIndexes || shouldDropGinIndexes) {
+								if (shouldDropBtreeIndexes) {
+									// Btree indexes in parallel (fast, needed for pagination)
+									await Promise.all([
+										ctx.db.execute(sql`
+											CREATE INDEX IF NOT EXISTS table_row_table_idx
+											ON table_row (table_id)
+										`),
+										ctx.db.execute(sql`
+											CREATE INDEX IF NOT EXISTS table_row_table_created_idx
+											ON table_row (table_id, created_at, id)
+										`),
+									]);
+									markPhase("rebuild-btree-indexes");
+								}
 
-								// Defer GIN index rebuilds to run AFTER the response is sent.
-								// GIN indexes are the dominant bottleneck (~30-120s for 100k rows)
-								// but are only needed for search/filter, not basic pagination.
-								// Using next/server after() ensures the callback completes even
-								// on serverless platforms like Vercel.
-								after(async () => {
-									const ginStart = process.hrtime.bigint();
-									try {
-										await Promise.all([
-											ctx.db.execute(sql`
-												CREATE INDEX IF NOT EXISTS table_row_data_gin_idx
+								if (shouldDropGinIndexes) {
+									ginRebuildInProgress = true;
+									ginRebuildStartedAt = Date.now();
+									after(async () => {
+										const ginStart = process.hrtime.bigint();
+										try {
+											// Clean up any invalid indexes from previous
+											// failed concurrent builds.
+											await ctx.db.execute(sql`
+												DO $$ BEGIN
+													PERFORM 1 FROM pg_index i
+													JOIN pg_class c ON c.oid = i.indexrelid
+													WHERE c.relname = 'table_row_data_gin_idx'
+													AND NOT i.indisvalid;
+													IF FOUND THEN
+														EXECUTE 'DROP INDEX table_row_data_gin_idx';
+													END IF;
+													PERFORM 1 FROM pg_index i
+													JOIN pg_class c ON c.oid = i.indexrelid
+													WHERE c.relname = 'table_row_search_text_trgm_idx'
+													AND NOT i.indisvalid;
+													IF FOUND THEN
+														EXECUTE 'DROP INDEX table_row_search_text_trgm_idx';
+													END IF;
+												END $$;
+											`);
+											// Use CONCURRENTLY to avoid holding a SHARE
+											// lock that blocks all writes for 30-120s.
+											// Sequential to avoid conflicting concurrent
+											// builds on the same table.
+											await ctx.db.execute(sql`
+												CREATE INDEX CONCURRENTLY IF NOT EXISTS table_row_data_gin_idx
 												ON table_row USING gin (data)
-											`),
-											ctx.db.execute(sql`
-												CREATE INDEX IF NOT EXISTS table_row_search_text_trgm_idx
+											`);
+											await ctx.db.execute(sql`
+												CREATE INDEX CONCURRENTLY IF NOT EXISTS table_row_search_text_trgm_idx
 												ON table_row USING gin (search_text gin_trgm_ops)
-											`),
-										]);
-										const ginMs = roundMilliseconds(
-											nanosecondsToMilliseconds(process.hrtime.bigint() - ginStart),
-										);
-										console.info("[base.addRows] GIN indexes rebuilt", {
-											ginMs,
-											tableId: input.tableId,
-											count: input.count,
-										});
-									} catch (error) {
-										console.error("[base.addRows] GIN index rebuild failed:", error);
-									}
-								});
+											`);
+											const ginMs = roundMilliseconds(
+												nanosecondsToMilliseconds(process.hrtime.bigint() - ginStart),
+											);
+											console.info("[base.addRows] GIN indexes rebuilt", {
+												ginMs,
+												tableId: input.tableId,
+												count: input.count,
+											});
+										} catch (error) {
+											console.error("[base.addRows] GIN index rebuild failed:", error);
+										} finally {
+											ginRebuildInProgress = false;
+											ginRebuildStartedAt = 0;
+										}
+									});
+								}
 							}
 						}
 
-						return { added: input.count };
+						await ctx.db.execute(sql`UPDATE base_table SET row_count = row_count + ${input.count} WHERE id = ${input.tableId}`);
+						return { added: input.count, newTotalCount: currentCount + input.count };
 					}
 
-					// Load columns only when using JS-based population with explicit IDs
-					const columns = await ctx.db.query.tableColumn.findMany({
-						where: eq(tableColumn.tableId, input.tableId),
-					});
-					const normalizedColumns = columns.map((column) => ({
+					// Columns already loaded with tableRecord above
+					const normalizedColumns = tableRecord.columns.map((column) => ({
 						id: column.id,
 						type: column.type ?? "single_line_text",
 					}));
-					markPhase("load-columns");
 
 					mode = "populate-js";
 					await ctx.db.transaction(async (tx) => {
@@ -957,7 +1029,8 @@ export const baseRouter = createTRPCRouter({
 						}
 					});
 					markPhase("insert");
-					return { added: input.count };
+					await ctx.db.execute(sql`UPDATE base_table SET row_count = row_count + ${input.count} WHERE id = ${input.tableId}`);
+					return { added: input.count, newTotalCount: currentCount + input.count };
 				}
 
 				// Use PostgreSQL generate_series for bulk insert in a single query.
@@ -987,7 +1060,8 @@ export const baseRouter = createTRPCRouter({
 					`);
 				}
 				markPhase("insert");
-				return { added: input.count };
+				await ctx.db.execute(sql`UPDATE base_table SET row_count = row_count + ${input.count} WHERE id = ${input.tableId}`);
+				return { added: input.count, newTotalCount: currentCount + input.count };
 			} catch (error) {
 				errorCode = error instanceof TRPCError ? error.code : "INTERNAL_ERROR";
 				if (error instanceof Error) {
@@ -1363,12 +1437,7 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
-			const rowCount = await ctx.db
-				.select({ count: sql<number>`count(*)::int` })
-				.from(tableRow)
-				.where(eq(tableRow.tableId, rowRecord.tableId));
-
-			if (Number(rowCount[0]?.count ?? 0) <= 1) {
+			if (rowRecord.table.rowCount <= 1) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: "At least one row is required.",
@@ -1376,6 +1445,7 @@ export const baseRouter = createTRPCRouter({
 			}
 
 			await ctx.db.delete(tableRow).where(eq(tableRow.id, input.rowId));
+			await ctx.db.execute(sql`UPDATE base_table SET row_count = row_count - 1 WHERE id = ${rowRecord.tableId}`);
 			return { success: true };
 		}),
 
@@ -1487,16 +1557,10 @@ export const baseRouter = createTRPCRouter({
 						? legacySort
 						: null;
 
-			const [columns, rowCount] = await Promise.all([
-				ctx.db.query.tableColumn.findMany({
-					where: eq(tableColumn.tableId, input.tableId),
-					orderBy: (column, { asc }) => [asc(column.createdAt)],
-				}),
-				ctx.db
-					.select({ count: sql<number>`count(*)::int` })
-					.from(tableRow)
-				.where(eq(tableRow.tableId, input.tableId)),
-			]);
+			const columns = await ctx.db.query.tableColumn.findMany({
+				where: eq(tableColumn.tableId, input.tableId),
+				orderBy: (column, { asc }) => [asc(column.createdAt)],
+			});
 			const columnIdSet = new Set(columns.map((column) => column.id));
 			const nameColumnId =
 				columns.find((column) => column.name === "Name")?.id ?? null;
@@ -1520,7 +1584,7 @@ export const baseRouter = createTRPCRouter({
 					name: column.name,
 					type: column.type ?? "single_line_text",
 				})),
-				rowCount: Number(rowCount[0]?.count ?? 0),
+				rowCount: tableRecord.rowCount,
 				sort: visibleSort && visibleSort.length > 0 ? visibleSort : null,
 				hiddenColumnIds,
 				searchQuery: tableRecord.searchQuery ?? "",
@@ -1643,6 +1707,24 @@ export const baseRouter = createTRPCRouter({
 
 				const filterColumnsById = allColumnsById;
 
+				// Collect "contains" search terms for trigram pre-filtering.
+				// search_text has a GIN trigram index — using it as a pre-filter
+				// lets Postgres quickly eliminate non-matching rows before the
+				// expensive per-column JSONB ->> extraction.
+				const containsSearchTerms: string[] = [];
+				const collectContainsTerms = (items: typeof input.filter.items) => {
+					for (const item of items) {
+						if (item.type === "condition") {
+							if (item.operator === "contains" && item.value?.trim()) {
+								containsSearchTerms.push(item.value.trim());
+							}
+						} else {
+							collectContainsTerms(item.conditions);
+						}
+					}
+				};
+				collectContainsTerms(input.filter.items);
+
 				const buildConditionExpression = (
 					condition: z.infer<typeof filterConditionSchema>,
 				): SqlExpression | null => {
@@ -1677,9 +1759,12 @@ export const baseRouter = createTRPCRouter({
 							case "does_not_contain":
 								return sql<boolean>`${textValue} NOT ILIKE ${`%${trimmedValue}%`}`;
 							case "is":
-								return sql<boolean>`${textValue} = ${trimmedValue}`;
+								// Use JSONB containment (@>) to leverage the GIN index
+								// instead of extracting text with ->> for every row.
+								return sql<boolean>`${tableRow.data} @> ${JSON.stringify({ [condition.columnId]: trimmedValue })}::jsonb`;
 							case "is_not":
-								return sql<boolean>`${textValue} <> ${trimmedValue}`;
+								// NOT containment — GIN index still narrows the scan
+								return sql<boolean>`NOT (${tableRow.data} @> ${JSON.stringify({ [condition.columnId]: trimmedValue })}::jsonb)`;
 							case "is_empty":
 								return sql<boolean>`${textValue} = ''`;
 							case "is_not_empty":
@@ -1699,9 +1784,12 @@ export const baseRouter = createTRPCRouter({
 					}
 					const numericInput = Number(trimmedValue);
 					if (Number.isNaN(numericInput)) return null;
+					// For "eq", use JSONB containment to leverage the GIN index.
+					// Numbers are stored as strings in JSONB, so match the string form.
+					if (operator === "eq") {
+						return sql<boolean>`${tableRow.data} @> ${JSON.stringify({ [condition.columnId]: trimmedValue })}::jsonb`;
+					}
 					switch (operator) {
-						case "eq":
-							return sql<boolean>`${numericValue} = ${numericInput}`;
 						case "neq":
 							return sql<boolean>`${numericValue} <> ${numericInput}`;
 						case "lt":
@@ -1751,6 +1839,22 @@ export const baseRouter = createTRPCRouter({
 					topLevelConditions,
 					input.filter.connector,
 				);
+
+				// Build trigram pre-filter: for AND connector, ALL contains terms
+				// must appear in search_text. For OR connector, ANY term suffices.
+				// This pre-filter uses the trigram GIN index on search_text to
+				// rapidly narrow down candidate rows before per-column extraction.
+				if (containsSearchTerms.length > 0 && filterExpression) {
+					const trigramConditions = containsSearchTerms.map(
+						(term) => sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${term}%`}`
+					);
+					const trigramPreFilter = input.filter.connector === "or"
+						? or(...trigramConditions)
+						: and(...trigramConditions);
+					if (trigramPreFilter) {
+						filterExpression = and(filterExpression, trigramPreFilter) ?? filterExpression;
+					}
+				}
 			}
 
 			const rawSearch = input.search ?? "";
@@ -1818,15 +1922,16 @@ export const baseRouter = createTRPCRouter({
 				? rawWhereFragments[0]!
 				: sql.join(rawWhereFragments, sql` AND `);
 
-			// Use raw SQL with subquery for ALL queries (sorted and unsorted).
-			// The subquery sorts/paginates only IDs (much smaller tuples ~50 bytes
-			// vs ~2KB with full JSONB data), then joins back for the result data.
-			// For sorted queries on 100k rows, this reduces sort memory ~40×.
-			// Boost work_mem to ensure in-memory quicksort instead of disk-based
-			// external merge sort.
-			const needsWorkMemBoost = effectiveSorts.length > 0;
+			// Query strategy:
+			// - Simple case (no sort, no filter, no search): direct query avoids
+			//   the subquery self-join overhead, letting Postgres use a simple
+			//   index scan on (table_id, created_at, id).
+			// - Complex case (sort/filter/search): subquery paginates only IDs
+			//   (~50 bytes each) then joins back for full JSONB data, reducing
+			//   sort memory ~40×.  work_mem is boosted for in-memory quicksort.
+			const needsSubquery = effectiveSorts.length > 0 || !!filterExpression || !!input.search;
 
-			const rowsQuery = needsWorkMemBoost
+			const rowsQuery = needsSubquery
 				? ctx.db.transaction(async (tx) => {
 						await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
 						return tx.execute(sql`
@@ -1843,26 +1948,43 @@ export const baseRouter = createTRPCRouter({
 						`);
 					})
 				: ctx.db.execute(sql`
-						SELECT t.id, t.data
-						FROM table_row t
-						INNER JOIN (
-							SELECT id FROM table_row
-							WHERE ${rawWhereClause}
-							ORDER BY ${orderByFragment}
-							LIMIT ${input.limit}
-							OFFSET ${offset}
-						) s ON t.id = s.id
+						SELECT id, data FROM table_row
+						WHERE ${rawWhereClause}
 						ORDER BY ${orderByFragment}
+						LIMIT ${input.limit}
+						OFFSET ${offset}
 					`);
+
+			// Only compute count(*) on the first page AND only when
+			// filters/search are active (filtered count differs from total).
+			// For unfiltered queries the client already has the total row count
+			// from getTableMeta, so the expensive count scan is skipped entirely
+			// — this removes ~30-200ms of blocking latency on initial page load.
+			const isFirstPage = offset === 0;
+			const hasFiltersOrSearch = !!filterExpression || !!input.search;
+
+			// Cap filtered count at 100,001 to avoid expensive full-table scans.
+			// For very large filtered result sets (>100k matches), counting every
+			// row can take 200-500ms. The subquery LIMIT stops scanning early.
+			const MAX_FILTERED_COUNT = 100_001;
+			const countQuery = (isFirstPage && hasFiltersOrSearch)
+				? ctx.db.execute(sql`SELECT count(*)::int as "count" FROM (SELECT 1 FROM table_row WHERE ${rawWhereClause} LIMIT ${MAX_FILTERED_COUNT}) sub`)
+				: null;
 
 			const [rawResult, totalCountResult] = await Promise.all([
 				rowsQuery,
-				ctx.db.select({ count: sql<number>`count(*)::int` }).from(tableRow).where(whereClause),
+				countQuery,
 			]);
 
 			const fastRows = [...rawResult] as Array<{ id: string; data: Record<string, string> | null }>;
 			const nextCursor =
 				fastRows.length === input.limit ? offset + fastRows.length : null;
+
+			let totalCount = -1;
+			if (totalCountResult) {
+				const countRows = [...totalCountResult] as Array<{ count: number }>;
+				totalCount = Number(countRows[0]?.count ?? 0);
+			}
 
 			return {
 				rows: fastRows.map((row) => ({
@@ -1870,7 +1992,7 @@ export const baseRouter = createTRPCRouter({
 					data: row.data ?? {},
 				})),
 				nextCursor,
-				totalCount: Number(totalCountResult[0]?.count ?? 0),
+				totalCount,
 			};
 		}),
 
@@ -1894,7 +2016,7 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
-			const [columns, rows, rowCount] = await Promise.all([
+			const [columns, rows] = await Promise.all([
 				ctx.db.query.tableColumn.findMany({
 					where: eq(tableColumn.tableId, input.tableId),
 					orderBy: (column, { asc }) => [asc(column.createdAt)],
@@ -1905,10 +2027,6 @@ export const baseRouter = createTRPCRouter({
 					limit: input.limit,
 					offset: input.offset,
 				}),
-				ctx.db
-					.select({ count: sql<number>`count(*)::int` })
-					.from(tableRow)
-				.where(eq(tableRow.tableId, input.tableId)),
 			]);
 			const columnIdSet = new Set(columns.map((column) => column.id));
 			const nameColumnId =
@@ -1934,7 +2052,7 @@ export const baseRouter = createTRPCRouter({
 					id: row.id,
 					data: row.data ?? {},
 				})),
-				rowCount: Number(rowCount[0]?.count ?? 0),
+				rowCount: tableRecord.rowCount,
 				hiddenColumnIds,
 			};
 		}),
@@ -2035,7 +2153,7 @@ export const baseRouter = createTRPCRouter({
 					searchQuery: null,
 					filterConfig: null,
 				})
-				.returning({ id: tableView.id, name: tableView.name });
+				.returning({ id: tableView.id, name: tableView.name, tableId: tableView.tableId });
 
 			if (!newView) {
 				throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -2200,23 +2318,38 @@ export const baseRouter = createTRPCRouter({
 				throw new TRPCError({ code: "NOT_FOUND" });
 			}
 
+			const sortConfig = Array.isArray(viewRecord.sortConfig) ? viewRecord.sortConfig : [];
+			const hiddenColumnIds = Array.isArray(viewRecord.hiddenColumnIds) ? viewRecord.hiddenColumnIds : [];
+			const searchQuery = viewRecord.searchQuery ?? null;
+			const filterConfig = viewRecord.filterConfig ?? null;
+
 			const [newView] = await ctx.db
 				.insert(tableView)
 				.values({
 					id: createId(),
 					tableId: viewRecord.tableId,
 					name: input.name ?? `${viewRecord.name} copy`,
-					sortConfig: viewRecord.sortConfig ?? [],
-					hiddenColumnIds: viewRecord.hiddenColumnIds ?? [],
-					searchQuery: viewRecord.searchQuery,
-					filterConfig: viewRecord.filterConfig,
+					sortConfig,
+					hiddenColumnIds,
+					searchQuery,
+					filterConfig,
 				})
-				.returning({ id: tableView.id, name: tableView.name });
+				.returning({
+					id: tableView.id,
+					name: tableView.name,
+					tableId: tableView.tableId,
+				});
 
 			if (!newView) {
 				throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 			}
 
-			return newView;
+			return {
+				...newView,
+				sortConfig,
+				hiddenColumnIds,
+				searchQuery: searchQuery ?? "",
+				filterConfig,
+			};
 		}),
 });

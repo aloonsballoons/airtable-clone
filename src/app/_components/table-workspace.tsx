@@ -84,6 +84,126 @@ const STATUS_HEADER_ICON_SIZE = 13 * STATUS_ICON_SCALE;
 
 const REQUIRED_COLUMNS = ["Name", "Notes", "Assignee", "Status", "Attachments"];
 
+// Operators that don't require a value input
+const VALUELESS_FILTER_OPS = new Set(["is_empty", "is_not_empty"]);
+
+/**
+ * Build the rows query input from a view's config for prefetching.
+ * Converts the view's storage-format filter config to the query format
+ * used by getRows, filters sorts by hidden columns, and includes search.
+ * This allows starting the row fetch immediately on view switch/hover
+ * rather than waiting for hooks to absorb the new config.
+ */
+function buildRowsPrefetchInput(
+  tableId: string,
+  viewConfig: {
+    sortConfig?: unknown;
+    searchQuery?: string | null;
+    filterConfig?: unknown;
+    hiddenColumnIds?: unknown;
+  },
+) {
+  type SortItem = { columnId: string; direction: "asc" | "desc" };
+  type QueryCondition = { type: "condition"; columnId: string; operator: string; value: string };
+  type QueryGroup = { type: "group"; connector: "and" | "or"; conditions: QueryCondition[] };
+
+  const input: {
+    tableId: string;
+    limit: number;
+    sort?: SortItem[];
+    filter?: RouterInputs["base"]["getRows"]["filter"];
+    search?: string;
+  } = { tableId, limit: PAGE_ROWS };
+
+  const hiddenIds = Array.isArray(viewConfig.hiddenColumnIds)
+    ? (viewConfig.hiddenColumnIds as string[])
+    : [];
+  const hiddenSet = new Set(hiddenIds);
+
+  // Sort: include only sorts for visible (non-hidden) columns
+  const sort = viewConfig.sortConfig;
+  if (Array.isArray(sort) && sort.length > 0) {
+    const visibleSort = (sort as SortItem[]).filter(
+      (s) => s?.columnId && !hiddenSet.has(s.columnId),
+    );
+    if (visibleSort.length > 0) {
+      input.sort = visibleSort;
+    }
+  }
+
+  // Search
+  if (viewConfig.searchQuery) {
+    input.search = viewConfig.searchQuery;
+  }
+
+  // Filter: convert storage format (with id/type fields) to query format
+  type FC = {
+    connector?: "and" | "or";
+    items?: Array<{
+      type?: string;
+      columnId?: string | null;
+      operator?: string;
+      value?: string;
+      connector?: "and" | "or";
+      conditions?: Array<{
+        type?: string;
+        columnId?: string | null;
+        operator?: string;
+        value?: string;
+      }>;
+    }>;
+  };
+  const fc = viewConfig.filterConfig as FC | null;
+  if (fc?.items && fc.items.length > 0) {
+    const normalizeCondition = (
+      item: NonNullable<FC["items"]>[number],
+    ): QueryCondition | null => {
+      if (item.type !== "condition" || !item.columnId || !item.operator) return null;
+      if (hiddenSet.has(item.columnId)) return null;
+      const trimmedValue = (item.value ?? "").trim();
+      if (!VALUELESS_FILTER_OPS.has(item.operator) && !trimmedValue) return null;
+      return {
+        type: "condition",
+        columnId: item.columnId,
+        operator: item.operator,
+        value: trimmedValue,
+      };
+    };
+
+    const items: Array<QueryCondition | QueryGroup> = [];
+    for (const item of fc.items) {
+      if (item.type === "condition") {
+        const normalized = normalizeCondition(item);
+        if (normalized) items.push(normalized);
+      } else if (item.type === "group" && item.conditions) {
+        const groupConditions: QueryCondition[] = [];
+        for (const child of item.conditions) {
+          const normalized = normalizeCondition(
+            child as NonNullable<FC["items"]>[number],
+          );
+          if (normalized) groupConditions.push(normalized);
+        }
+        if (groupConditions.length > 0) {
+          items.push({
+            type: "group",
+            connector: (item.connector ?? "and") as "and" | "or",
+            conditions: groupConditions,
+          });
+        }
+      }
+    }
+
+    if (items.length > 0) {
+      input.filter = {
+        connector: (fc.connector ?? "and") as "and" | "or",
+        items,
+      } as RouterInputs["base"]["getRows"]["filter"];
+    }
+  }
+
+  return input;
+}
+
 type ColumnFieldType = "single_line_text" | "long_text" | "number";
 
 const coerceColumnType = (value?: string | null): ColumnFieldType =>
@@ -301,9 +421,19 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
 
   // Ensure existing tables have at least one view (migration for pre-view tables)
   const ensureDefaultViewMutation = api.base.ensureDefaultView.useMutation({
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       if (result.created) {
-        await utils.base.get.invalidate({ baseId });
+        // Seed the getView cache for the newly created default view
+        utils.base.getView.setData({ viewId: result.id }, {
+          id: result.id,
+          name: result.name,
+          sortConfig: [],
+          hiddenColumnIds: [],
+          searchQuery: "",
+          filterConfig: null,
+        });
+        // Background-invalidate to reconcile with the server (non-blocking).
+        void utils.base.get.invalidate({ baseId });
       }
       // Select the (possibly newly created) default view
       if (!activeViewId || activeViewId === "pending-view") {
@@ -339,12 +469,52 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       // Immediately select the pending view so the sidebar highlights it
       setActiveViewId("pending-view");
     },
-    onSuccess: async (newView) => {
-      // Refresh the base query which now includes views
-      await utils.base.get.invalidate({ baseId });
-      // Switch to the newly created real view
+    onSuccess: (newView) => {
+      // Seed the getView cache directly — new views always have empty config,
+      // so we don't need to wait for a server round-trip.
+      utils.base.getView.setData({ viewId: newView.id }, {
+        id: newView.id,
+        name: newView.name,
+        sortConfig: [],
+        hiddenColumnIds: [],
+        searchQuery: "",
+        filterConfig: null,
+      });
+
+      // Optimistically add the new view to the base.get cache so the sidebar
+      // updates instantly without a full refetch.
+      utils.base.get.setData({ baseId }, (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tables: prev.tables.map((table) =>
+            table.id === newView.tableId
+              ? {
+                  ...table,
+                  views: [
+                    ...table.views,
+                    {
+                      id: newView.id,
+                      name: newView.name,
+                      sortConfig: [],
+                      hiddenColumnIds: [],
+                      searchQuery: "",
+                      filterConfig: null,
+                    },
+                  ],
+                }
+              : table
+          ),
+        };
+      });
+
+      // Switch to the newly created real view — getView is already cached above,
+      // so hooks will pick it up immediately without a network request.
       setActiveViewId(newView.id);
       setPendingViewName(null);
+
+      // Background-invalidate to reconcile with the server (non-blocking).
+      void utils.base.get.invalidate({ baseId });
     },
     onError: () => {
       setIsViewSwitching(false);
@@ -383,8 +553,14 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         utils.base.getView.setData({ viewId: context.viewId }, context.previous);
       }
     },
-    onSettled: async (_data, _error, variables) => {
-      await utils.base.getView.invalidate({ viewId: variables.viewId });
+    onSettled: (_data, error, variables) => {
+      // Only refetch on error to reconcile with the server.
+      // On success the optimistic update from onMutate is already accurate,
+      // and an immediate refetch can race with the batch-streamed response
+      // causing a brief flicker (stale data overwrites the optimistic state).
+      if (error) {
+        void utils.base.getView.invalidate({ viewId: variables.viewId });
+      }
     },
   });
 
@@ -407,8 +583,29 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     utils.base.list.prefetch();
   }, [utils.base.list]);
 
+  // Seed the getView cache for all views from base.get data — eliminates
+  // the separate getView network call on initial load and view switches.
+  const seededBaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!baseDetailsQuery.data || seededBaseRef.current === baseDetailsQuery.data.id) return;
+    seededBaseRef.current = baseDetailsQuery.data.id;
+    for (const table of baseDetailsQuery.data.tables) {
+      for (const view of table.views) {
+        utils.base.getView.setData({ viewId: view.id }, {
+          id: view.id,
+          name: view.name,
+          sortConfig: view.sortConfig,
+          hiddenColumnIds: view.hiddenColumnIds,
+          searchQuery: view.searchQuery,
+          filterConfig: view.filterConfig,
+        });
+      }
+    }
+  }, [baseDetailsQuery.data, utils.base.getView]);
+
   // Prefetch the first table's meta and rows as soon as base details load
   // so the data is ready by the time activeTableId is set.
+  // Now includes view params so the rows cache key matches the actual query.
   useEffect(() => {
     const tables = baseDetailsQuery.data?.tables;
     if (!tables?.length) return;
@@ -422,14 +619,34 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     }
     if (!targetId) return;
 
-    void utils.base.getTableMeta.prefetch({ tableId: targetId }, { staleTime: 10_000 });
-    void utils.base.getRows.prefetchInfinite(
-      { tableId: targetId, limit: PAGE_ROWS },
-      { staleTime: 10_000 }
-    );
+    void utils.base.getTableMeta.prefetch({ tableId: targetId }, { staleTime: 30_000 });
+
+    // Determine the likely view and its config for view-aware row prefetch
+    const targetTable = tables.find((t) => t.id === targetId);
+    let targetView: (typeof tables)[number]["views"][number] | undefined;
+    try {
+      const storedViewId = window.localStorage.getItem(getLastViewedViewKey(targetId));
+      if (storedViewId && isValidUUID(storedViewId)) {
+        targetView = targetTable?.views.find((v) => v.id === storedViewId);
+      }
+    } catch { /* ignore */ }
+    if (!targetView && targetTable?.views[0]) {
+      targetView = targetTable.views[0];
+    }
+
+    // Build rows query key from view config so the cache key matches the actual query.
+    // Uses the shared helper for consistent filter/sort/search normalization.
+    const rowsInput = targetView
+      ? buildRowsPrefetchInput(targetId, targetView)
+      : { tableId: targetId, limit: PAGE_ROWS };
+    void utils.base.getRows.prefetchInfinite(rowsInput, { staleTime: 30_000 });
   }, [baseDetailsQuery.data?.tables, preferredTableId, utils.base.getTableMeta, utils.base.getRows]);
 
-  // Update favicon when base name changes
+  // Update favicon when base name changes.
+  // We only manage our own link element (tracked via data-dynamic-favicon).
+  // Never remove links managed by Next.js — doing so causes "Cannot read
+  // properties of null (reading 'removeChild')" when React tries to
+  // reconcile nodes we already removed from the DOM.
   useEffect(() => {
     const baseName = baseDetailsQuery.data?.name;
     if (!baseName) return;
@@ -437,31 +654,29 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     const initials = formatInitials(baseName);
     const faviconUrl = `/api/favicon?initials=${encodeURIComponent(initials)}&v=${Date.now()}`;
 
-    // Remove all existing favicon links (including Next.js-managed ones)
-    document.querySelectorAll<HTMLLinkElement>("link[rel*='icon']").forEach((l) => l.remove());
-
-    // Create a fresh link element so the browser picks up the change
-    const link = document.createElement("link");
-    link.rel = "icon";
-    link.type = "image/svg+xml";
+    // Reuse our existing dynamic link if present, otherwise create one
+    let link = document.querySelector<HTMLLinkElement>("link[data-dynamic-favicon]");
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      link.type = "image/svg+xml";
+      link.setAttribute("data-dynamic-favicon", "true");
+      document.head.appendChild(link);
+    }
     link.href = faviconUrl;
-    link.setAttribute("data-dynamic-favicon", "true");
-    document.head.appendChild(link);
 
-    // Cleanup: restore default favicon when unmounting
+    // Cleanup: remove only our own link
     return () => {
-      document.querySelectorAll<HTMLLinkElement>("link[data-dynamic-favicon]").forEach((l) => l.remove());
-      const defaultLink = document.createElement("link");
-      defaultLink.rel = "icon";
-      defaultLink.type = "image/svg+xml";
-      defaultLink.href = "/logo.svg";
-      document.head.appendChild(defaultLink);
+      const dynamicLink = document.querySelector<HTMLLinkElement>("link[data-dynamic-favicon]");
+      if (dynamicLink?.parentNode) {
+        dynamicLink.parentNode.removeChild(dynamicLink);
+      }
     };
   }, [baseDetailsQuery.data?.name]);
 
   const tableMetaQuery = api.base.getTableMeta.useQuery(
     isValidTableId(activeTableId) ? { tableId: activeTableId } : skipToken,
-    { staleTime: 10_000 }
+    { staleTime: 30_000 }
   );
   useEffect(() => {
     if (tableMetaQuery.data) {
@@ -622,6 +837,8 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
           viewId: activeViewId,
           hiddenColumnIds: params.hiddenColumnIds,
         });
+      } else {
+        setHiddenColumns.mutate(params);
       }
     },
   });
@@ -658,28 +875,62 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   const getRowsQueryKeyWithoutSearch = (tableId: string) =>
     getRowsQueryKeyForSort(tableId, sortParam, false);
 
+  // Memoize the primary query key so the useInfiniteQuery hook receives a
+  // structurally-stable reference.  On the very first render after a view
+  // switch, hooks haven't absorbed the view config yet (their effects run
+  // *after* render), so the hook-derived key is still at defaults — which
+  // won't match the prefetch.  When this happens, fall back to the
+  // view-derived key (same logic as buildRowsPrefetchInput) so the first
+  // render immediately hits the prefetch cache, shaving 1-2 render cycles
+  // off the skeleton → data transition.
+  const hooksAtDefaults = sortParam.length === 0 && !filterInput && !hasSearchQuery;
+  const memoizedRowsQueryKey = useMemo(() => {
+    if (!isValidTableId(activeTableId)) return null;
+    // When hooks are still at defaults but the view has config, derive the
+    // key from view data to match the prefetch cache key.
+    if (hooksAtDefaults && activeViewQuery.data) {
+      const vd = activeViewQuery.data;
+      const hasViewSort = Array.isArray(vd.sortConfig) && vd.sortConfig.length > 0;
+      const hasViewSearch = !!(vd.searchQuery);
+      const hasViewFilter = !!(vd.filterConfig);
+      if (hasViewSort || hasViewSearch || hasViewFilter) {
+        return buildRowsPrefetchInput(activeTableId, vd);
+      }
+    }
+    return getRowsQueryKeyForSort(activeTableId, sortParam);
+  }, [activeTableId, hooksAtDefaults, activeViewQuery.data, shouldIncludeSortInQuery, sortParam, filterInput, hasSearchQuery, searchQuery]);
+
+  const memoizedRowsQueryKeyWithoutSearch = useMemo(() => {
+    if (!isValidTableId(activeTableId) || hasSearchQuery) return null;
+    return getRowsQueryKeyForSort(activeTableId, sortParam, false);
+  }, [activeTableId, hasSearchQuery, shouldIncludeSortInQuery, sortParam, filterInput]);
+
   const rowsQuery = api.base.getRows.useInfiniteQuery(
-    isValidTableId(activeTableId) ? getRowsQueryKey(activeTableId) : skipToken,
+    memoizedRowsQueryKey ?? skipToken,
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
       // During view switches, disable placeholderData so the query starts fresh
       // without leaking filtered/sorted data from the previous view.
       placeholderData: isViewSwitching ? undefined : (previousData) => previousData,
-      staleTime: 10_000,
+      staleTime: 30_000,
     }
   );
 
   // Fallback query without search - used when search returns no results
   const rowsQueryWithoutSearch = api.base.getRows.useInfiniteQuery(
-    isValidTableId(activeTableId) && !hasSearchQuery ? getRowsQueryKeyWithoutSearch(activeTableId) : skipToken,
+    memoizedRowsQueryKeyWithoutSearch ?? skipToken,
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
       placeholderData: (previousData) => previousData,
+      staleTime: 30_000,
     }
   );
 
-  // Get the filtered row count from the first page of the query
-  const activeRowCount = rowsQuery.data?.pages[0]?.totalCount ?? totalRowCount;
+  // Get the filtered row count from the first page of the query.
+  // When count is -1 (skipped for unfiltered queries), fall back to
+  // totalRowCount from getTableMeta which is the unfiltered total.
+  const firstPageCount = rowsQuery.data?.pages[0]?.totalCount ?? -1;
+  const activeRowCount = firstPageCount >= 0 ? firstPageCount : totalRowCount;
 
   // Initialize bulk rows hook
   const bulkRowsHook = useBulkRows({
@@ -694,34 +945,6 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     },
   });
   const { handleAddBulkRows, bulkRowsDisabled, addRowsMutate, addRowsIsPending } = bulkRowsHook;
-
-  // DEBUG: Log state after bulk row mutation settles
-  const prevAddRowsPendingRef = useRef(false);
-  useEffect(() => {
-    if (prevAddRowsPendingRef.current && !addRowsIsPending) {
-      console.log("[BULK-DEBUG] Mutation settled. State:", {
-        pagesCount: rowsQuery.data?.pages?.length,
-        firstPageRowCount: rowsQuery.data?.pages?.[0]?.rows?.length,
-        firstPageTotalCount: rowsQuery.data?.pages?.[0]?.totalCount,
-        hasNextPage: rowsQuery.hasNextPage,
-        isFetching: rowsQuery.isFetching,
-        isStale: rowsQuery.isStale,
-        totalRowCount,
-        activeRowCount,
-      });
-    }
-    prevAddRowsPendingRef.current = addRowsIsPending;
-  }, [addRowsIsPending, rowsQuery.data?.pages, rowsQuery.hasNextPage, rowsQuery.isFetching, rowsQuery.isStale, totalRowCount, activeRowCount]);
-
-  // DEBUG: Log whenever rows query data changes
-  useEffect(() => {
-    console.log("[BULK-DEBUG] rowsQuery.data changed:", {
-      pagesCount: rowsQuery.data?.pages?.length,
-      firstPageRowCount: rowsQuery.data?.pages?.[0]?.rows?.length,
-      firstPageTotalCount: rowsQuery.data?.pages?.[0]?.totalCount,
-      hasNextPage: rowsQuery.hasNextPage,
-    });
-  }, [rowsQuery.data, rowsQuery.hasNextPage]);
 
   const handleCreateView = useCallback((viewName: string) => {
     if (!activeTableId) return;
@@ -765,10 +988,11 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         utils.base.get.setData({ baseId }, context.previousData);
       }
     },
-    onSettled: async (_data, _error, variables) => {
-      await utils.base.get.invalidate({ baseId });
+    onSettled: (_data, _error, variables) => {
+      // Background-invalidate to reconcile with the server (non-blocking).
+      void utils.base.get.invalidate({ baseId });
       if (isValidUUID(variables.viewId)) {
-        await utils.base.getView.invalidate({ viewId: variables.viewId });
+        void utils.base.getView.invalidate({ viewId: variables.viewId });
       }
     },
   });
@@ -794,8 +1018,9 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       setActiveViewId(remainingViews[0]?.id ?? null);
       return { previousData };
     },
-    onSuccess: async () => {
-      await utils.base.get.invalidate({ baseId });
+    onSuccess: () => {
+      // Background-invalidate to reconcile with the server (non-blocking).
+      void utils.base.get.invalidate({ baseId });
     },
     onError: (_err, _vars, context) => {
       // Revert optimistic update
@@ -812,11 +1037,48 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       if (name) setPendingViewName(name);
       setActiveViewId("pending-view");
     },
-    onSuccess: async (newView) => {
-      await utils.base.get.invalidate({ baseId });
+    onSuccess: (newView) => {
+      // Seed the getView cache with the duplicated view's full config
+      utils.base.getView.setData({ viewId: newView.id }, {
+        id: newView.id,
+        name: newView.name,
+        sortConfig: newView.sortConfig,
+        hiddenColumnIds: newView.hiddenColumnIds,
+        searchQuery: newView.searchQuery,
+        filterConfig: newView.filterConfig,
+      });
+
+      // Optimistically add the new view to base.get cache
+      utils.base.get.setData({ baseId }, (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tables: prev.tables.map((table) =>
+            table.id === newView.tableId
+              ? {
+                  ...table,
+                  views: [
+                    ...table.views,
+                    {
+                      id: newView.id,
+                      name: newView.name,
+                      sortConfig: newView.sortConfig,
+                      hiddenColumnIds: newView.hiddenColumnIds,
+                      searchQuery: newView.searchQuery,
+                      filterConfig: newView.filterConfig,
+                    },
+                  ],
+                }
+              : table
+          ),
+        };
+      });
+
       setActiveViewId(newView.id);
       setPendingViewName(null);
-      setIsViewSwitching(false);
+
+      // Background-invalidate to reconcile with the server (non-blocking).
+      void utils.base.get.invalidate({ baseId });
     },
     onError: () => {
       setIsViewSwitching(false);
@@ -855,11 +1117,32 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     setIsViewSwitching(true);
     viewDataReadyPassRef.current = 0;
     setActiveViewId(viewId);
-    // Prefetch the view data if it's a real custom view
+    // Prefetch the view data and rows if it's a real custom view.
+    // Reading the cached view config lets us start the row fetch immediately
+    // rather than waiting 2-3 render cycles for hooks to absorb the new config.
     if (isValidUUID(viewId)) {
       void utils.base.getView.prefetch({ viewId }, { staleTime: 30_000 });
+
+      if (activeTableId) {
+        const cachedView = utils.base.getView.getData({ viewId });
+        if (cachedView) {
+          const rowsInput = buildRowsPrefetchInput(activeTableId, cachedView);
+          void utils.base.getRows.prefetchInfinite(rowsInput, { staleTime: 30_000 });
+        }
+      }
     }
-  }, [utils.base.getView, hideFieldsHook, filterHook, tableSortHook, searchHook]);
+  }, [utils.base.getView, utils.base.getRows, activeTableId, hideFieldsHook, filterHook, tableSortHook, searchHook]);
+
+  // Prefetch rows when hovering over a view in the sidebar so data is
+  // often ready by the time the user clicks.
+  const handleHoverView = useCallback((viewId: string) => {
+    if (!isValidUUID(viewId) || !activeTableId || viewId === activeViewId) return;
+    const cachedView = utils.base.getView.getData({ viewId });
+    if (cachedView) {
+      const rowsInput = buildRowsPrefetchInput(activeTableId, cachedView);
+      void utils.base.getRows.prefetchInfinite(rowsInput, { staleTime: 30_000 });
+    }
+  }, [utils.base.getView, utils.base.getRows, activeTableId, activeViewId]);
 
   // Clear view switching state once data is loaded
   // Track the query key fingerprint (filterInput + searchQuery) so the effect
@@ -958,11 +1241,23 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
 
   // Reset view selection when switching tables — read last-viewed from localStorage
   // so the correct view is set immediately without an intermediate null cycle.
+  // Skip on initial render since the table selection effect already batches
+  // both activeTableId + activeViewId together.
+  const prevResetTableIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeTableId) {
+      prevResetTableIdRef.current = null;
       setActiveViewId(null);
       return;
     }
+    // Skip the first time this table is set — the table selection effect
+    // already set the view in the same batch.
+    if (prevResetTableIdRef.current === null) {
+      prevResetTableIdRef.current = activeTableId;
+      return;
+    }
+    if (prevResetTableIdRef.current === activeTableId) return;
+    prevResetTableIdRef.current = activeTableId;
     // Try to restore the last-viewed view for this table
     let restoredViewId: string | null = null;
     try {
@@ -1037,10 +1332,10 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
       setNewTableId(data.id);
 
       // Prefetch new table's meta and rows in parallel with the base invalidation
-      void utils.base.getTableMeta.prefetch({ tableId: data.id }, { staleTime: 10_000 });
+      void utils.base.getTableMeta.prefetch({ tableId: data.id }, { staleTime: 30_000 });
       void utils.base.getRows.prefetchInfinite(
         { tableId: data.id, limit: PAGE_ROWS },
-        { staleTime: 10_000 }
+        { staleTime: 30_000 }
       );
       await utils.base.get.invalidate({ baseId });
     },
@@ -1309,17 +1604,34 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     if (activeTableId && tables.some((table) => table.id === activeTableId)) {
       return;
     }
-    // Only use preferredTableId from localStorage if it's a valid UUID and exists in this base
+    // Determine which table to select
+    let targetTableId: string | null = null;
     if (
       isValidTableId(preferredTableId) &&
       tables.some((table) => table.id === preferredTableId)
     ) {
-      setActiveTableId(preferredTableId);
-      return;
+      targetTableId = preferredTableId;
+    } else if (tables[0]) {
+      targetTableId = tables[0].id;
     }
-    const firstTable = tables[0];
-    if (!firstTable) return;
-    setActiveTableId(firstTable.id);
+    if (!targetTableId) return;
+
+    // Determine the view for this table so both can be set in one render batch
+    const targetTable = tables.find((t) => t.id === targetTableId);
+    let viewId: string | null = null;
+    try {
+      const storedViewId = window.localStorage.getItem(getLastViewedViewKey(targetTableId));
+      if (storedViewId && isValidUUID(storedViewId) && targetTable?.views.some((v) => v.id === storedViewId)) {
+        viewId = storedViewId;
+      }
+    } catch { /* ignore */ }
+    if (!viewId && targetTable?.views[0]) {
+      viewId = targetTable.views[0].id;
+    }
+
+    // Set both in the same batch — avoids an extra render cycle
+    setActiveTableId(targetTableId);
+    setActiveViewId(viewId);
   }, [
     activeTableId,
     baseDetailsQuery.data?.tables,
@@ -2564,44 +2876,143 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     };
   }, [resizing]);
 
-  const rows = useMemo(() => {
-    // If search is active but returned no results, use the non-search query data
+  // ---------------------------------------------------------------------------
+  // Merged data pipeline — incremental single-pass transform + dedup + search
+  // ---------------------------------------------------------------------------
+  // Uses a ref to cache already-processed pages.  When new pages arrive the
+  // memo only iterates the new rows instead of re-scanning the entire dataset.
+  // For 100k loaded rows (50 pages) this avoids 100k iterations per page.
+  const normalizedSearch = searchQuery.toLowerCase();
+  const isSearchLoading = hasSearchQuery && rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
+
+  // Fingerprint that changes when the result set fundamentally changes (sort/
+  // filter/search/table/view switch).  Used to decide whether the incremental
+  // cache is still valid or needs a full reprocess.
+  const pipelineFingerprint = useMemo(
+    () => JSON.stringify({
+      t: activeTable?.id ?? null,
+      s: sortParam,
+      f: filterInput ?? null,
+      q: normalizedSearch,
+      h: hasSearchQuery,
+      af: hasActiveFilters,
+    }),
+    [activeTable?.id, sortParam, filterInput, normalizedSearch, hasSearchQuery, hasActiveFilters],
+  );
+
+  const pipelineCacheRef = useRef<{
+    fingerprint: string;
+    columnsKey: string;
+    pageCount: number;
+    data: TableRow[];
+    byId: Map<string, TableRow>;
+    seen: Set<string>;
+    searchMap: Map<string, Set<string>>;
+  } | null>(null);
+
+  const { tableData, tableDataById, loadedRowCount, baseSearchMatchesByRow } = useMemo(() => {
+    const emptyResult = {
+      tableData: [] as TableRow[],
+      tableDataById: new Map<string, TableRow>(),
+      loadedRowCount: 0,
+      baseSearchMatchesByRow: new Map<string, Set<string>>(),
+    };
+    if (!activeTable) {
+      pipelineCacheRef.current = null;
+      return emptyResult;
+    }
+
     const searchPages = rowsQuery.data?.pages ?? [];
     const hasSearchResults = searchPages.some(page => page.rows.length > 0);
     const useWithoutSearchQuery = hasSearchQuery && !hasSearchResults && !rowsQuery.isFetching && !hasActiveFilters;
-
     const pages = useWithoutSearchQuery
       ? (rowsQueryWithoutSearch.data?.pages ?? [])
       : searchPages;
 
-    const seen = new Map<string, (typeof pages)[number]["rows"][number]>();
-    const ordered: (typeof pages)[number]["rows"][number][] = [];
-    pages.forEach((page) => {
-      page.rows.forEach((row) => {
-        if (!seen.has(row.id)) {
-          seen.set(row.id, row);
-          ordered.push(row);
+    const columnsKey = orderedColumns.map(c => c.id).join(",");
+    const prev = pipelineCacheRef.current;
+
+    // Incremental path: same fingerprint + same columns + pages only grew
+    const canIncrement =
+      prev !== null &&
+      prev.fingerprint === pipelineFingerprint &&
+      prev.columnsKey === columnsKey &&
+      pages.length >= prev.pageCount &&
+      prev.pageCount > 0;
+
+    if (canIncrement && pages.length === prev.pageCount) {
+      // No new pages — return cached result (same references)
+      return {
+        tableData: prev.data,
+        tableDataById: prev.byId,
+        loadedRowCount: prev.data.length,
+        baseSearchMatchesByRow: prev.searchMap,
+      };
+    }
+
+    // Decide start: incremental from prev.pageCount, or full reprocess
+    let data: TableRow[];
+    let byId: Map<string, TableRow>;
+    let seen: Set<string>;
+    let searchMap: Map<string, Set<string>>;
+    let startPage: number;
+
+    if (canIncrement) {
+      // Clone arrays/maps so we return new references for React diffing
+      data = prev.data.slice();
+      byId = new Map(prev.byId);
+      seen = new Set(prev.seen);
+      searchMap = normalizedSearch ? new Map(prev.searchMap) : new Map();
+      startPage = prev.pageCount;
+    } else {
+      data = [];
+      byId = new Map();
+      seen = new Set();
+      searchMap = new Map();
+      startPage = 0;
+    }
+
+    for (let p = startPage; p < pages.length; p++) {
+      const page = pages[p]!;
+      for (const row of page.rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        const rawData = row.data ?? {};
+        const cells: Record<string, string> = { id: row.id };
+        let rowSearchMatches: Set<string> | null = null;
+        for (const col of orderedColumns) {
+          const val = rawData[col.id] ?? "";
+          cells[col.id] = val;
+          if (normalizedSearch && String(val).toLowerCase().includes(normalizedSearch)) {
+            if (!rowSearchMatches) rowSearchMatches = new Set();
+            rowSearchMatches.add(col.id);
+          }
         }
-      });
-    });
-    return ordered;
-  }, [rowsQuery.data?.pages, rowsQueryWithoutSearch.data?.pages, hasSearchQuery, rowsQuery.isFetching, hasActiveFilters]);
+        const tableRow = cells as TableRow;
+        data.push(tableRow);
+        byId.set(row.id, tableRow);
+        if (rowSearchMatches) searchMap.set(row.id, rowSearchMatches);
+      }
+    }
 
-  const tableData = useMemo<TableRow[]>(() => {
-    if (!activeTable) return [];
-    return rows.map((row) => {
-      const data = row.data ?? {};
-      const cells = Object.fromEntries(
-        orderedColumns.map((column) => [column.id, data[column.id] ?? ""])
-      );
-      return { id: row.id, ...cells };
-    });
-  }, [activeTable, orderedColumns, rows]);
+    // Update cache for next incremental pass
+    pipelineCacheRef.current = {
+      fingerprint: pipelineFingerprint,
+      columnsKey,
+      pageCount: pages.length,
+      data,
+      byId,
+      seen,
+      searchMap,
+    };
 
-  const tableDataById = useMemo(
-    () => new Map(tableData.map((row) => [row.id, row])),
-    [tableData],
-  );
+    return {
+      tableData: data,
+      tableDataById: byId,
+      loadedRowCount: data.length,
+      baseSearchMatchesByRow: searchMap,
+    };
+  }, [activeTable, rowsQuery.data?.pages, rowsQueryWithoutSearch.data?.pages, hasSearchQuery, rowsQuery.isFetching, hasActiveFilters, orderedColumns, normalizedSearch, pipelineFingerprint]);
 
   // ---------------------------------------------------------------------------
   // Sparse page cache — fetches arbitrary pages by offset for instant scroll
@@ -2674,33 +3085,32 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
 
   // Incremental sparse row map — only process newly arrived pages.
   // The heavy transform work already happened in processSparsePageResult;
-  // this useMemo just returns the ref and handles rows.length changes.
-  const sparseRows = useMemo(() => {
-    void sparseVersion; // react to cache updates
+  // this effect just purges entries covered by the infinite query.
+  // We pass sparseRowsMapRef.current directly (no copy) and use
+  // sparseVersion as a separate prop to trigger re-renders in TableView.
+  useEffect(() => {
     const map = sparseRowsMapRef.current;
-    const loadedCount = rows.length;
-    // Purge entries now covered by the infinite query
-    if (loadedCount > 0) {
+    if (loadedRowCount > 0) {
       for (const idx of map.keys()) {
-        if (idx < loadedCount) map.delete(idx);
+        if (idx < loadedRowCount) map.delete(idx);
       }
     }
-    // Return a new Map so React.memo consumers (TableView) detect the change.
-    // The map typically has <10k entries (visible range ± prefetch buffer),
-    // so the shallow copy is cheap (~1-2ms).
-    return new Map(map);
-  }, [sparseVersion, rows.length]);
+  }, [sparseVersion, loadedRowCount]);
+
+  // Stable reference to the mutable sparse map — no copying needed.
+  // TableView uses sparseVersion (passed as a separate prop) to know
+  // when to re-read from this map.
+  const sparseRows = sparseRowsMapRef.current;
 
   // Callback for TableView to request data for a visible row range.
   // Fetches any pages that aren't already loaded by the infinite query or sparse cache.
   const handleVisibleRangeChange = useCallback(
     (startIndex: number, endIndex: number) => {
       if (!isValidTableId(activeTableId)) return;
-      const loadedCount = rows.length;
       // Only need sparse fetch for rows beyond what infinite query has loaded
-      if (endIndex < loadedCount) return;
+      if (endIndex < loadedRowCount) return;
 
-      const effectiveStart = Math.max(startIndex, loadedCount);
+      const effectiveStart = Math.max(startIndex, loadedRowCount);
       const startPage = Math.floor(effectiveStart / SPARSE_PAGE_ROWS);
       const endPage = Math.floor(endIndex / SPARSE_PAGE_ROWS);
 
@@ -2735,32 +3145,52 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         })();
       }
     },
-    [activeTableId, rows.length, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult],
+    [activeTableId, loadedRowCount, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult],
   );
 
   // ---------------------------------------------------------------------------
   // Background progressive pre-fetch — gradually cache ALL sparse pages so
   // scrolling to any position finds data ready immediately.
+  // Uses smaller batches and longer pauses to avoid saturating the browser's
+  // connection pool (6 per host) so on-demand fetches for the visible range
+  // aren't queued behind background work.
+  //
+  // activeRowCount is read from a ref so that changes to it don't restart the
+  // entire fetch loop (which would cancel in-flight requests and re-fire them,
+  // producing a storm of `base.getRows` queries visible in the console).
   // ---------------------------------------------------------------------------
+  const activeRowCountRef = useRef(activeRowCount);
+  activeRowCountRef.current = activeRowCount;
+
   useEffect(() => {
-    if (!isValidTableId(activeTableId) || activeRowCount <= 0) return;
+    if (!isValidTableId(activeTableId)) return;
 
     const state = { cancelled: false };
 
     const fetchAll = async () => {
-      // Brief settle before starting background work
-      await new Promise((r) => setTimeout(r, 200));
+      // Let initial render and on-demand fetches settle first
+      await new Promise((r) => setTimeout(r, 500));
       if (state.cancelled) return;
 
-      const totalPages = Math.ceil(activeRowCount / SPARSE_PAGE_ROWS);
-      // Aggressively parallel batches to fill cache before user scrolls
-      const BATCH_SIZE = 10;
+      // Read row count at start of loop; it may update while we run but
+      // we will pick up the latest value on the next param-change restart.
+      const rowCount = activeRowCountRef.current;
+      if (rowCount <= 0) return;
+
+      const totalPages = Math.ceil(rowCount / SPARSE_PAGE_ROWS);
+      // Smaller batches to leave connection headroom for on-demand fetches
+      const BATCH_SIZE = 3;
 
       for (let batchStart = 0; batchStart < totalPages && !state.cancelled; batchStart += BATCH_SIZE) {
+        // Pause if on-demand fetches are in-flight so they aren't starved
+        while (sparseFetchingRef.current.size > 0 && !state.cancelled) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        if (state.cancelled) break;
+
         const batch: Promise<void>[] = [];
         for (let j = 0; j < BATCH_SIZE && batchStart + j < totalPages; j++) {
           const page = batchStart + j;
-          // Skip pages already in cache or currently being fetched
           if (sparsePagesRef.current.has(page) || sparseFetchingRef.current.has(page)) {
             continue;
           }
@@ -2790,9 +3220,9 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         if (batch.length > 0) {
           await Promise.all(batch);
         }
-        // Minimal pause between batches
+        // Longer pause between batches to yield to on-demand and UI work
         if (!state.cancelled) {
-          await new Promise((r) => setTimeout(r, 10));
+          await new Promise((r) => setTimeout(r, 100));
         }
       }
     };
@@ -2802,32 +3232,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     return () => {
       state.cancelled = true;
     };
-  }, [activeTableId, activeRowCount, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult]);
-
-  const normalizedSearch = searchQuery.toLowerCase();
-  const isSearchLoading = hasSearchQuery && rowsQuery.isFetching && !rowsQuery.isFetchingNextPage;
-  // Base search: O(rows × columns) but does NOT depend on cellEdits, so it
-  // only reruns when the search query or underlying data changes.
-  const baseSearchMatchesByRow = useMemo(() => {
-    if (!normalizedSearch) return new Map<string, Set<string>>();
-    const matches = new Map<string, Set<string>>();
-    tableData.forEach((row) => {
-      let rowMatches: Set<string> | null = null;
-      for (const column of orderedColumns) {
-        const value = row[column.id] ?? "";
-        if (String(value).toLowerCase().includes(normalizedSearch)) {
-          if (!rowMatches) {
-            rowMatches = new Set<string>();
-          }
-          rowMatches.add(column.id);
-        }
-      }
-      if (rowMatches && rowMatches.size > 0) {
-        matches.set(row.id, rowMatches);
-      }
-    });
-    return matches;
-  }, [normalizedSearch, orderedColumns, tableData]);
+  }, [activeTableId, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult]);
 
   // Cheap patch: only reprocesses the few rows with active edits.
   // Returns baseSearchMatchesByRow by reference when cellEdits is empty.
@@ -2875,20 +3280,15 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     return columnSet;
   }, [hasSearchQuery, normalizedSearch, orderedColumns, searchMatchesByRow]);
 
-  const sortedTableData = useMemo(() => {
-    // Search is handled at the database level
-    // When search returns no results, we fallback to showing all data (handled in rows query)
-    return tableData;
-  }, [tableData]);
   const showSearchSpinner = isSearchLoading;
   const showNoSearchResults =
     hasSearchQuery &&
     !rowsQuery.isFetching &&
     !rowsQuery.isFetchingNextPage &&
     !rowsQuery.hasNextPage &&
-    sortedTableData.length === 0;
+    tableData.length === 0;
 
-  const rowCount = sortedTableData.length;
+  const rowCount = tableData.length;
   const showRowsInitialLoading = rowsQuery.isLoading && rowCount === 0;
   const showRowsError = rowsQuery.isError && rowCount === 0;
   const showRowsEmpty =
@@ -3018,10 +3418,10 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     setActiveTableId(tableId);
     // Prefetch meta + first page of rows for the new table
     if (isValidTableId(tableId)) {
-      void utils.base.getTableMeta.prefetch({ tableId }, { staleTime: 10_000 });
+      void utils.base.getTableMeta.prefetch({ tableId }, { staleTime: 30_000 });
       void utils.base.getRows.prefetchInfinite(
         { tableId, limit: PAGE_ROWS },
-        { staleTime: 10_000 }
+        { staleTime: 30_000 }
       );
     }
   };
@@ -3844,6 +4244,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                 views={views}
                 activeViewId={activeViewId}
                 onSelectView={handleSelectView}
+                onHoverView={handleHoverView}
                 onCreateView={handleCreateView}
                 functionContainerRef={functionContainerRef}
               />
@@ -4007,7 +4408,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                     activeColumns={activeColumns}
                     orderedColumns={orderedColumns}
                     columnById={columnById}
-                    sortedTableData={sortedTableData}
+                    sortedTableData={tableData}
                     searchMatchesByRow={searchMatchesByRow}
                     columnsWithSearchMatches={columnsWithSearchMatches}
                     columnWidths={columnWidths}
@@ -4029,6 +4430,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                     rowsIsFetchingNextPage={rowsQuery.isFetchingNextPage}
                     rowsFetchNextPage={rowsQuery.fetchNextPage}
                     sparseRows={sparseRows}
+                    sparseVersion={sparseVersion}
                     onVisibleRangeChange={handleVisibleRangeChange}
                     showRowsError={showRowsError}
                     showRowsEmpty={showRowsEmpty}

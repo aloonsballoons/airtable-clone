@@ -11,7 +11,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 // ---------------------------------------------------------------------------
 
 export const ROW_HEIGHT = 33;
-const ROW_VIRTUAL_OVERSCAN = 200;
+const ROW_VIRTUAL_OVERSCAN = 50;
 const ROW_SCROLLING_RESET_DELAY_MS = 150;
 const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
@@ -173,12 +173,12 @@ export function useTableScroll({
   // Canvas height & virtual ranges
   // -------------------------------------------------------------------------
   const allRowsFiltered = showRowsEmpty && hasActiveFilters;
-  // getTotalSize() includes the scrollMargin, but the canvas sits below the
-  // sticky header so we subtract it to avoid a phantom empty-row gap at top.
+  // getTotalSize() already excludes the scrollMargin in TanStack Virtual v3,
+  // so no additional subtraction is needed.
   const rowCanvasHeight = allRowsFiltered
     ? 0
     : Math.max(
-        rowVirtualizer.getTotalSize() - ROW_HEIGHT,
+        rowVirtualizer.getTotalSize(),
         showRowsInitialLoading || showRowsError || showRowsEmpty
           ? ROW_HEIGHT * 5
           : 0,
@@ -252,6 +252,10 @@ export function useTableScroll({
 
   // -------------------------------------------------------------------------
   // Sequential burst-fetch for infinite query
+  // When the viewport is near the edge of loaded data, fetch ahead.
+  // When the user has scrolled far past loaded data (e.g., jumped to the
+  // bottom), skip burst-fetching entirely — the sparse cache handles the
+  // visible range much faster than sequential infinite-query page walks.
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (lastVirtualRowIndex < 0) return;
@@ -263,18 +267,20 @@ export function useTableScroll({
 
     if (rowsRemaining > ROW_PREFETCH_AHEAD) return;
 
+    // If the user has scrolled far past loaded data (gap > 2 pages), don't
+    // waste connections fetching intermediate pages — the sparse cache
+    // already serves the visible range directly.
+    const gap = lastVirtualRowIndex - rowCount;
+    if (gap > PAGE_ROWS * 2) return;
+
     prefetchingRowsRef.current = true;
 
+    // Cap at 2 pages per burst to leave connection headroom for sparse
+    // on-demand fetches which serve the actual viewport.
     const pagesNeeded = Math.ceil(
       (ROW_PREFETCH_AHEAD - Math.max(0, rowsRemaining)) / PAGE_ROWS,
     );
-    const pagesDeficit =
-      rowsRemaining <= 0
-        ? Math.min(
-            10,
-            Math.ceil((lastVirtualRowIndex - rowCount + 1) / PAGE_ROWS) + 2,
-          )
-        : Math.max(1, Math.min(5, pagesNeeded));
+    const pagesDeficit = Math.max(1, Math.min(2, pagesNeeded));
 
     const fetchBurst = async () => {
       for (let i = 0; i < pagesDeficit; i++) {

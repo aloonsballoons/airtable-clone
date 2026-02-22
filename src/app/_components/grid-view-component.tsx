@@ -26,6 +26,7 @@ export type GridViewContainerProps = {
   views?: ViewItem[];
   activeViewId?: string | null;
   onSelectView?: (viewId: string) => void;
+  onHoverView?: (viewId: string) => void;
   onCreateView?: (name: string) => void;
   onFindView?: () => void;
   onSettings?: () => void;
@@ -57,6 +58,7 @@ export function GridViewContainer({
   views = DEFAULT_VIEWS,
   activeViewId = null,
   onSelectView,
+  onHoverView,
   onCreateView,
   onFindView,
   onSettings,
@@ -188,7 +190,7 @@ export function GridViewContainer({
               key={view.id}
               type="button"
               onClick={() => onSelectView?.(view.id)}
-              onMouseEnter={() => setHoveredViewId(view.id)}
+              onMouseEnter={() => { setHoveredViewId(view.id); onHoverView?.(view.id); }}
               onMouseLeave={() => setHoveredViewId(null)}
               className="group/view absolute cursor-pointer border-none bg-transparent p-0 text-left outline-none"
               style={{

@@ -71,7 +71,7 @@ export function useBulkRows({
 
       return { queryKey, tableId, previous: null, isSingleRow: false };
     },
-    onSuccess: async (_data, variables, context) => {
+    onSuccess: (data, variables, context) => {
       const tableId = variables.tableId;
       const isSingleRow = variables.count === 1;
 
@@ -84,22 +84,38 @@ export function useBulkRows({
       // invalidate the exact infinite query the component is observing.
       const queryKey = context?.queryKey ?? getRowsQueryKey(tableId);
 
-      console.log("[BULK-DEBUG] onSuccess: invalidating getRows", {
-        tableId,
-        isSingleRow,
-        hasQueryKey: !!context?.queryKey,
-        queryKey: JSON.stringify(queryKey),
-      });
+      // Update totalCount immediately from the mutation response
+      // for instant visual feedback before the refetch completes.
+      if (data?.newTotalCount != null) {
+        utils.base.getRows.setInfiniteData(queryKey, (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page) => ({
+              ...page,
+              totalCount: data.newTotalCount,
+            })),
+          };
+        });
+      }
 
-      await utils.base.getRows.invalidate(queryKey);
-
-      console.log("[BULK-DEBUG] onSuccess: getRows invalidated, refetching tableMeta");
-
-      await utils.base.getTableMeta.refetch({ tableId });
-
-      console.log("[BULK-DEBUG] onSuccess: complete");
+      // Fire-and-forget invalidation and metadata refetch.
+      // Do NOT await — awaiting keeps mutation isPending=true until
+      // every cached infinite-query page is re-fetched, which can take
+      // very long (or hang) after a 100k bulk insert and blocks the
+      // header loading indicator from clearing.
+      void Promise.all([
+        utils.base.getRows.invalidate(queryKey),
+        utils.base.getTableMeta.refetch({ tableId }),
+      ]);
     },
-    onError: (_error, _variables, context) => {
+    onError: (error, variables, context) => {
+      // Surface bulk insert errors so they're not silently swallowed.
+      if (variables.count > 1) {
+        console.error("[addRows] Bulk insert failed:", error.message);
+        window.alert(`Failed to add rows: ${error.message}`);
+      }
+
       // On error, revert optimistic update
       if (context?.previous && context.isSingleRow) {
         utils.base.getRows.setInfiniteData(context.queryKey, context.previous);

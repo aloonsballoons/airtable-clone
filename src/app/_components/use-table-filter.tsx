@@ -244,9 +244,10 @@ export function useTableFilter({
   const viewVersionRef = useRef(0);
   const lastPersistedVersionRef = useRef(0);
 
-  // Debounce filter items and connector for server queries (50ms for fast response)
-  const [debouncedFilterItems, setDebouncedFilterItemsImmediate] = useDebounced(filterItems, 50);
-  const [debouncedFilterConnector, setDebouncedFilterConnectorImmediate] = useDebounced(filterConnector, 50);
+  // Debounce filter items and connector for server queries (300ms to batch
+  // keystrokes — each filter query runs expensive JSONB extraction on all rows)
+  const [debouncedFilterItems, setDebouncedFilterItemsImmediate] = useDebounced(filterItems, 300);
+  const [debouncedFilterConnector, setDebouncedFilterConnectorImmediate] = useDebounced(filterConnector, 300);
 
   // Effect: Reset filter state on table/view switch
   useEffect(() => {

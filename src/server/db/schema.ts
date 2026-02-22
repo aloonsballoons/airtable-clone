@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
+	integer,
 	jsonb,
 	pgTable,
 	pgTableCreator,
@@ -87,6 +88,7 @@ export const baseTable = createTable(
 				}>;
 			} | null>()
 			.default(sql`NULL`),
+		rowCount: integer("row_count").notNull().default(0),
 		createdAt: d
 			.timestamp("created_at", { withTimezone: true })
 			.$defaultFn(() => new Date())

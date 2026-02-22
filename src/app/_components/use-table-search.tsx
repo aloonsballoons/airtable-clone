@@ -67,8 +67,10 @@ export function useTableSearch({
   const [isSearchMenuOpen, setIsSearchMenuOpen] = useState(false);
   const [searchValue, setSearchValue] = useState(initialSearchQuery);
 
-  // Debounce search value for server queries (150ms delay for snappy feel)
-  const [debouncedSearchValue, setDebouncedImmediate] = useDebounced(searchValue, 150);
+  // Debounce search value for server queries (300ms to batch keystrokes —
+  // search runs ILIKE on search_text column which uses trigram index, but
+  // still scans all matching rows for the filtered count)
+  const [debouncedSearchValue, setDebouncedImmediate] = useDebounced(searchValue, 300);
 
   // Computed values - using debounced value to avoid query on every keystroke
   const searchQuery = useMemo(() => debouncedSearchValue.trim(), [debouncedSearchValue]);

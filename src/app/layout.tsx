@@ -11,9 +11,6 @@ export const metadata: Metadata = {
 		template: "%s | Airtable clone",
 	},
 	description: "Airtable clone",
-	icons: {
-		icon: "/logo.svg",
-	},
 };
 
 const geist = Geist({

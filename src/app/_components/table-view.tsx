@@ -321,6 +321,7 @@ export type TableViewProps = {
   rowsIsFetchingNextPage: boolean;
   rowsFetchNextPage: () => Promise<unknown>;
   sparseRows: Map<number, TableRow>;
+  sparseVersion: number;
   onVisibleRangeChange: (startIndex: number, endIndex: number) => void;
   showRowsError: boolean;
   showRowsEmpty: boolean;
@@ -382,6 +383,7 @@ function TableViewInner({
   rowsIsFetchingNextPage,
   rowsFetchNextPage,
   sparseRows,
+  sparseVersion,
   onVisibleRangeChange,
   showRowsError,
   showRowsEmpty,
@@ -424,15 +426,15 @@ function TableViewInner({
   // -------------------------------------------------------------------------
   // Computed values
   // -------------------------------------------------------------------------
-  const rowOrder = useMemo(
-    () => sortedTableData.map((row) => row.id),
-    [sortedTableData],
-  );
-
-  const rowIndexMap = useMemo(
-    () => new Map(rowOrder.map((id, i) => [id, i])),
-    [rowOrder],
-  );
+  // Build rowIndexMap directly — eliminates the intermediate rowOrder array
+  // allocation (saves one .map() + array creation for 100k rows).
+  const rowIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < sortedTableData.length; i++) {
+      map.set(sortedTableData[i]!.id, i);
+    }
+    return map;
+  }, [sortedTableData]);
 
   const columnOrder = useMemo(
     () => orderedColumns.map((column) => column.id),
@@ -771,7 +773,7 @@ function TableViewInner({
     columnType: ColumnFieldType,
     currentValue: string,
   ) => {
-    if (columnOrder.length === 0 || rowOrder.length === 0) return;
+    if (columnOrder.length === 0 || sortedTableData.length === 0) return;
     const rowIndex = rowIndexMap.get(rowId) ?? -1;
     const colIndex = columnIndexMap.get(columnId) ?? -1;
     if (rowIndex === -1 || colIndex === -1) return;
@@ -789,7 +791,7 @@ function TableViewInner({
       } else if (event.key === "ArrowLeft") {
         nextCol = Math.max(0, colIndex - 1);
       } else if (event.key === "ArrowDown") {
-        nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
+        nextRow = Math.min(sortedTableData.length - 1, rowIndex + 1);
       } else if (event.key === "ArrowUp") {
         nextRow = Math.max(0, rowIndex - 1);
       } else if (event.key === "Tab") {
@@ -802,7 +804,7 @@ function TableViewInner({
           }
         } else if (colIndex < columnOrder.length - 1) {
           nextCol = colIndex + 1;
-        } else if (rowIndex < rowOrder.length - 1) {
+        } else if (rowIndex < sortedTableData.length - 1) {
           nextRow = rowIndex + 1;
           nextCol = 0;
         }
@@ -811,7 +813,7 @@ function TableViewInner({
       }
 
       event.preventDefault();
-      focusCell(rowOrder[nextRow]!, columnOrder[nextCol]!);
+      focusCell(sortedTableData[nextRow]!.id, columnOrder[nextCol]!);
     };
 
     if (!isEditing) {
@@ -862,8 +864,8 @@ function TableViewInner({
       event.preventDefault();
       handleCellCommit(rowId, columnId, currentValue);
       setEditingCell(null);
-      const nextRow = Math.min(rowOrder.length - 1, rowIndex + 1);
-      focusCell(rowOrder[nextRow]!, columnId);
+      const nextRow = Math.min(sortedTableData.length - 1, rowIndex + 1);
+      focusCell(sortedTableData[nextRow]!.id, columnId);
       return;
     }
 
