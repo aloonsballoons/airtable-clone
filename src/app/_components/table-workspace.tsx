@@ -70,7 +70,7 @@ const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
 const MAX_PREFETCH_PAGES_PER_BURST = 5;
 const ROW_HEIGHT = 33;
 const ROW_VIRTUAL_OVERSCAN = 200;
-const ROW_SCROLLING_RESET_DELAY_MS = 150;
+const ROW_SCROLLING_RESET_DELAY_MS = 30;
 const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
@@ -409,6 +409,14 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   // RAF-batched sparse version updates — coalesce rapid page arrivals into fewer re-renders
   const sparseRafRef = useRef<number>(0);
   const orderedColumnsRef = useRef([] as { id: string; name: string; type: string | null }[]);
+
+  // Debounce timer for sparse range fetching — coalesces rapid scroll
+  // position changes into a single fetch burst for the final position.
+  const sparseFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sparseLastFetchTimeRef = useRef(0);
+  const pendingSparseRangeRef = useRef<{ start: number; end: number } | null>(null);
+  // Track the user's current viewport page for spiral background prefetch
+  const viewportPageRef = useRef(0);
 
   const baseDetailsQuery = api.base.get.useQuery({ baseId }, { staleTime: 30_000 });
 
@@ -3102,17 +3110,20 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   // when to re-read from this map.
   const sparseRows = sparseRowsMapRef.current;
 
-  // Callback for TableView to request data for a visible row range.
-  // Fetches any pages that aren't already loaded by the infinite query or sparse cache.
-  const handleVisibleRangeChange = useCallback(
+  // Inner fetch executor for sparse pages — separated from the debounce
+  // wrapper so it can be called from both the leading and trailing edges.
+  const executeSparseRangeFetch = useCallback(
     (startIndex: number, endIndex: number) => {
       if (!isValidTableId(activeTableId)) return;
-      // Only need sparse fetch for rows beyond what infinite query has loaded
-      if (endIndex < loadedRowCount) return;
+      sparseLastFetchTimeRef.current = Date.now();
 
       const effectiveStart = Math.max(startIndex, loadedRowCount);
       const startPage = Math.floor(effectiveStart / SPARSE_PAGE_ROWS);
       const endPage = Math.floor(endIndex / SPARSE_PAGE_ROWS);
+
+      // Track viewport center page for spiral background prefetch
+      const midPage = Math.floor((startPage + endPage) / 2);
+      viewportPageRef.current = midPage;
 
       const pagesToFetch: number[] = [];
       for (let p = startPage; p <= endPage; p++) {
@@ -3121,6 +3132,10 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         }
       }
       if (pagesToFetch.length === 0) return;
+
+      // Sort pages by proximity to viewport center so tRPC's batch
+      // stream returns the visible page results first.
+      pagesToFetch.sort((a, b) => Math.abs(a - midPage) - Math.abs(b - midPage));
 
       pagesToFetch.forEach((p) => sparseFetchingRef.current.add(p));
 
@@ -3132,7 +3147,9 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
               tableId: activeTableId,
               limit: SPARSE_PAGE_ROWS,
               cursor: pageIndex * SPARSE_PAGE_ROWS,
-              ...(sortParam.length > 0 ? { sort: sortParam } : {}),
+              // Always pass sort explicitly (even []) so the server
+              // skips the stored-sort fallback and column lookup.
+              sort: sortParam,
               ...(filterInput ? { filter: filterInput } : {}),
               ...(hasSearchQuery ? { search: searchQuery } : {}),
             });
@@ -3148,12 +3165,58 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     [activeTableId, loadedRowCount, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult],
   );
 
+  // Callback for TableView to request data for a visible row range.
+  // Uses leading+trailing debounce: fires immediately on the first call,
+  // then coalesces rapid subsequent calls (e.g. during scrollbar drag)
+  // into a single fetch for the final position after SPARSE_DEBOUNCE_MS.
+  const SPARSE_DEBOUNCE_MS = 16;
+
+  const handleVisibleRangeChange = useCallback(
+    (startIndex: number, endIndex: number) => {
+      if (!isValidTableId(activeTableId)) return;
+      if (endIndex < loadedRowCount) return;
+
+      pendingSparseRangeRef.current = { start: startIndex, end: endIndex };
+
+      // Leading edge: fire immediately if enough time has passed since
+      // the last fetch.  This ensures the first scroll-to-position has
+      // zero added latency.
+      const now = Date.now();
+      if (now - sparseLastFetchTimeRef.current >= SPARSE_DEBOUNCE_MS) {
+        if (sparseFetchTimerRef.current) {
+          clearTimeout(sparseFetchTimerRef.current);
+          sparseFetchTimerRef.current = null;
+        }
+        pendingSparseRangeRef.current = null;
+        executeSparseRangeFetch(startIndex, endIndex);
+        return;
+      }
+
+      // Trailing edge: coalesce rapid calls into a delayed fetch so that
+      // intermediate scroll positions during a fast drag don't start
+      // fetches for pages the user scrolls past immediately.
+      if (sparseFetchTimerRef.current) {
+        clearTimeout(sparseFetchTimerRef.current);
+      }
+      sparseFetchTimerRef.current = setTimeout(() => {
+        sparseFetchTimerRef.current = null;
+        const range = pendingSparseRangeRef.current;
+        if (range) {
+          pendingSparseRangeRef.current = null;
+          executeSparseRangeFetch(range.start, range.end);
+        }
+      }, SPARSE_DEBOUNCE_MS);
+    },
+    [activeTableId, loadedRowCount, executeSparseRangeFetch],
+  );
+
   // ---------------------------------------------------------------------------
   // Background progressive pre-fetch — gradually cache ALL sparse pages so
   // scrolling to any position finds data ready immediately.
-  // Uses smaller batches and longer pauses to avoid saturating the browser's
-  // connection pool (6 per host) so on-demand fetches for the visible range
-  // aren't queued behind background work.
+  //
+  // Uses a spiral order starting from the current viewport page outward so
+  // nearby pages are cached first.  Batches of 2 with longer pauses leave
+  // connection headroom for on-demand fetches which serve the actual viewport.
   //
   // activeRowCount is read from a ref so that changes to it don't restart the
   // entire fetch loop (which would cancel in-flight requests and re-fire them,
@@ -3168,29 +3231,51 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     const state = { cancelled: false };
 
     const fetchAll = async () => {
-      // Let initial render and on-demand fetches settle first
-      await new Promise((r) => setTimeout(r, 500));
+      // When sorting is active, each background page fetch triggers a
+      // full-table JSONB sort on the server (~200-500ms per call for
+      // 100k+ rows).  Use a much longer initial delay so the primary
+      // viewport fetch completes first, and smaller batch sizes to
+      // avoid saturating the DB with concurrent sort queries.
+      const hasSortOrFilter = sortParam.length > 0 || !!filterInput || !!hasSearchQuery;
+      const INITIAL_DELAY = hasSortOrFilter ? 500 : 50;
+      const BATCH_SIZE = hasSortOrFilter ? 2 : 5;
+      const BATCH_PAUSE = hasSortOrFilter ? 100 : 10;
+
+      await new Promise((r) => setTimeout(r, INITIAL_DELAY));
       if (state.cancelled) return;
 
-      // Read row count at start of loop; it may update while we run but
-      // we will pick up the latest value on the next param-change restart.
       const rowCount = activeRowCountRef.current;
       if (rowCount <= 0) return;
 
       const totalPages = Math.ceil(rowCount / SPARSE_PAGE_ROWS);
-      // Smaller batches to leave connection headroom for on-demand fetches
-      const BATCH_SIZE = 3;
 
-      for (let batchStart = 0; batchStart < totalPages && !state.cancelled; batchStart += BATCH_SIZE) {
+      // Build page order spiralling outward from the viewport page.
+      // This ensures the most relevant pages (near where the user is
+      // looking) are cached before distant ones.
+      const centerPage = Math.min(Math.max(0, viewportPageRef.current), totalPages - 1);
+      const pageOrder: number[] = [];
+      const seen = new Set<number>();
+      pageOrder.push(centerPage);
+      seen.add(centerPage);
+      for (let dist = 1; seen.size < totalPages; dist++) {
+        for (const p of [centerPage + dist, centerPage - dist]) {
+          if (p >= 0 && p < totalPages && !seen.has(p)) {
+            pageOrder.push(p);
+            seen.add(p);
+          }
+        }
+      }
+
+      for (let i = 0; i < pageOrder.length && !state.cancelled; i += BATCH_SIZE) {
         // Pause if on-demand fetches are in-flight so they aren't starved
         while (sparseFetchingRef.current.size > 0 && !state.cancelled) {
-          await new Promise((r) => setTimeout(r, 50));
+          await new Promise((r) => setTimeout(r, 10));
         }
         if (state.cancelled) break;
 
         const batch: Promise<void>[] = [];
-        for (let j = 0; j < BATCH_SIZE && batchStart + j < totalPages; j++) {
-          const page = batchStart + j;
+        for (let j = 0; j < BATCH_SIZE && i + j < pageOrder.length; j++) {
+          const page = pageOrder[i + j]!;
           if (sparsePagesRef.current.has(page) || sparseFetchingRef.current.has(page)) {
             continue;
           }
@@ -3202,7 +3287,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                   tableId: activeTableId,
                   limit: SPARSE_PAGE_ROWS,
                   cursor: page * SPARSE_PAGE_ROWS,
-                  ...(sortParam.length > 0 ? { sort: sortParam } : {}),
+                  sort: sortParam,
                   ...(filterInput ? { filter: filterInput } : {}),
                   ...(hasSearchQuery ? { search: searchQuery } : {}),
                 });
@@ -3220,9 +3305,10 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
         if (batch.length > 0) {
           await Promise.all(batch);
         }
-        // Longer pause between batches to yield to on-demand and UI work
+        // Pause between batches — longer for sorted queries to avoid
+        // saturating the DB with expensive JSONB sort operations.
         if (!state.cancelled) {
-          await new Promise((r) => setTimeout(r, 100));
+          await new Promise((r) => setTimeout(r, BATCH_PAUSE));
         }
       }
     };
@@ -3231,6 +3317,11 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
 
     return () => {
       state.cancelled = true;
+      // Clean up debounce timer on unmount/dep change
+      if (sparseFetchTimerRef.current) {
+        clearTimeout(sparseFetchTimerRef.current);
+        sparseFetchTimerRef.current = null;
+      }
     };
   }, [activeTableId, sortParam, filterInput, hasSearchQuery, searchQuery, utils, processSparsePageResult]);
 

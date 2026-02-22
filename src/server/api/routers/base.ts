@@ -34,6 +34,72 @@ const isGinRebuildRunning = () => {
 	return true;
 };
 
+// ---------------------------------------------------------------------------
+// Server-side sorted-ID cache.
+//
+// Sorting 100k+ rows by JSONB-extracted values is expensive (~200-500ms).
+// When a user applies a sort, the first getRows call pays this cost.
+// Subsequent page fetches (sparse pages, infinite scroll) for the SAME
+// sort config can skip the full sort by looking up pre-sorted IDs.
+//
+// The cache key is: tableId + JSON-serialized sort config + filter/search
+// fingerprint.  TTL is short (30s) to avoid stale data after cell edits.
+// Max entries capped to bound memory usage.
+// ---------------------------------------------------------------------------
+type SortCacheEntry = {
+	ids: string[];
+	createdAt: number;
+	totalFiltered: number;
+};
+const sortedIdCache = new Map<string, SortCacheEntry>();
+const SORT_CACHE_TTL_MS = 30_000; // 30 seconds
+const SORT_CACHE_MAX_ENTRIES = 20;
+// Only cache sorts for tables with at least this many rows — small tables
+// sort fast enough that caching adds no benefit.
+const SORT_CACHE_MIN_ROWS = 5_000;
+
+const buildSortCacheKey = (
+	tableId: string,
+	sorts: Array<{ columnId: string; direction: string }>,
+	filterFingerprint: string,
+	searchFingerprint: string,
+) => `${tableId}:${JSON.stringify(sorts)}:${filterFingerprint}:${searchFingerprint}`;
+
+const getSortCache = (key: string): SortCacheEntry | null => {
+	const entry = sortedIdCache.get(key);
+	if (!entry) return null;
+	if (Date.now() - entry.createdAt > SORT_CACHE_TTL_MS) {
+		sortedIdCache.delete(key);
+		return null;
+	}
+	return entry;
+};
+
+const setSortCache = (key: string, ids: string[], totalFiltered: number) => {
+	// Evict oldest entries if at capacity
+	if (sortedIdCache.size >= SORT_CACHE_MAX_ENTRIES) {
+		let oldestKey: string | null = null;
+		let oldestTime = Infinity;
+		for (const [k, v] of sortedIdCache) {
+			if (v.createdAt < oldestTime) {
+				oldestTime = v.createdAt;
+				oldestKey = k;
+			}
+		}
+		if (oldestKey) sortedIdCache.delete(oldestKey);
+	}
+	sortedIdCache.set(key, { ids, createdAt: Date.now(), totalFiltered });
+};
+
+// Invalidate all sort cache entries for a given table (called on data mutations)
+const invalidateSortCacheForTable = (tableId: string) => {
+	for (const key of sortedIdCache.keys()) {
+		if (key.startsWith(`${tableId}:`)) {
+			sortedIdCache.delete(key);
+		}
+	}
+};
+
 const baseNameSchema = z.string().min(1).max(120);
 const tableNameSchema = z.string().min(1).max(120);
 const columnNameSchema = z.string().min(1).max(120);
@@ -856,9 +922,14 @@ export const baseRouter = createTRPCRouter({
 						const shouldDropBtreeIndexes = isBulkInsert && currentCount < input.count;
 
 						// GIN indexes are always expensive to maintain during bulk
-						// inserts (inverted index updates per term per row), so drop
-						// them unless a rebuild is already running.
-						const shouldDropGinIndexes = isBulkInsert && !isGinRebuildRunning();
+						// inserts (inverted index updates per term per row).
+						// Instead of relying on the module-level ginRebuildInProgress
+						// flag (unreliable across serverless instances), check the
+						// actual database catalog: drop only VALID GIN indexes.
+						// Invalid indexes (in-progress CONCURRENTLY builds, Phase 1)
+						// don't incur write overhead and trying to DROP them would
+						// block on their lock for 30-120s.
+						const shouldDropGinIndexes = isBulkInsert;
 
 						// IMPORTANT: Index drop and rebuild are kept OUTSIDE the
 						// transaction. If the Vercel function times out during a
@@ -867,36 +938,96 @@ export const baseRouter = createTRPCRouter({
 						// and INSERT separately, the rows survive a timeout during
 						// the subsequent index rebuild phase.
 
-						if (shouldDropBtreeIndexes || shouldDropGinIndexes) {
+						// Track whether GIN indexes were actually dropped (used to
+						// decide whether to schedule a rebuild in after()).
+						let didDropGinIndexes = false;
+
+						{
+							// Cancel any in-progress GIN CONCURRENTLY builds
+							// BEFORE dropping indexes. During Phase 2 of a
+							// CONCURRENTLY build (indisready=true,
+							// indisvalid=false), PostgreSQL maintains GIN
+							// entries on every write — this is the #1 cause of
+							// increasing INSERT latency on repeated bulk inserts.
+							// The previous logic only checked indisvalid and
+							// missed Phase 2 indexes that still impose full GIN
+							// maintenance cost.
+							if (shouldDropGinIndexes) {
+								const cancelResult = await ctx.db.execute(sql`
+									SELECT pg_cancel_backend(pid)
+									FROM pg_stat_activity
+									WHERE query ILIKE '%CREATE INDEX CONCURRENTLY%table_row%'
+									AND pid != pg_backend_pid()
+									AND state != 'idle'
+								`);
+								if ([...cancelResult].length > 0) {
+									ginRebuildInProgress = false;
+									ginRebuildStartedAt = 0;
+								}
+							}
+
 							const drops: Promise<unknown>[] = [];
+							// Always clean up the redundant standalone (table_id)
+							// index — it's fully covered by the composite
+							// (table_id, created_at, id) and adds unnecessary
+							// maintenance cost during every subsequent insert.
+							drops.push(
+								ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`),
+							);
 							if (shouldDropBtreeIndexes) {
 								drops.push(
-									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_idx`),
 									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_table_created_idx`),
 								);
 							}
 							if (shouldDropGinIndexes) {
+								// Unconditionally drop ALL GIN indexes regardless
+								// of validity state. After canceling in-progress
+								// builds above, remaining indexes are either:
+								// (a) valid — normal drop
+								// (b) invalid from canceled builds — instant drop
 								drops.push(
 									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_data_gin_idx`),
 									ctx.db.execute(sql`DROP INDEX IF EXISTS table_row_search_text_trgm_idx`),
 								);
 							}
 							await Promise.all(drops);
-							markPhase("drop-indexes");
+
+							if (shouldDropGinIndexes) {
+								// Verify ALL GIN indexes are gone (valid AND
+								// invalid) — not just valid ones. An invalid
+								// index with indisready=true still imposes GIN
+								// maintenance cost on writes.
+								const ginCheck = await ctx.db.execute(sql`
+									SELECT count(*)::int AS cnt FROM pg_index i
+									JOIN pg_class c ON c.oid = i.indexrelid
+									WHERE c.relname IN ('table_row_data_gin_idx', 'table_row_search_text_trgm_idx')
+								`);
+								const ginRemaining = Number(([...ginCheck] as Array<{ cnt: number }>)[0]?.cnt ?? 0);
+								didDropGinIndexes = ginRemaining === 0;
+							}
+
+							if (shouldDropBtreeIndexes || didDropGinIndexes) {
+								markPhase("drop-indexes");
+							}
 						}
 
 						try {
 							// Transaction scoped to SET LOCAL + INSERT only so the
 							// memory/WAL settings actually apply to the insert.
 							await ctx.db.transaction(async (tx) => {
-								await tx.execute(sql`SET LOCAL work_mem = '512MB'`);
-								await tx.execute(sql`SET LOCAL maintenance_work_mem = '512MB'`);
-								await tx.execute(sql`SET LOCAL synchronous_commit = 'off'`);
-								// If GIN indexes weren't dropped, use a large pending
-								// list to buffer GIN updates during insert.
-								if (!shouldDropGinIndexes) {
-									await tx.execute(sql`SET LOCAL gin_pending_list_limit = '256MB'`);
-								}
+								// Combine all session config into a single DB call to
+								// eliminate 2-3 network round-trips (~15-60ms savings).
+								// Always set gin_pending_list_limit as a safety net —
+								// if GIN indexes exist in any state (e.g. concurrent
+								// build in Phase 2 where indisready=true), the large
+								// pending list buffers GIN updates instead of syncing
+								// per-row.
+								await tx.execute(sql`
+									SELECT set_config('work_mem', '512MB', true),
+										set_config('maintenance_work_mem', '512MB', true),
+										set_config('synchronous_commit', 'off', true),
+										set_config('gin_pending_list_limit', '256MB', true)
+								`);
 
 								await tx.execute(sql`
 									INSERT INTO table_row (id, table_id, data, search_text, created_at, updated_at)
@@ -914,23 +1045,19 @@ export const baseRouter = createTRPCRouter({
 						} finally {
 							// Always rebuild indexes — even if the INSERT failed,
 							// we dropped them above and must restore them.
-							if (shouldDropBtreeIndexes || shouldDropGinIndexes) {
+							if (shouldDropBtreeIndexes || didDropGinIndexes) {
 								if (shouldDropBtreeIndexes) {
-									// Btree indexes in parallel (fast, needed for pagination)
-									await Promise.all([
-										ctx.db.execute(sql`
-											CREATE INDEX IF NOT EXISTS table_row_table_idx
-											ON table_row (table_id)
-										`),
-										ctx.db.execute(sql`
-											CREATE INDEX IF NOT EXISTS table_row_table_created_idx
-											ON table_row (table_id, created_at, id)
-										`),
-									]);
+									// Rebuild composite btree (needed for pagination).
+									// The standalone (table_id) index is NOT recreated —
+									// it's fully covered by this composite index.
+									await ctx.db.execute(sql`
+										CREATE INDEX IF NOT EXISTS table_row_table_created_idx
+										ON table_row (table_id, created_at, id)
+									`);
 									markPhase("rebuild-btree-indexes");
 								}
 
-								if (shouldDropGinIndexes) {
+								if (didDropGinIndexes && !isGinRebuildRunning()) {
 									ginRebuildInProgress = true;
 									ginRebuildStartedAt = Date.now();
 									after(async () => {
@@ -968,10 +1095,14 @@ export const baseRouter = createTRPCRouter({
 												CREATE INDEX CONCURRENTLY IF NOT EXISTS table_row_search_text_trgm_idx
 												ON table_row USING gin (search_text gin_trgm_ops)
 											`);
+											// Update table statistics after bulk insert so
+											// the planner picks optimal plans for subsequent
+											// queries (getRows pagination, next bulk insert).
+											await ctx.db.execute(sql`ANALYZE table_row`);
 											const ginMs = roundMilliseconds(
 												nanosecondsToMilliseconds(process.hrtime.bigint() - ginStart),
 											);
-											console.info("[base.addRows] GIN indexes rebuilt", {
+											console.info("[base.addRows] GIN indexes rebuilt + ANALYZE", {
 												ginMs,
 												tableId: input.tableId,
 												count: input.count,
@@ -1069,6 +1200,9 @@ export const baseRouter = createTRPCRouter({
 				}
 				throw error;
 			} finally {
+				// Invalidate sort cache — new rows change sort order
+				invalidateSortCacheForTable(input.tableId);
+
 				if (shouldLogTiming) {
 					const totalMs = roundMilliseconds(
 						nanosecondsToMilliseconds(process.hrtime.bigint() - requestStart),
@@ -1446,6 +1580,7 @@ export const baseRouter = createTRPCRouter({
 
 			await ctx.db.delete(tableRow).where(eq(tableRow.id, input.rowId));
 			await ctx.db.execute(sql`UPDATE base_table SET row_count = row_count - 1 WHERE id = ${rowRecord.tableId}`);
+			invalidateSortCacheForTable(rowRecord.tableId);
 			return { success: true };
 		}),
 
@@ -1508,6 +1643,10 @@ export const baseRouter = createTRPCRouter({
 				.update(tableRow)
 				.set({ data: nextData, searchText: nextSearchText, updatedAt: new Date() })
 				.where(eq(tableRow.id, input.rowId));
+
+			// Invalidate sorted-ID cache so subsequent page fetches
+			// reflect the updated cell value in sort order.
+			invalidateSortCacheForTable(rowRecord.tableId);
 
 			return { success: true };
 		}),
@@ -1621,19 +1760,37 @@ export const baseRouter = createTRPCRouter({
 				input.filter.items.forEach(collectColumnIds);
 			}
 
-			// Run auth check and column lookup in parallel (single column query
-			// covers both sort and filter needs, eliminating two sequential awaits).
-			// Always fetch columns — the table may have a stored sort config that
-			// needs column type info, and the query is cheap (indexed on table_id).
-			const [tableRecord, allNeededColumns] = await Promise.all([
-				ctx.db.query.baseTable.findFirst({
-					where: eq(baseTable.id, input.tableId),
-					with: { base: true },
-				}),
-				ctx.db.query.tableColumn.findMany({
-					where: eq(tableColumn.tableId, input.tableId),
-				}),
-			]);
+			// Use per-request cache to deduplicate auth + column lookups across
+			// batched getRows calls (e.g. 5 sparse pages in one HTTP batch).
+			// The first call hits the DB; subsequent calls for the same table
+			// await the same promise, eliminating ~8 redundant queries per batch.
+			type AuthData = {
+				tableRecord: Awaited<ReturnType<typeof ctx.db.query.baseTable.findFirst<{
+					with: { base: true };
+				}>>>;
+				allNeededColumns: Awaited<ReturnType<typeof ctx.db.query.tableColumn.findMany>>;
+			};
+			const needsColumns = providedSort === null || providedSort.length > 0 || filterColumnIds.size > 0;
+			const cacheKey = `getRows:${input.tableId}:${needsColumns ? "cols" : "nocols"}`;
+			let authPromise = ctx._cache.get(cacheKey) as Promise<AuthData> | undefined;
+			if (!authPromise) {
+				authPromise = (async () => {
+					const [tableRecord, allNeededColumns] = await Promise.all([
+						ctx.db.query.baseTable.findFirst({
+							where: eq(baseTable.id, input.tableId),
+							with: { base: true },
+						}),
+						needsColumns
+							? ctx.db.query.tableColumn.findMany({
+									where: eq(tableColumn.tableId, input.tableId),
+								})
+							: Promise.resolve([]),
+					]);
+					return { tableRecord, allNeededColumns };
+				})();
+				ctx._cache.set(cacheKey, authPromise);
+			}
+			const { tableRecord, allNeededColumns } = await authPromise;
 
 			if (!tableRecord || tableRecord.base.ownerId !== ctx.session.user.id) {
 				throw new TRPCError({ code: "NOT_FOUND" });
@@ -1711,19 +1868,23 @@ export const baseRouter = createTRPCRouter({
 				// search_text has a GIN trigram index — using it as a pre-filter
 				// lets Postgres quickly eliminate non-matching rows before the
 				// expensive per-column JSONB ->> extraction.
+				//
+				// IMPORTANT: Only collect from top-level conditions with AND
+				// connector. For AND, every condition must match, so any
+				// "contains" term MUST appear in search_text — safe to pre-filter.
+				// For OR connectors or nested groups, the pre-filter could
+				// incorrectly exclude valid rows (e.g., "A contains 'foo' OR
+				// B = 5" — rows where B=5 but 'foo' isn't in search_text would
+				// be wrongly excluded by a trigram pre-filter on 'foo').
 				const containsSearchTerms: string[] = [];
-				const collectContainsTerms = (items: typeof input.filter.items) => {
-					for (const item of items) {
-						if (item.type === "condition") {
-							if (item.operator === "contains" && item.value?.trim()) {
-								containsSearchTerms.push(item.value.trim());
-							}
-						} else {
-							collectContainsTerms(item.conditions);
+				if (input.filter.connector === "and") {
+					for (const item of input.filter.items) {
+						if (item.type === "condition" && item.operator === "contains" && item.value?.trim()) {
+							containsSearchTerms.push(item.value.trim());
 						}
+						// Skip groups — their internal connector may differ
 					}
-				};
-				collectContainsTerms(input.filter.items);
+				}
 
 				const buildConditionExpression = (
 					condition: z.infer<typeof filterConditionSchema>,
@@ -1840,17 +2001,15 @@ export const baseRouter = createTRPCRouter({
 					input.filter.connector,
 				);
 
-				// Build trigram pre-filter: for AND connector, ALL contains terms
-				// must appear in search_text. For OR connector, ANY term suffices.
+				// Build trigram pre-filter: ALL contains terms must appear in
+				// search_text (only collected for AND connector at top level).
 				// This pre-filter uses the trigram GIN index on search_text to
 				// rapidly narrow down candidate rows before per-column extraction.
 				if (containsSearchTerms.length > 0 && filterExpression) {
 					const trigramConditions = containsSearchTerms.map(
 						(term) => sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${term}%`}`
 					);
-					const trigramPreFilter = input.filter.connector === "or"
-						? or(...trigramConditions)
-						: and(...trigramConditions);
+					const trigramPreFilter = and(...trigramConditions);
 					if (trigramPreFilter) {
 						filterExpression = and(filterExpression, trigramPreFilter) ?? filterExpression;
 					}
@@ -1889,7 +2048,15 @@ export const baseRouter = createTRPCRouter({
 				return fragments;
 			};
 
-			// Build ORDER BY clause for sort expressions
+			// Build ORDER BY clause for sort expressions.
+			// Performance notes:
+			// - Text sorts use COLLATE "C" (byte-order) instead of the default
+			//   locale collation.  Locale-aware comparison (e.g. en_US.UTF-8)
+			//   calls ICU/libc per comparison which is 3-5x slower than raw
+			//   byte comparison for 100k+ rows.  For an Airtable-style grid,
+			//   byte-order sorting is acceptable (A-Z still sorts correctly
+			//   for ASCII text, which covers the vast majority of cell values).
+			// - Number sorts extract text once and cast to numeric.
 			const buildSortOrderClauses = () => {
 				if (effectiveSorts.length === 0) {
 					return [sql`created_at ASC`, sql`id ASC`];
@@ -1907,8 +2074,8 @@ export const baseRouter = createTRPCRouter({
 					}
 					return [
 						sort.direction === "desc"
-							? sql`coalesce(data ->> ${sort.columnId}, '') DESC`
-							: sql`coalesce(data ->> ${sort.columnId}, '') ASC`,
+							? sql`coalesce(data ->> ${sort.columnId}, '') COLLATE "C" DESC`
+							: sql`coalesce(data ->> ${sort.columnId}, '') COLLATE "C" ASC`,
 					];
 				});
 				clauses.push(sql`created_at ASC`, sql`id ASC`);
@@ -1923,50 +2090,122 @@ export const baseRouter = createTRPCRouter({
 				: sql.join(rawWhereFragments, sql` AND `);
 
 			// Query strategy:
-			// - Simple case (no sort, no filter, no search): direct query avoids
-			//   the subquery self-join overhead, letting Postgres use a simple
-			//   index scan on (table_id, created_at, id).
-			// - Complex case (sort/filter/search): subquery paginates only IDs
-			//   (~50 bytes each) then joins back for full JSONB data, reducing
-			//   sort memory ~40×.  work_mem is boosted for in-memory quicksort.
-			const needsSubquery = effectiveSorts.length > 0 || !!filterExpression || !!input.search;
+			// - Flat query for low offsets (< 5000): simplest plan, avoids
+			//   subquery JOIN overhead.  At offset 0 with default order
+			//   (created_at, id), PostgreSQL can walk the btree index and
+			//   stop after LIMIT matches — no sort memory needed.
+			// - Subquery pattern for high offsets (>= 5000): inner query
+			//   paginates only IDs (~50 bytes each) via index-only scan,
+			//   then outer joins for full JSONB data, avoiding reading and
+			//   discarding thousands of large heap tuples in the skip-scan.
+			// - Transaction with boosted work_mem only when sorting on
+			//   JSONB-extracted columns (effectiveSorts > 0): these sorts
+			//   can't use an index and may need to hold 100k+ sort keys in
+			//   memory.  Filter-only and search-only queries with default
+			//   order use the (table_id, created_at, id) btree index
+			//   directly and don't need extra work_mem.
+			const SUBQUERY_OFFSET_THRESHOLD = 5000;
+			const needsSortWorkMem = effectiveSorts.length > 0;
 
-			const rowsQuery = needsSubquery
-				? ctx.db.transaction(async (tx) => {
-						await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
-						return tx.execute(sql`
-							SELECT t.id, t.data
-							FROM table_row t
-							INNER JOIN (
-								SELECT id FROM table_row
-								WHERE ${rawWhereClause}
-								ORDER BY ${orderByFragment}
-								LIMIT ${input.limit}
-								OFFSET ${offset}
-							) s ON t.id = s.id
-							ORDER BY ${orderByFragment}
-						`);
-					})
-				: ctx.db.execute(sql`
-						SELECT id, data FROM table_row
-						WHERE ${rawWhereClause}
-						ORDER BY ${orderByFragment}
-						LIMIT ${input.limit}
-						OFFSET ${offset}
-					`);
+			const subquerySql = sql`
+				SELECT t.id, t.data
+				FROM table_row t
+				INNER JOIN (
+					SELECT id, row_number() OVER (ORDER BY ${orderByFragment}) AS rn
+					FROM table_row
+					WHERE ${rawWhereClause}
+					ORDER BY ${orderByFragment}
+					LIMIT ${input.limit}
+					OFFSET ${offset}
+				) s ON t.id = s.id
+				ORDER BY s.rn
+			`;
+
+			const flatSql = sql`
+				SELECT id, data FROM table_row
+				WHERE ${rawWhereClause}
+				ORDER BY ${orderByFragment}
+				LIMIT ${input.limit}
+				OFFSET ${offset}
+			`;
+
+			const querySql = offset >= SUBQUERY_OFFSET_THRESHOLD ? subquerySql : flatSql;
+
+			// Only use a transaction for work_mem boost when sorting on
+			// JSONB-extracted columns AND the offset is high enough that
+			// PostgreSQL can't use a cheap top-N heapsort.  For offset=0
+			// with a small LIMIT, PG already uses an efficient top-N sort
+			// that needs minimal memory.  Avoiding the transaction saves
+			// ~5-15ms of round-trip overhead per call.
+			const needsWorkMemBoost = needsSortWorkMem && offset >= SUBQUERY_OFFSET_THRESHOLD;
 
 			// Only compute count(*) on the first page AND only when
 			// filters/search are active (filtered count differs from total).
-			// For unfiltered queries the client already has the total row count
-			// from getTableMeta, so the expensive count scan is skipped entirely
-			// — this removes ~30-200ms of blocking latency on initial page load.
 			const isFirstPage = offset === 0;
 			const hasFiltersOrSearch = !!filterExpression || !!input.search;
+			const MAX_FILTERED_COUNT = 10_001;
 
-			// Cap filtered count at 100,001 to avoid expensive full-table scans.
-			// For very large filtered result sets (>100k matches), counting every
-			// row can take 200-500ms. The subquery LIMIT stops scanning early.
-			const MAX_FILTERED_COUNT = 100_001;
+			// -----------------------------------------------------------------
+			// Sort cache: for sorted queries on large tables, cache the sorted
+			// ID list from the first full sort so subsequent page fetches skip
+			// the expensive JSONB-based ORDER BY entirely.
+			// -----------------------------------------------------------------
+			const sortCacheKey = needsSortWorkMem
+				? buildSortCacheKey(
+						input.tableId,
+						effectiveSorts,
+						filterExpression ? JSON.stringify(input.filter) : "",
+						trimmedSearch,
+					)
+				: null;
+			const cachedSort = sortCacheKey ? getSortCache(sortCacheKey) : null;
+
+			if (cachedSort && needsSortWorkMem) {
+				// Cache hit — slice the pre-sorted IDs for the requested page
+				// and fetch full row data by primary key (instant lookup).
+				const pageIds = cachedSort.ids.slice(offset, offset + input.limit);
+
+				let fastRows: Array<{ id: string; data: Record<string, string> | null }>;
+				if (pageIds.length === 0) {
+					fastRows = [];
+				} else {
+					const rawResult = await ctx.db.execute(
+						sql`SELECT id, data FROM table_row WHERE id = ANY(${pageIds}::uuid[])`
+					);
+					// Re-order to match the cached sort order
+					const byId = new Map(
+						([...rawResult] as Array<{ id: string; data: Record<string, string> | null }>)
+							.map((r) => [r.id, r])
+					);
+					fastRows = pageIds
+						.map((id) => byId.get(id))
+						.filter(Boolean) as typeof fastRows;
+				}
+
+				const nextCursor =
+					fastRows.length === input.limit ? offset + fastRows.length : null;
+				const totalCount = (isFirstPage && hasFiltersOrSearch)
+					? Math.min(cachedSort.totalFiltered, MAX_FILTERED_COUNT)
+					: -1;
+
+				return {
+					rows: fastRows.map((row) => ({
+						id: row.id,
+						data: row.data ?? {},
+					})),
+					nextCursor,
+					totalCount,
+				};
+			}
+
+			// Cache miss — run the full sorted query
+			const rowsQuery = needsWorkMemBoost
+				? ctx.db.transaction(async (tx) => {
+						await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
+						return tx.execute(querySql);
+					})
+				: ctx.db.execute(querySql);
+
 			const countQuery = (isFirstPage && hasFiltersOrSearch)
 				? ctx.db.execute(sql`SELECT count(*)::int as "count" FROM (SELECT 1 FROM table_row WHERE ${rawWhereClause} LIMIT ${MAX_FILTERED_COUNT}) sub`)
 				: null;
@@ -1984,6 +2223,27 @@ export const baseRouter = createTRPCRouter({
 			if (totalCountResult) {
 				const countRows = [...totalCountResult] as Array<{ count: number }>;
 				totalCount = Number(countRows[0]?.count ?? 0);
+			}
+
+			// Populate sort cache on the first page of a sorted query.
+			// Fetch ALL sorted IDs in a single lightweight query (only id column,
+			// no JSONB data) so subsequent pages can use the cache.
+			if (sortCacheKey && needsSortWorkMem && isFirstPage && tableRecord.rowCount >= SORT_CACHE_MIN_ROWS) {
+				// Fire cache population asynchronously — don't block the response
+				void (async () => {
+					try {
+						const allIdsResult = await ctx.db.transaction(async (tx) => {
+							await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
+							return tx.execute(
+								sql`SELECT id FROM table_row WHERE ${rawWhereClause} ORDER BY ${orderByFragment}`
+							);
+						});
+						const allIds = ([...allIdsResult] as Array<{ id: string }>).map((r) => r.id);
+						setSortCache(sortCacheKey, allIds, totalCount >= 0 ? totalCount : allIds.length);
+					} catch {
+						// Cache population failure is non-critical
+					}
+				})();
 			}
 
 			return {

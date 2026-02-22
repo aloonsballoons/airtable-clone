@@ -89,25 +89,42 @@ export function useBulkRows({
       if (data?.newTotalCount != null) {
         utils.base.getRows.setInfiniteData(queryKey, (old) => {
           if (!old) return old;
+          const lastIdx = old.pages.length - 1;
           return {
             ...old,
-            pages: old.pages.map((page) => ({
+            pages: old.pages.map((page, i) => ({
               ...page,
               totalCount: data.newTotalCount,
+              // Fix the last page's cursor so hasNextPage becomes true
+              // after appending rows beyond the previously-known end.
+              ...(i === lastIdx && page.nextCursor == null && data.added > 0
+                ? { nextCursor: ((old.pageParams[lastIdx] as number) ?? 0) + page.rows.length }
+                : {}),
             })),
           };
         });
       }
 
-      // Fire-and-forget invalidation and metadata refetch.
-      // Do NOT await — awaiting keeps mutation isPending=true until
-      // every cached infinite-query page is re-fetched, which can take
-      // very long (or hang) after a 100k bulk insert and blocks the
-      // header loading indicator from clearing.
-      void Promise.all([
-        utils.base.getRows.invalidate(queryKey),
-        utils.base.getTableMeta.refetch({ tableId }),
-      ]);
+      if (!isSingleRow) {
+        // For bulk inserts: new rows are appended at the end so existing
+        // cached pages are still valid. Mark stale WITHOUT triggering an
+        // immediate refetch of every cached page. This prevents a burst
+        // of potentially hundreds of concurrent DB queries that was the
+        // primary cause of increasing latency on repeated bulk inserts
+        // (each burst competes for the browser's 6-connection-per-origin
+        // limit and the DB connection pool, delaying the next mutation).
+        // The virtualizer will re-fetch visible pages on-demand as the
+        // user scrolls.
+        void utils.base.getRows.invalidate(queryKey, { refetchType: 'none' });
+        void utils.base.getTableMeta.refetch({ tableId });
+      } else {
+        // For single-row additions, invalidate normally (only 1 page
+        // needs refetching so the overhead is negligible).
+        void Promise.all([
+          utils.base.getRows.invalidate(queryKey),
+          utils.base.getTableMeta.refetch({ tableId }),
+        ]);
+      }
     },
     onError: (error, variables, context) => {
       // Surface bulk insert errors so they're not silently swallowed.

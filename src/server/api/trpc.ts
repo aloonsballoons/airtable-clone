@@ -33,6 +33,10 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
 	return {
 		db,
 		session,
+		// Per-request cache shared across all procedures in a batch.
+		// When httpBatchStreamLink sends multiple getRows calls in one HTTP
+		// request, they share this map to avoid duplicate auth + column lookups.
+		_cache: new Map<string, Promise<unknown>>(),
 		...opts,
 	};
 };
@@ -87,12 +91,6 @@ export const createTRPCRouter = t.router;
  */
 const timingMiddleware = t.middleware(async ({ next, path }) => {
 	const start = Date.now();
-
-	if (t._config.isDev) {
-		// artificial delay in dev
-		const waitMs = Math.floor(Math.random() * 400) + 100;
-		await new Promise((resolve) => setTimeout(resolve, waitMs));
-	}
 
 	const result = await next();
 

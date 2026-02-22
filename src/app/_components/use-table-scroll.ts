@@ -12,7 +12,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 export const ROW_HEIGHT = 33;
 const ROW_VIRTUAL_OVERSCAN = 50;
-const ROW_SCROLLING_RESET_DELAY_MS = 150;
+const ROW_SCROLLING_RESET_DELAY_MS = 30;
 const PAGE_ROWS = 2000;
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
 const SPARSE_PREFETCH_BUFFER = 3000;
@@ -322,8 +322,8 @@ export function useTableScroll({
       );
       const last = lastScrollPrefetchRef.current;
       if (
-        Math.abs(prefetchStart - last.start) >= 100 ||
-        Math.abs(prefetchEnd - last.end) >= 100
+        Math.abs(prefetchStart - last.start) >= 50 ||
+        Math.abs(prefetchEnd - last.end) >= 50
       ) {
         lastScrollPrefetchRef.current = {
           start: prefetchStart,
