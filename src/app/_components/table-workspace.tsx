@@ -3714,25 +3714,6 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     addRowsIsPending ||
     isFunctionTriggered;
 
-  // DEBUG: trace which loading flags are active
-  // eslint-disable-next-line no-console
-  if (headerLoading || isTableLoading) {
-    console.log("[DEBUG-LOADING]", {
-      headerLoading,
-      isTableLoading,
-      showRowsInitialLoading,
-      "rowsQuery.isLoading": rowsQuery.isLoading,
-      "rowsQuery.isFetching": rowsQuery.isFetching,
-      "rowsQuery.status": rowsQuery.status,
-      rowCount,
-      addRowsIsPending,
-      addColumnPending: addColumn.isPending,
-      isFunctionTriggered,
-      "tableMetaQuery.isLoading": tableMetaQuery.isLoading,
-      "baseDetailsQuery.isLoading": baseDetailsQuery.isLoading,
-    });
-  }
-
   return (
     <div className={clsx("h-screen overflow-hidden bg-white text-[#1d1f24]", inter.className)}>
       <div className="flex h-screen overflow-hidden">

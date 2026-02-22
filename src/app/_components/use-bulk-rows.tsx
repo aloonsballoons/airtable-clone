@@ -110,26 +110,15 @@ export function useBulkRows({
         });
       }
 
-      if (!isSingleRow) {
-        // For bulk inserts: new rows are appended at the end so existing
-        // cached pages are still valid. Mark stale WITHOUT triggering an
-        // immediate refetch of every cached page. This prevents a burst
-        // of potentially hundreds of concurrent DB queries that was the
-        // primary cause of increasing latency on repeated bulk inserts
-        // (each burst competes for the browser's 6-connection-per-origin
-        // limit and the DB connection pool, delaying the next mutation).
-        // The virtualizer will re-fetch visible pages on-demand as the
-        // user scrolls.
-        void utils.base.getRows.invalidate(queryKey, { refetchType: 'none' });
-        void utils.base.getTableMeta.refetch({ tableId });
-      } else {
-        // For single-row additions, invalidate normally (only 1 page
-        // needs refetching so the overhead is negligible).
-        void Promise.all([
-          utils.base.getRows.invalidate(queryKey),
-          utils.base.getTableMeta.refetch({ tableId }),
-        ]);
-      }
+      // Mark stale WITHOUT triggering an immediate refetch.  For single-row
+      // additions the optimistic onMutate data is already correct; an active
+      // refetch of all infinite-query pages would temporarily shrink the
+      // pages array and create skeleton rows.  For bulk inserts the same
+      // approach avoids a burst of hundreds of concurrent page fetches.
+      // The virtualizer re-fetches visible pages on-demand as the user
+      // scrolls (the query is stale so TQ fetches fresh data automatically).
+      void utils.base.getRows.invalidate(queryKey, { refetchType: 'none' });
+      void utils.base.getTableMeta.refetch({ tableId });
     },
     onError: (error, variables, context) => {
       // Surface bulk insert errors so they're not silently swallowed.
