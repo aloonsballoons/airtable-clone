@@ -938,7 +938,28 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   // When count is -1 (skipped for unfiltered queries), fall back to
   // totalRowCount from getTableMeta which is the unfiltered total.
   const firstPageCount = rowsQuery.data?.pages[0]?.totalCount ?? -1;
-  const activeRowCount = firstPageCount >= 0 ? firstPageCount : totalRowCount;
+  const baseActiveRowCount = firstPageCount >= 0 ? firstPageCount : totalRowCount;
+
+  // Optimistic delta — incremented synchronously on single-row add clicks
+  // so activeRowCount (and thus the virtualizer count) updates in the SAME
+  // render frame as the sparse cache entry.  Cleared once the server count
+  // catches up (the TQ page totalCount is bumped by onMutate/refetch).
+  const [optimisticRowDelta, setOptimisticRowDelta] = useState(0);
+  const prevBaseCount = useRef(baseActiveRowCount);
+  if (baseActiveRowCount !== prevBaseCount.current) {
+    // Server / TQ cache count changed — absorb the delta
+    const serverGain = baseActiveRowCount - prevBaseCount.current;
+    prevBaseCount.current = baseActiveRowCount;
+    if (optimisticRowDelta > 0 && serverGain > 0) {
+      // Use functional-style set so React batches this with the render
+      // that triggered the change.  Clamp to 0 so delta never goes negative.
+      const newDelta = Math.max(0, optimisticRowDelta - serverGain);
+      if (newDelta !== optimisticRowDelta) {
+        setOptimisticRowDelta(newDelta);
+      }
+    }
+  }
+  const activeRowCount = baseActiveRowCount + optimisticRowDelta;
 
   // Initialize bulk rows hook
   const bulkRowsHook = useBulkRows({
@@ -953,6 +974,36 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     },
   });
   const { handleAddBulkRows, bulkRowsDisabled, addRowsMutate, addRowsIsPending } = bulkRowsHook;
+
+  // Wrapper around addRowsMutate that makes single-row additions instant:
+  //  1. Injects an empty TableRow into the sparse cache at the end-of-table
+  //     index so the virtualizer has data for the new slot immediately.
+  //  2. Bumps optimisticRowDelta so activeRowCount (→ virtualizerCount)
+  //     increases in the same synchronous render — no waiting for the async
+  //     onMutate / TQ cache update.
+  const addRowsMutateWithOptimistic = useCallback(
+    (params: { tableId: string; count: number; ids?: string[]; populateWithFaker?: boolean }) => {
+      if (params.count === 1 && params.ids && params.ids.length === 1) {
+        const newId = params.ids[0]!;
+        const currentCount = prevBaseCount.current + optimisticRowDelta;
+        const newIndex = currentCount; // 0-based index of the new last row
+
+        // Build an empty TableRow matching the column schema
+        const cols = orderedColumnsRef.current;
+        const cells: Record<string, string> = { id: newId };
+        for (let c = 0; c < cols.length; c++) {
+          cells[cols[c]!.id] = "";
+        }
+        sparseRowsMapRef.current.set(newIndex, cells as TableRow);
+
+        // Bump count + trigger re-render in one synchronous batch
+        setOptimisticRowDelta((d) => d + 1);
+        setSparseVersion((v) => v + 1);
+      }
+      addRowsMutate(params);
+    },
+    [optimisticRowDelta, addRowsMutate],
+  );
 
   const handleCreateView = useCallback((viewName: string) => {
     if (!activeTableId) return;
@@ -4378,7 +4429,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                 }}
                 onClick={() => {
                   if (!activeTableId) return;
-                  addRowsMutate({
+                  addRowsMutateWithOptimistic({
                     tableId: activeTableId,
                     count: 1,
                     ids: [crypto.randomUUID()],
@@ -4537,7 +4588,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
                     showRowsInitialLoading={showRowsInitialLoading}
                     rowsErrorMessage={rowsErrorMessage}
                     updateCellMutate={updateCell.mutate}
-                    addRowsMutate={addRowsMutate}
+                    addRowsMutate={addRowsMutateWithOptimistic}
                     addColumnMutate={addColumn.mutate}
                     addColumnIsPending={addColumn.isPending}
                     activeRowCount={activeRowCount}

@@ -21,53 +21,23 @@ export function useBulkRows({
   onBulkSuccess,
 }: UseBulkRowsOptions) {
   const addRows = api.base.addRows.useMutation({
-    onMutate: async ({ tableId, count, ids }) => {
+    onMutate: async ({ tableId, count }) => {
       if (!activeTableId || tableId !== activeTableId) {
         return { queryKey: null, tableId, previous: null, isSingleRow: false };
       }
       const queryKey = getRowsQueryKey(tableId);
       const isSingleRow = count === 1;
 
-      // Cancel any in-flight queries to prevent race conditions
-      await utils.base.getRows.cancel(queryKey);
-
-      // For single row additions, add optimistic update
-      if (isSingleRow && ids && ids.length === 1) {
-        const previous = utils.base.getRows.getInfiniteData(queryKey);
-
-        // Add optimistic row to the END of the last page so it appears at the
-        // bottom of the table.  Also bump totalCount on every page so
-        // activeRowCount (derived from page[0].totalCount) stays in sync.
-        utils.base.getRows.setInfiniteData(queryKey, (data) => {
-          if (!data) return data;
-
-          const newRow = {
-            id: ids[0]!,
-            data: {},
-          };
-
-          const lastIndex = data.pages.length - 1;
-          return {
-            ...data,
-            pages: data.pages.map((page, index) => {
-              const bumpedCount =
-                typeof page.totalCount === "number"
-                  ? page.totalCount + 1
-                  : page.totalCount;
-              if (index === lastIndex) {
-                return {
-                  ...page,
-                  totalCount: bumpedCount,
-                  rows: [...page.rows, newRow],
-                };
-              }
-              return { ...page, totalCount: bumpedCount };
-            }),
-          };
-        });
-
-        return { queryKey, tableId, previous, isSingleRow: true };
+      // Single-row additions are handled optimistically by the caller
+      // (addRowsMutateWithOptimistic) which synchronously injects the row
+      // into the sparse cache and bumps the local row count.  We skip the
+      // expensive cancel + pages.map here to keep it instant.
+      if (isSingleRow) {
+        return { queryKey, tableId, previous: null, isSingleRow: true };
       }
+
+      // Bulk inserts — cancel in-flight queries to prevent race conditions
+      await utils.base.getRows.cancel(queryKey);
 
       return { queryKey, tableId, previous: null, isSingleRow: false };
     },
@@ -127,11 +97,8 @@ export function useBulkRows({
         window.alert(`Failed to add rows: ${error.message}`);
       }
 
-      // On error, revert optimistic update
-      if (context?.previous && context.isSingleRow) {
-        utils.base.getRows.setInfiniteData(context.queryKey, context.previous);
-      }
-
+      // Invalidate to sync with server state; the sparse cache optimistic
+      // entry will be overwritten on the next fetch cycle.
       if (!context?.queryKey) return;
       void utils.base.getRows.invalidate(context.queryKey);
     },
