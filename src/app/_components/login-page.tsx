@@ -52,7 +52,13 @@ export function LoginPage() {
   );
 
   const handleGoogleSignIn = async () => {
-    await authClient.signIn.social({ provider: "google" });
+    const { error } = await authClient.signIn.social({
+      provider: "google",
+      callbackURL: "/bases",
+    });
+    if (error) {
+      console.error("Google sign-in error:", error);
+    }
   };
 
   return (
