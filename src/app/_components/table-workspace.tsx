@@ -3578,7 +3578,7 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   };
 
   const handleSignOut = async () => {
-    await handleLogout(() => router.refresh());
+    await handleLogout();
   };
 
   const [showUserDropdown, setShowUserDropdown] = useState(false);

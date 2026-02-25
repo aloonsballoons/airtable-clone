@@ -170,7 +170,7 @@ export function BasesWorkspace({ userName, userEmail }: BasesWorkspaceProps) {
   };
 
   const handleSignOut = async () => {
-    await handleLogout(() => router.refresh());
+    await handleLogout();
   };
 
   const [showUserDropdown, setShowUserDropdown] = useState(false);

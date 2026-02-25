@@ -2,7 +2,7 @@
 
 import { authClient } from "~/server/better-auth/client";
 
-export async function handleLogout(refreshFn: () => void) {
+export async function handleLogout() {
   await authClient.signOut();
-  refreshFn();
+  window.location.href = "/";
 }
