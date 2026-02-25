@@ -725,17 +725,28 @@ export function FilterDropdown({
                             data-filter-connector-trigger={group.connectorKey}
                           >
                             <span>{connectorLabel}</span>
-                            <ArrowIcon
+                            <span
                               className="absolute"
                               style={{
                                 width: 10,
                                 height: 6,
                                 right: 7,
                                 top: "50%",
-                                transform: "translateY(-50%)",
-                                color: isConnectorHighlighted ? "#156FE2" : undefined,
+                                marginTop: -3,
+                                background: isConnectorHighlighted ? "#156FE2" : "transparent",
+                                isolation: isConnectorHighlighted ? "isolate" : undefined,
+                                mixBlendMode: "multiply",
                               }}
-                            />
+                            >
+                              <ArrowIcon
+                                style={{
+                                  width: 10,
+                                  height: 6,
+                                  backgroundColor: isConnectorHighlighted ? "white" : undefined,
+                                  mixBlendMode: isConnectorHighlighted ? "screen" : undefined,
+                                }}
+                              />
+                            </span>
                           </button>
                         ) : (
                           <span
@@ -1107,17 +1118,28 @@ export function FilterDropdown({
                         data-filter-connector-trigger={connectorKey}
                       >
                         <span>{connectorLabel}</span>
-                        <ArrowIcon
+                        <span
                           className="absolute"
                           style={{
                             width: 10,
                             height: 6,
                             right: 7,
                             top: "50%",
-                            transform: "translateY(-50%)",
-                            color: isConnectorHighlighted ? "#156FE2" : undefined,
+                            marginTop: -3,
+                            background: isConnectorHighlighted ? "#156FE2" : "transparent",
+                            isolation: isConnectorHighlighted ? "isolate" : undefined,
+                            mixBlendMode: "multiply",
                           }}
-                        />
+                        >
+                          <ArrowIcon
+                            style={{
+                              width: 10,
+                              height: 6,
+                              backgroundColor: isConnectorHighlighted ? "white" : undefined,
+                              mixBlendMode: isConnectorHighlighted ? "screen" : undefined,
+                            }}
+                          />
+                        </span>
                       </button>
                     ) : (
                       <span
@@ -1217,7 +1239,7 @@ export function FilterDropdown({
                       left: 0,
                       top: 0,
                       width: filterFieldSeparatorFieldLeft,
-                      height: filterFieldHeight,
+                      height: filterFieldHeight - 1,
                       paddingLeft: 9,
                       paddingRight: 22,
                       display: "flex",
@@ -1238,17 +1260,28 @@ export function FilterDropdown({
                     >
                       {column?.name ?? "Name"}
                     </span>
-                    <ArrowIcon
+                    <span
                       className="absolute"
                       style={{
                         width: 10,
                         height: 6,
                         left: filterFieldSeparatorFieldLeft - 11 - 10,
                         top: "50%",
-                        transform: "translateY(-50%)",
-                        color: isFieldHighlighted ? "#156FE2" : undefined,
+                        marginTop: -3,
+                        background: isFieldHighlighted ? "#156FE2" : "transparent",
+                        isolation: isFieldHighlighted ? "isolate" : undefined,
+                        mixBlendMode: "multiply",
                       }}
-                    />
+                    >
+                      <ArrowIcon
+                        style={{
+                          width: 10,
+                          height: 6,
+                          backgroundColor: isFieldHighlighted ? "white" : undefined,
+                          mixBlendMode: isFieldHighlighted ? "screen" : undefined,
+                        }}
+                      />
+                    </span>
                   </button>
                   {isFieldMenuOpen && (
                     <div
@@ -1358,7 +1391,7 @@ export function FilterDropdown({
                       width:
                         filterFieldSeparatorOperatorLeft -
                         filterFieldSeparatorFieldLeft,
-                      height: filterFieldHeight,
+                      height: filterFieldHeight - 1,
                       paddingLeft: 9,
                       paddingRight: 22,
                       display: "flex",
@@ -1379,7 +1412,7 @@ export function FilterDropdown({
                     >
                       {operatorLabel}
                     </span>
-                    <ArrowIcon
+                    <span
                       className="absolute"
                       style={{
                         width: 10,
@@ -1390,10 +1423,21 @@ export function FilterDropdown({
                           11 -
                           10,
                         top: "50%",
-                        transform: "translateY(-50%)",
-                        color: isOperatorHighlighted ? "#156FE2" : undefined,
+                        marginTop: -3,
+                        background: isOperatorHighlighted ? "#156FE2" : "transparent",
+                        isolation: isOperatorHighlighted ? "isolate" : undefined,
+                        mixBlendMode: "multiply",
                       }}
-                    />
+                    >
+                      <ArrowIcon
+                        style={{
+                          width: 10,
+                          height: 6,
+                          backgroundColor: isOperatorHighlighted ? "white" : undefined,
+                          mixBlendMode: isOperatorHighlighted ? "screen" : undefined,
+                        }}
+                      />
+                    </span>
                   </button>
                   {isOperatorMenuOpen && (
                       <div
@@ -1482,7 +1526,7 @@ export function FilterDropdown({
                       width:
                         filterFieldSeparatorValueLeft -
                         filterFieldSeparatorOperatorLeft,
-                      height: filterFieldHeight,
+                      height: filterFieldHeight - 1,
                       paddingLeft: operatorRequiresValue ? 9 : 0,
                       paddingRight: operatorRequiresValue ? 9 : 0,
                       cursor: operatorRequiresValue ? "text" : "default",
@@ -1558,7 +1602,7 @@ export function FilterDropdown({
                       width:
                         filterFieldSeparatorActionsLeft -
                         filterFieldSeparatorValueLeft,
-                      height: filterFieldHeight,
+                      height: filterFieldHeight - 1,
                     }}
                     onClick={() => {
                       if (row.scope === "root") {
@@ -1587,7 +1631,7 @@ export function FilterDropdown({
                       left: filterFieldSeparatorActionsLeft,
                       top: 0,
                       width: filterFieldWidth - filterFieldSeparatorActionsLeft,
-                      height: filterFieldHeight,
+                      height: filterFieldHeight - 1,
                     }}
                     onMouseDown={(event) =>
                       handleFilterDragStart(

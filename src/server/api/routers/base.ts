@@ -2205,8 +2205,20 @@ export const baseRouter = createTRPCRouter({
 			// Only compute count(*) on the first page AND only when
 			// filters/search are active (filtered count differs from total).
 			const isFirstPage = offset === 0;
-			const hasFiltersOrSearch = !!filterExpression || !!input.search;
-			const MAX_FILTERED_COUNT = 2_000_001;
+			const hasFiltersOrSearch = !!(filterExpression || searchExpression);
+			const shouldCountFiltered = isFirstPage && hasFiltersOrSearch;
+
+			// Fire the count query early so it runs in parallel with the data query.
+			// COUNT(*) with a WHERE clause scans all matching rows, but running it
+			// concurrently with the LIMIT-ed data query hides most of the latency.
+			const countPromise = shouldCountFiltered
+				? ctx.db.execute(
+						sql`SELECT COUNT(*) AS count FROM table_row WHERE ${rawWhereClause}`
+					).then((result) => {
+						const row = [...result][0] as { count: string | number } | undefined;
+						return Number(row?.count ?? 0);
+					})
+				: Promise.resolve(-1);
 
 			// -----------------------------------------------------------------
 			// Sort cache: for sorted queries on large tables, cache the sorted
@@ -2247,8 +2259,10 @@ export const baseRouter = createTRPCRouter({
 
 				const nextCursor =
 					fastRows.length === input.limit ? offset + fastRows.length : null;
-				const totalCount = (isFirstPage && hasFiltersOrSearch)
-					? Math.min(cachedSort.totalFiltered, MAX_FILTERED_COUNT)
+
+				// Sort cache stores the total filtered count
+				const filteredCount = shouldCountFiltered
+					? cachedSort.totalFiltered
 					: -1;
 
 				return {
@@ -2257,7 +2271,7 @@ export const baseRouter = createTRPCRouter({
 						data: row.data ?? {},
 					})),
 					nextCursor,
-					totalCount,
+					totalCount: filteredCount,
 				};
 			}
 
@@ -2276,15 +2290,10 @@ export const baseRouter = createTRPCRouter({
 
 			if (useFirstPageFastPath) {
 				// Fast path: top-N heapsort for the first page.
-				// Run count query in parallel when filters/search are active.
-				const topNPromise = ctx.db.execute(flatSql);
-				const countPromise = hasFiltersOrSearch
-					? ctx.db.execute(sql`SELECT count(*)::int as "count" FROM (SELECT 1 FROM table_row WHERE ${rawWhereClause} LIMIT ${MAX_FILTERED_COUNT}) sub`)
-					: null;
-
-				const [topNResult, countResult] = await Promise.all([
-					topNPromise,
-					countPromise ?? Promise.resolve(null),
+				// Count runs in parallel via countPromise.
+				const [topNResult, filteredCount] = await Promise.all([
+					ctx.db.execute(flatSql),
+					countPromise,
 				]);
 
 				// Fire deferred cache population in background for subsequent
@@ -2311,11 +2320,6 @@ export const baseRouter = createTRPCRouter({
 				const fastRows = [...topNResult] as Array<{ id: string; data: Record<string, string> | null }>;
 				const nextCursor = fastRows.length === input.limit
 					? offset + fastRows.length : null;
-				let totalCount = -1;
-				if (countResult) {
-					const countRows = [...countResult] as Array<{ count: number }>;
-					totalCount = Number(countRows[0]?.count ?? 0);
-				}
 
 				return {
 					rows: fastRows.map((row) => ({
@@ -2323,7 +2327,7 @@ export const baseRouter = createTRPCRouter({
 						data: row.data ?? {},
 					})),
 					nextCursor,
-					totalCount,
+					totalCount: filteredCount,
 				};
 			}
 
@@ -2376,31 +2380,21 @@ export const baseRouter = createTRPCRouter({
 
 			// Standard query path: no sort, small tables, or non-first pages
 			// without a warm cache.
-			const rowsQuery = needsWorkMemBoost
-				? ctx.db.transaction(async (tx) => {
-						await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
-						return tx.execute(querySql);
-					})
-				: ctx.db.execute(querySql);
-
-			const countQuery = (isFirstPage && hasFiltersOrSearch)
-				? ctx.db.execute(sql`SELECT count(*)::int as "count" FROM (SELECT 1 FROM table_row WHERE ${rawWhereClause} LIMIT ${MAX_FILTERED_COUNT}) sub`)
-				: null;
-
-			const [rawResult, totalCountResult] = await Promise.all([
-				rowsQuery,
-				countQuery,
+			// Count runs in parallel via countPromise (only on first page
+			// with active filters/search).
+			const [rawResult, filteredCount] = await Promise.all([
+				needsWorkMemBoost
+					? ctx.db.transaction(async (tx) => {
+							await tx.execute(sql`SET LOCAL work_mem = '256MB'`);
+							return tx.execute(querySql);
+						})
+					: ctx.db.execute(querySql),
+				countPromise,
 			]);
 
 			const fastRows = [...rawResult] as Array<{ id: string; data: Record<string, string> | null }>;
 			const nextCursor =
 				fastRows.length === input.limit ? offset + fastRows.length : null;
-
-			let totalCount = -1;
-			if (totalCountResult) {
-				const countRows = [...totalCountResult] as Array<{ count: number }>;
-				totalCount = Number(countRows[0]?.count ?? 0);
-			}
 
 			return {
 				rows: fastRows.map((row) => ({
@@ -2408,7 +2402,7 @@ export const baseRouter = createTRPCRouter({
 					data: row.data ?? {},
 				})),
 				nextCursor,
-				totalCount,
+				totalCount: filteredCount,
 			};
 		}),
 

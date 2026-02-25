@@ -67,10 +67,7 @@ const MAX_TABLES = 1000;
 const PAGE_ROWS = 2000;
 const SPARSE_PAGE_ROWS = 2000; // Match main page size for fewer round trips
 const ROW_PREFETCH_AHEAD = PAGE_ROWS * 5;
-const MAX_PREFETCH_PAGES_PER_BURST = 5;
 const ROW_HEIGHT = 33;
-const ROW_VIRTUAL_OVERSCAN = 200;
-const ROW_SCROLLING_RESET_DELAY_MS = 30;
 const ROW_NUMBER_COLUMN_WIDTH = 72;
 const DEFAULT_COLUMN_WIDTH = 181;
 const MIN_COLUMN_WIDTH = 120;
@@ -318,9 +315,17 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
   const router = useRouter();
   const utils = api.useUtils();
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
-  const [preferredTableId, setPreferredTableId] = useState<string | null>(null);
+  const [preferredTableId, setPreferredTableId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const storedId = window.localStorage.getItem(getLastViewedTableKey(baseId));
+      return storedId && isValidTableId(storedId) ? storedId : null;
+    } catch {
+      return null;
+    }
+  });
   const [preferredTableBaseId, setPreferredTableBaseId] = useState<string | null>(
-    null
+    () => (typeof window === "undefined" ? null : baseId)
   );
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [resizing, setResizing] = useState<ColumnResizeState | null>(null);
@@ -572,7 +577,12 @@ export function TableWorkspace({ baseId, userName, userEmail }: TableWorkspacePr
     },
   });
 
+  // Re-read localStorage when baseId changes (initial mount is handled by
+  // the synchronous useState initializers above, avoiding an extra render cycle).
+  const prevBaseIdRef = useRef(baseId);
   useEffect(() => {
+    if (prevBaseIdRef.current === baseId) return;
+    prevBaseIdRef.current = baseId;
     setPreferredTableId(null);
     setPreferredTableBaseId(null);
     try {

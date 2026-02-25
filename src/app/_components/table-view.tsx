@@ -1372,7 +1372,7 @@ function TableViewInner({
                 ? (fastRowSearchMatches?.has(nameColumn.id)
                     ? (filteredColumnIds.has(nameColumn.id) ? "#EAE5A6" : sortedColumnIds.has(nameColumn.id) ? "#FFDEA4" : "#FFF3D3")
                     : filteredColumnIds.has(nameColumn.id)
-                    ? "#E2F1E3"
+                    ? "#EAFCEB"
                     : sortedColumnIds.has(nameColumn.id)
                     ? "var(--airtable-sort-column-bg)"
                     : "#ffffff")
@@ -1447,7 +1447,7 @@ function TableViewInner({
                     const fastCellBg = hasMatch
                       ? (isFiltered ? "#EAE5A6" : isSorted ? "#FFDEA4" : "#FFF3D3")
                       : isFiltered
-                      ? "#E2F1E3"
+                      ? "#EAFCEB"
                       : isSorted
                       ? "var(--airtable-sort-column-bg)"
                       : "#ffffff";
@@ -1578,7 +1578,7 @@ function TableViewInner({
                         ? "#FFDEA4"
                         : "#FFF3D3"
                       : filteredColumnIds.has(nameColumn.id)
-                      ? "#E2F1E3"
+                      ? "#EAFCEB"
                       : sortedColumnIds.has(nameColumn.id)
                       ? "var(--airtable-sort-column-bg)"
                       : nameIsSelected
@@ -1593,7 +1593,7 @@ function TableViewInner({
                         ? "#FFDEA4"
                         : "#FFF3D3"
                       : filteredColumnIds.has(nameColumn.id)
-                      ? "#E5F4E6"
+                      ? "#E4F5E5"
                       : sortedColumnIds.has(nameColumn.id)
                       ? "#F8EDE4"
                       : nameIsSelected
@@ -1935,7 +1935,7 @@ function TableViewInner({
                       ? "#FFDEA4"
                       : "#FFF3D3"
                     : isFilteredColumn
-                    ? "#E2F1E3"
+                    ? "#EAFCEB"
                     : isSortedColumn
                     ? "var(--airtable-sort-column-bg)"
                     : isSelected
@@ -1950,7 +1950,7 @@ function TableViewInner({
                       ? "#FFDEA4"
                       : "#FFF3D3"
                     : isFilteredColumn
-                    ? "#E5F4E6"
+                    ? "#E4F5E5"
                     : isSortedColumn
                     ? "#F8EDE4"
                     : isSelected
