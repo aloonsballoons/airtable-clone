@@ -157,7 +157,7 @@ const coerceColumnType = (value?: string | null): ColumnFieldType =>
 
 const sortAddMenuIconSpecByName: Record<
   string,
-  { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; width: number; height: number; left: number }
+  { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; width: number; height: number; left: number; topOffset?: number }
 > = {
   Assignee: { icon: AssigneeIcon, width: 15, height: 16, left: 10 },
   Status: {
@@ -165,8 +165,9 @@ const sortAddMenuIconSpecByName: Record<
     width: STATUS_MENU_ICON_SIZE,
     height: STATUS_MENU_ICON_SIZE,
     left: 10,
+    topOffset: -2,
   },
-  Attachments: { icon: AttachmentsIcon, width: 14, height: 16, left: 11 },
+  Attachments: { icon: AttachmentsIcon, width: 14, height: 16, left: 11, topOffset: -2 },
   Name: { icon: NameIcon, width: 12.01, height: 12, left: 12 },
   Notes: { icon: NotesIcon, width: 15.5, height: 13.9, left: 11 },
   Number: { icon: NumberIcon, width: 13, height: 13, left: 12.5 },
@@ -174,7 +175,7 @@ const sortAddMenuIconSpecByName: Record<
 
 const sortAddMenuIconSpecByType: Record<
   ColumnFieldType,
-  { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; width: number; height: number; left: number }
+  { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; width: number; height: number; left: number; topOffset?: number }
 > = {
   single_line_text: { icon: NameIcon, width: 12.01, height: 12, left: 12 },
   long_text: { icon: NotesIcon, width: 15.5, height: 13.9, left: 11 },
@@ -1355,8 +1356,8 @@ export function FilterDropdown({
                                 <span
                                   style={{
                                     position: 'absolute',
-                                    left: 0,
-                                    top: hoverPadding,
+                                    left: 5,
+                                    top: hoverPadding + (iconSpec.topOffset ?? 0),
                                     width: iconSpec.width,
                                     height: iconSpec.height,
                                   }}
