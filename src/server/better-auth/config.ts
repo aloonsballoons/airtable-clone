@@ -12,6 +12,7 @@ const googleClientSecret = env.BETTER_AUTH_GOOGLE_CLIENT_SECRET;
 
 export const auth = betterAuth({
 	baseURL,
+	trustHost: true,
 	database: drizzleAdapter(db, {
 		provider: "pg", // or "pg" or "mysql"
 	}),
