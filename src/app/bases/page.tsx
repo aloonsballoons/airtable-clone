@@ -1,21 +1,8 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-
-import { BasesWorkspace } from "../_components/bases-workspace";
-import { auth } from "~/server/better-auth";
+import { BasesWorkspace } from "../_components/workspace/bases-workspace";
+import { requireAuth } from "~/lib/auth-guard";
 
 export default async function BasesPage() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({
-    headers: requestHeaders,
-  });
-
-  if (!session?.user) {
-    redirect("/");
-  }
-
-  const userName = session.user.name ?? session.user.email ?? "";
-  const userEmail = session.user.email ?? "";
+  const { userName, userEmail } = await requireAuth();
 
   return <BasesWorkspace userName={userName} userEmail={userEmail} />;
 }

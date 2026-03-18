@@ -1,14 +1,10 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { LoginPage } from "./_components/login-page";
-import { auth } from "~/server/better-auth";
+import { LoginPage } from "./_components/workspace/login-page";
+import { getSession } from "~/server/better-auth/server";
 
 export default async function Home() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({
-    headers: requestHeaders,
-  });
+  const session = await getSession();
 
   if (!session?.user) {
     return <LoginPage />;

@@ -1,0 +1,179 @@
+/* Main menu container */
+.menu {
+  position: absolute;
+  z-index: 50;
+  transition: height 0.2s ease;
+  overflow: hidden;
+  will-change: height;
+  contain: layout style;
+}
+
+/* Standard fields view (opacity toggle) */
+.standardView {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.15s ease;
+  will-change: opacity;
+}
+
+.standardViewVisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.standardViewHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Dropdown separator */
+.separator {
+  margin-left: 6px;
+  margin-top: 6px;
+}
+
+/* Field option button */
+.optionButton {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font-inter);
+  font-weight: 400;
+}
+
+.optionButton:hover {
+  background-color: #f7f8fc;
+}
+
+.optionButton:hover svg {
+  mix-blend-mode: multiply;
+}
+
+/* Naming view (opacity toggle) */
+.namingView {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.15s ease;
+  will-change: opacity;
+}
+
+.namingViewVisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.namingViewHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Column name input */
+.columnNameInput {
+  position: absolute;
+  left: 15px;
+  top: 7px;
+  width: 370px;
+  height: 34px;
+  border-radius: 7px;
+  padding: 9px 8px;
+  font-size: 13px;
+  font-family: var(--font-inter);
+  font-weight: 400;
+  outline: none;
+  box-shadow: 0 0 6.5px rgba(0, 0, 0, 0.0578);
+  cursor: text;
+  box-sizing: border-box;
+  color: var(--text-primary, #1d1f24);
+  border: 2px solid var(--primary-blue, #156FE2);
+}
+
+/* Display/Select field button */
+.displayButton {
+  position: absolute;
+  left: 15px;
+  top: 46px;
+  width: 370px;
+  height: 34px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-family: var(--font-inter);
+  font-weight: 400;
+  cursor: pointer;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: var(--text-primary, #1d1f24);
+}
+
+/* Arrow icon in display button */
+.arrowIcon {
+  position: absolute;
+  left: 348px;
+  top: 15px;
+}
+
+/* Cancel hover rectangle */
+.cancelContainer {
+  position: absolute;
+  left: 210px;
+  top: 95px;
+  width: 66px;
+  height: 32px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.cancelContainer:hover {
+  background-color: var(--hover-gray, #F2F2F2);
+}
+
+.cancelText {
+  font-size: 13px;
+  font-family: var(--font-inter);
+  font-weight: 400;
+  color: var(--text-primary, #1d1f24);
+}
+
+/* Create field button */
+.createButton {
+  position: absolute;
+  left: 288px;
+  top: 95px;
+  width: 96px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  color: #ffffff;
+  font-size: 13px;
+  font-family: var(--font-inter);
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: var(--primary-blue, #156FE2);
+  box-shadow: 0 0 6.5px rgba(0, 0, 0, 0.0578);
+}
+
+.createButton:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+/* Icon styling */
+.icon {
+  flex-shrink: 0;
+}
+
+/* Label positioning */
+.label {
+  position: relative;
+  top: -0.5px;
+}

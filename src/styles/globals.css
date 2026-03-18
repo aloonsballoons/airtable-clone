@@ -11,6 +11,10 @@ body {
   color: #1d1d1f;
 }
 
+.font-inter {
+  font-family: var(--font-inter), sans-serif;
+}
+
 :root {
   --airtable-border-color: #dadada;
   --airtable-button-shadow: 0 0 6.5px rgba(0, 0, 0, 0.0578);
@@ -55,6 +59,11 @@ body {
 .airtable-selection-hover:hover {
   border-color: #c7c8c9;
   box-shadow: var(--airtable-selection-shadow);
+}
+
+.airtable-selection-hover:hover img,
+.airtable-selection-hover:hover svg {
+  mix-blend-mode: multiply;
 }
 
 .airtable-hover-bg {

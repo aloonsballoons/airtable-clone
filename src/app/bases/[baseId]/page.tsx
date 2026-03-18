@@ -1,8 +1,5 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-
-import { TableWorkspace } from "../../_components/table-workspace";
-import { auth } from "~/server/better-auth";
+import { TableWorkspace } from "../../_components/workspace/table-workspace";
+import { requireAuth } from "~/lib/auth-guard";
 import { api, HydrateClient } from "~/trpc/server";
 
 type BasePageProps = {
@@ -13,17 +10,7 @@ type BasePageProps = {
 
 export default async function BasePage({ params }: BasePageProps) {
   const { baseId } = await params;
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({
-    headers: requestHeaders,
-  });
-
-  if (!session?.user) {
-    redirect("/");
-  }
-
-  const userName = session.user.name ?? session.user.email ?? "";
-  const userEmail = session.user.email ?? "";
+  const { userName, userEmail } = await requireAuth();
 
   // Prefetch base details on the server — data is dehydrated to the client
   // query cache, eliminating the initial client-side fetch round trip.
@@ -33,7 +20,7 @@ export default async function BasePage({ params }: BasePageProps) {
   // need another round trip for column definitions and row count.
   const firstTable = baseData.tables[0];
   if (firstTable) {
-    void api.base.getTableMeta.prefetch({ tableId: firstTable.id });
+    void api.table.getTableMeta.prefetch({ tableId: firstTable.id });
   }
 
   return (
