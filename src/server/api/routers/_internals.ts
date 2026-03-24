@@ -21,6 +21,10 @@ export const MAX_BULK_ROWS = 100_000;
 export const BULK_INSERT_BATCH_SIZE = 5_000;
 export const MAX_ROWS_QUERY_LIMIT = 2_000;
 export const MAX_CELL_CHARS = 100_000;
+export const MAX_FILTER_DEPTH = 5;
+
+const UUID_RE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -54,7 +58,7 @@ export const filterConditionSchema = z.object({
 	type: z.literal("condition"),
 	columnId: z.string().uuid(),
 	operator: filterOperatorSchema,
-	value: z.string().optional(),
+	value: z.string().max(1000).optional(),
 });
 export type FilterCondition = z.infer<typeof filterConditionSchema>;
 export type FilterGroup = {
@@ -70,10 +74,40 @@ export const filterGroupSchema: z.ZodType<FilterGroup> = z.object({
 		z.union([filterConditionSchema, z.lazy(() => filterGroupSchema)])
 	),
 });
-export const filterSchema = z.object({
-	connector: filterConnectorSchema,
-	items: z.array(z.union([filterConditionSchema, filterGroupSchema])),
-});
+const measureFilterDepth = (
+	item: FilterCondition | FilterGroup,
+	depth: number,
+): number => {
+	if (item.type === "condition") return depth;
+	let max = depth;
+	for (const child of item.conditions) {
+		const d = measureFilterDepth(child, depth + 1);
+		if (d > max) max = d;
+	}
+	return max;
+};
+
+const refineFilterDepth = (
+	data: { items: Array<FilterCondition | FilterGroup> },
+	ctx: z.RefinementCtx,
+) => {
+	for (const item of data.items) {
+		if (measureFilterDepth(item, 1) > MAX_FILTER_DEPTH) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: `Filter nesting exceeds maximum depth of ${MAX_FILTER_DEPTH}`,
+			});
+			return;
+		}
+	}
+};
+
+export const filterSchema = z
+	.object({
+		connector: filterConnectorSchema,
+		items: z.array(z.union([filterConditionSchema, filterGroupSchema])),
+	})
+	.superRefine(refineFilterDepth);
 
 // Filter schemas for storage (used in updateView - includes id for React keys)
 export const filterConditionStorageSchema = z.object({
@@ -81,7 +115,7 @@ export const filterConditionStorageSchema = z.object({
 	type: z.literal("condition"),
 	columnId: z.string().uuid().nullable(),
 	operator: filterOperatorSchema,
-	value: z.string(),
+	value: z.string().max(1000),
 });
 export type FilterConditionStorage = z.infer<typeof filterConditionStorageSchema>;
 export type FilterGroupStorage = {
@@ -99,10 +133,37 @@ export const filterGroupStorageSchema: z.ZodType<FilterGroupStorage> = z.object(
 		z.union([filterConditionStorageSchema, z.lazy(() => filterGroupStorageSchema)])
 	),
 });
-export const filterStorageSchema = z.object({
-	connector: filterConnectorSchema,
-	items: z.array(z.union([filterConditionStorageSchema, filterGroupStorageSchema])),
-});
+const measureFilterStorageDepth = (
+	item: FilterConditionStorage | FilterGroupStorage,
+	depth: number,
+): number => {
+	if (item.type === "condition") return depth;
+	let max = depth;
+	for (const child of item.conditions) {
+		const d = measureFilterStorageDepth(child, depth + 1);
+		if (d > max) max = d;
+	}
+	return max;
+};
+
+export const filterStorageSchema = z
+	.object({
+		connector: filterConnectorSchema,
+		items: z.array(
+			z.union([filterConditionStorageSchema, filterGroupStorageSchema]),
+		),
+	})
+	.superRefine((data, ctx) => {
+		for (const item of data.items) {
+			if (measureFilterStorageDepth(item, 1) > MAX_FILTER_DEPTH) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: `Filter nesting exceeds maximum depth of ${MAX_FILTER_DEPTH}`,
+				});
+				return;
+			}
+		}
+	});
 
 // Filter operator sets
 export const filterTextOperators = new Set([
@@ -168,6 +229,10 @@ export const buildSearchText = (data: Record<string, string> | null | undefined)
 		.filter(Boolean)
 		.join(" ");
 
+/** Escape ILIKE special characters (%, _, \) so they are treated as literals. */
+export const escapeLikePattern = (pattern: string): string =>
+	pattern.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+
 export const nanosecondsToMilliseconds = (value: bigint) => Number(value) / 1_000_000;
 export const roundMilliseconds = (value: number) => Math.round(value * 100) / 100;
 
@@ -176,10 +241,16 @@ export const roundMilliseconds = (value: number) => Math.round(value * 100) / 10
 // so passing 2000 UUIDs via ${pageIds} causes:
 //   "ROW expressions can have at most 1664 entries"
 // Instead, build a literal ARRAY['uuid1','uuid2',…]::uuid[] string that
-// PostgreSQL parses as a single value.  UUIDs are validated upstream
-// (z.string().uuid()) so injection is not a concern.
-export const sqlUuidArray = (ids: string[]) =>
-	sql.raw(`ARRAY[${ids.map((id) => `'${id}'`).join(",")}]::uuid[]`);
+// PostgreSQL parses as a single value.  Defense-in-depth: every ID is
+// validated against UUID_RE before being interpolated into raw SQL.
+export const sqlUuidArray = (ids: string[]) => {
+	for (const id of ids) {
+		if (!UUID_RE.test(id)) {
+			throw new Error(`sqlUuidArray: invalid UUID "${id}"`);
+		}
+	}
+	return sql.raw(`ARRAY[${ids.map((id) => `'${id}'`).join(",")}]::uuid[]`);
+};
 
 // ---------------------------------------------------------------------------
 // Server-side sorted-ID cache.

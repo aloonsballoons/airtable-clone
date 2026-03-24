@@ -37,6 +37,8 @@ import {
 	setGinRebuildRunning,
 	MAX_NUMBER_DECIMALS,
 	columnTypeSchema,
+	escapeLikePattern,
+	MAX_FILTER_DEPTH,
 } from "./_internals";
 
 // ---------------------------------------------------------------------------
@@ -573,7 +575,7 @@ export const rowRouter = createTRPCRouter({
 					.array(sortItemSchema)
 					.optional(),
 				filter: filterSchema.optional(),
-				search: z.string().optional(),
+				search: z.string().max(500).optional(),
 			}),
 		)
 		.query(async ({ ctx, input }) => {
@@ -728,9 +730,9 @@ export const rowRouter = createTRPCRouter({
 					if (!isNumber) {
 						switch (operator) {
 							case "contains":
-								return sql<boolean>`${textValue} ILIKE ${`%${trimmedValue}%`}`;
+								return sql<boolean>`${textValue} ILIKE ${`%${escapeLikePattern(trimmedValue)}%`}`;
 							case "does_not_contain":
-								return sql<boolean>`${textValue} NOT ILIKE ${`%${trimmedValue}%`}`;
+								return sql<boolean>`${textValue} NOT ILIKE ${`%${escapeLikePattern(trimmedValue)}%`}`;
 							case "is":
 								return sql<boolean>`${tableRow.data} @> ${JSON.stringify({ [condition.columnId]: trimmedValue })}::jsonb`;
 							case "is_not":
@@ -787,12 +789,13 @@ export const rowRouter = createTRPCRouter({
 					) ?? null;
 				};
 
-				const buildItemExpression = (item: typeof input.filter.items[number]): SqlExpression | null => {
+				const buildItemExpression = (item: typeof input.filter.items[number], depth = 0): SqlExpression | null => {
 					if (item.type === "condition") {
 						return buildConditionExpression(item);
 					}
+					if (depth >= MAX_FILTER_DEPTH) return null;
 					const childExpressions = item.conditions.map((child) =>
-						buildItemExpression(child)
+						buildItemExpression(child, depth + 1)
 					);
 					return combineConditions(childExpressions, item.connector);
 				};
@@ -808,7 +811,7 @@ export const rowRouter = createTRPCRouter({
 
 				if (containsSearchTerms.length > 0 && filterExpression) {
 					const trigramConditions = containsSearchTerms.map(
-						(term) => sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${term}%`}`
+						(term) => sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${escapeLikePattern(term)}%`}`
 					);
 					const trigramPreFilter = and(...trigramConditions);
 					if (trigramPreFilter) {
@@ -821,7 +824,7 @@ export const rowRouter = createTRPCRouter({
 			const trimmedSearch = rawSearch.trim();
 			let searchExpression: SqlExpression | null = null;
 			if (trimmedSearch) {
-				searchExpression = sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${trimmedSearch}%`}`;
+				searchExpression = sql<boolean>`coalesce(${tableRow.searchText}, '') ILIKE ${`%${escapeLikePattern(trimmedSearch)}%`}`;
 			}
 
 			const offset = input.cursor ?? 0;

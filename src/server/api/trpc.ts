@@ -100,6 +100,88 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
 	return result;
 });
 
+// ---------------------------------------------------------------------------
+// In-memory rate limiter (token bucket)
+//
+// On Vercel serverless each warm instance has its own bucket map.
+// Cold starts reset all state. This still provides burst protection
+// within a warm instance's lifetime.
+// ---------------------------------------------------------------------------
+type Bucket = { tokens: number; lastRefill: number };
+
+const buckets = new Map<string, Bucket>();
+const MAX_BUCKETS = 10_000;
+const BUCKET_CLEANUP_INTERVAL_MS = 60_000;
+let lastBucketCleanup = Date.now();
+
+const TOKEN_RATES = {
+	normal: { maxTokens: 100, refillRate: 100 / 60, windowMs: 60_000 },
+	expensive: { maxTokens: 5, refillRate: 5 / 60, windowMs: 60_000 },
+} as const;
+
+const EXPENSIVE_PATHS = new Set(["row.addRows"]);
+
+const consumeToken = (
+	key: string,
+	rate: (typeof TOKEN_RATES)[keyof typeof TOKEN_RATES],
+): boolean => {
+	const now = Date.now();
+
+	if (now - lastBucketCleanup > BUCKET_CLEANUP_INTERVAL_MS) {
+		lastBucketCleanup = now;
+		for (const [k, b] of buckets) {
+			if (now - b.lastRefill > rate.windowMs * 2) buckets.delete(k);
+		}
+		if (buckets.size > MAX_BUCKETS) {
+			const sorted = [...buckets.entries()].sort(
+				(a, b) => a[1].lastRefill - b[1].lastRefill,
+			);
+			for (const [k] of sorted.slice(0, sorted.length - MAX_BUCKETS)) {
+				buckets.delete(k);
+			}
+		}
+	}
+
+	let bucket = buckets.get(key);
+	if (!bucket) {
+		bucket = { tokens: rate.maxTokens, lastRefill: now };
+		buckets.set(key, bucket);
+	}
+
+	const elapsed = (now - bucket.lastRefill) / 1000;
+	bucket.tokens = Math.min(
+		rate.maxTokens,
+		bucket.tokens + elapsed * rate.refillRate,
+	);
+	bucket.lastRefill = now;
+
+	if (bucket.tokens < 1) return false;
+	bucket.tokens -= 1;
+	return true;
+};
+
+const rateLimitMiddleware = t.middleware(async ({ ctx, next, path }) => {
+	const userId = ctx.session?.user?.id;
+	const ip =
+		ctx.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+		ctx.headers.get("x-real-ip") ??
+		"unknown";
+	const identifier = userId ?? `ip:${ip}`;
+
+	const isExpensive = EXPENSIVE_PATHS.has(path);
+	const rate = isExpensive ? TOKEN_RATES.expensive : TOKEN_RATES.normal;
+	const bucketKey = `${identifier}:${isExpensive ? "expensive" : "normal"}`;
+
+	if (!consumeToken(bucketKey, rate)) {
+		throw new TRPCError({
+			code: "TOO_MANY_REQUESTS",
+			message: "Rate limit exceeded. Please try again later.",
+		});
+	}
+
+	return next();
+});
+
 /**
  * Public (unauthenticated) procedure
  *
@@ -107,7 +189,9 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
  * guarantee that a user querying is authorized, but you can still access user session data if they
  * are logged in.
  */
-export const publicProcedure = t.procedure.use(timingMiddleware);
+export const publicProcedure = t.procedure
+	.use(rateLimitMiddleware)
+	.use(timingMiddleware);
 
 /**
  * Protected (authenticated) procedure
@@ -118,6 +202,7 @@ export const publicProcedure = t.procedure.use(timingMiddleware);
  * @see https://trpc.io/docs/procedures
  */
 export const protectedProcedure = t.procedure
+	.use(rateLimitMiddleware)
 	.use(timingMiddleware)
 	.use(({ ctx, next }) => {
 		if (!ctx.session?.user) {
